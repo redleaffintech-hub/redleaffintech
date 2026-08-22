@@ -1,26 +1,173 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/**
+ * Red Leaf Fintech design tokens.
+ *
+ * The client's palette (Interface Color Scheme, "Accounting Software Project"):
+ * a very light blue-gray canvas, white cards, a professional blue as the
+ * primary interactive colour, maple red as the brand accent, and blue-gray
+ * slate for type. Money stays strictly tabular.
+ *
+ * Token NAMES are unchanged from the previous identity on purpose — every
+ * component consumes names, not hexes, so re-pointing the values here reskins
+ * the whole product. `brand-*` (blue) is the new interactive family;
+ * `maple-*` (red) is now reserved for brand marks, credits and accents.
+ *
+ * Where a client hex falls below 4.5:1 for small text we keep it as the
+ * nominal brand value and carry body copy on a slightly darker step:
+ *   secondary text  #607D8B (3.99:1) -> --color-muted-ink #5a737f (4.69:1)
+ *   primary blue    #3b82b6 (4.14:1) -> links on brand-700, buttons brand-600
+ *   success         #3f8f6b (4.00:1) -> --color-positive #367d5e (4.93:1)
+ *
+ * The categorical and ordinal chart palettes below were validated with the
+ * data-viz palette checker against the #FFFFFF chart surface: lightness band,
+ * chroma floor, CVD separation, normal-vision floor and 3:1 contrast all pass.
+ * They are deliberately carried over unchanged — do not substitute hexes here
+ * without re-running that check.
+ */
+
+@theme {
+  /* Slate frame — blue-gray, anchored on the client's #263238 text colour
+     and the navy of the logo mark. */
+  --color-ink-950: #131e24;
+  --color-ink-900: #263238;
+  --color-ink-850: #2e3d45;
+  --color-ink-800: #37474f;
+  --color-ink-700: #455a64;
+  --color-ink-600: #526d79;
+  --color-ink-500: #607d8b;
+  --color-ink-400: #8ca3ae;
+  --color-ink-300: #b0c0c8;
+
+  /* Paper — paper-200 is the app canvas, paper-300 the border colour */
+  --color-paper-50: #ffffff;
+  --color-paper-100: #fafcfd;
+  --color-paper-200: #f5f9fc;
+  --color-paper-300: #dce7ee;
+  --color-paper-400: #c4d4de;
+
+  /* Brand blue — primary interactive colour */
+  --color-brand-50: #eaf4fb;
+  --color-brand-100: #d3e7f5;
+  --color-brand-200: #a9cde7;
+  --color-brand-400: #5a9bc9;
+  --color-brand-500: #3b82b6;
+  --color-brand-600: #2f6d9c;
+  --color-brand-700: #275a81;
+  --color-brand-800: #1e4664;
+  --color-brand-soft: #eaf4fb;
+
+  /* Maple red — brand mark, credits, accents */
+  --color-maple-50: #fcecec;
+  --color-maple-100: #f8d5d5;
+  --color-maple-200: #efafaf;
+  --color-maple-400: #dc4a4a;
+  --color-maple-500: #c62828;
+  --color-maple-600: #b02020;
+  --color-maple-700: #8e1919;
+
+  /* Semantic */
+  --color-positive: #367d5e;
+  --color-positive-soft: #e7f3ee;
+  --color-negative: #b02020;
+  --color-negative-soft: #fcecec;
+  --color-caution: #a9761b;
+  --color-caution-soft: #fbf0dc;
+  --color-info: #275a81;
+  --color-info-soft: #eaf4fb;
+
+  /* Validated categorical chart slots (light surface #FFFFFF) */
+  --color-series-1: #1a5fb4;
+  --color-series-2: #c3122f;
+  --color-series-3: #b7791f;
+  --color-series-4: #0f7b5f;
+
+  /* Validated ordinal severity ramp — aging buckets, light→dark */
+  --color-age-0: #e9a2ac;
+  --color-age-1: #dc7e8c;
+  --color-age-2: #cb5468;
+  --color-age-3: #b02a44;
+  --color-age-4: #821022;
+
+  /* Chart chrome */
+  --color-grid: #e8eff5;
+  --color-axis: #c4d4de;
+  --color-muted-ink: #5a737f;
+
+  /* The application keeps the system stack — the dense tables are tuned to it.
+     Only the marketing site uses the display face, which matches the wordmark. */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-display: var(--font-montserrat), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+
+  --radius-card: 0.625rem;
+
+  /* The app shell header is two stacked rows: the identity bar (h-14) and the
+     horizontal module nav (h-11). Anything that sticks underneath it offsets by
+     this, so the height is stated once rather than guessed at each call site. */
+  --app-header-h: 6.25rem;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+* {
+  border-color: var(--color-paper-300);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  color-scheme: light;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-paper-200);
+  color: var(--color-ink-900);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Money and any column that must align vertically. */
+.tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* Focus ring — one definition for the whole product. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-brand-500);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+::selection {
+  background: var(--color-brand-100);
+}
+
+/* Scrollbars in the dense data areas. */
+.thin-scroll::-webkit-scrollbar { width: 10px; height: 10px; }
+.thin-scroll::-webkit-scrollbar-track { background: transparent; }
+.thin-scroll::-webkit-scrollbar-thumb {
+  background: var(--color-paper-400);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+.thin-scroll::-webkit-scrollbar-thumb:hover { background-color: var(--color-ink-300); background-clip: content-box; }
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+.rise { animation: rise 0.28s cubic-bezier(0.2, 0.7, 0.3, 1) both; }
+
+/* Side rails that must clear the two-row app header. Only from lg up, because
+   below that the rail stacks under the main column and has nothing to clear. */
+@media (min-width: 1024px) {
+  .sticky-below-header {
+    position: sticky;
+    top: calc(var(--app-header-h) + 0.75rem);
+  }
+}
+
+@media print {
+  .no-print { display: none !important; }
+  body { background: #fff; }
+  .print-full { box-shadow: none !important; border: none !important; }
 }

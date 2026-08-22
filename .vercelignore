@@ -1,0 +1,14 @@
+# Local-only artefacts that have no business in a deployment.
+dev.db
+dev.db-journal
+
+# Agent skill packs — hundreds of markdown files, none of them shipped code.
+.agents
+.claude
+.windsurf
+skills-lock.json
+
+# Client brand source files (multi-MB PNGs + the requirements doc). The prepared
+# derivatives in public/brand ARE served, so this must stay root-anchored — a
+# bare `brand` also matches public/brand and ships the site without its logo.
+/brand

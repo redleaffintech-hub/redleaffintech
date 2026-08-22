@@ -1,0 +1,142 @@
+import Link from "next/link";
+import { db } from "@/lib/db";
+import { contains } from "@/lib/search";
+import { requireCapability } from "@/server/auth/context";
+import { CAPABILITIES } from "@/lib/permissions";
+import { ACCOUNT_TYPES, NORMAL_BALANCE, type AccountType } from "@/lib/enums";
+import { today } from "@/lib/dates";
+import { Badge, Card, Money, PageHeader, Table, Td, Th, Tr } from "@/components/ui";
+import { FilterBar } from "@/components/filter-bar";
+import { Icon } from "@/components/shell/icons";
+
+export const metadata = { title: "Chart of accounts" };
+
+const TYPE_LABEL: Record<AccountType, string> = {
+  ASSET: "Assets",
+  LIABILITY: "Liabilities",
+  EQUITY: "Equity",
+  REVENUE: "Revenue",
+  EXPENSE: "Expenses",
+};
+
+export default async function ChartOfAccountsPage({ searchParams }: PageProps<"/accounting/chart-of-accounts">) {
+  const { company } = await requireCapability(CAPABILITIES.COA);
+  const params = await searchParams;
+  const typeFilter = typeof params.type === "string" ? params.type : "";
+  const query = typeof params.q === "string" ? params.q : "";
+
+  const [accounts, balances] = await Promise.all([
+    db.account.findMany({
+      where: {
+        companyId: company.id,
+        ...(typeFilter ? { type: typeFilter } : {}),
+        ...(query ? { OR: [{ name: contains(query) }, { code: contains(query) }] } : {}),
+      },
+      orderBy: { code: "asc" },
+    }),
+    db.journalLine.groupBy({
+      by: ["accountId"],
+      where: { companyId: company.id, date: { lte: today() } },
+      _sum: { debitCents: true, creditCents: true },
+      _count: true,
+    }),
+  ]);
+
+  const balanceById = new Map(
+    balances.map((b) => [b.accountId, { debit: b._sum.debitCents ?? 0, credit: b._sum.creditCents ?? 0, count: b._count }]),
+  );
+
+  const grouped = ACCOUNT_TYPES.map((type) => ({
+    type,
+    accounts: accounts.filter((a) => a.type === type),
+  })).filter((group) => group.accounts.length > 0);
+
+  const counts = await db.account.groupBy({ by: ["type"], where: { companyId: company.id }, _count: true });
+  const countOf = (type: string) => counts.find((c) => c.type === type)?._count ?? 0;
+
+  return (
+    <>
+      <PageHeader
+        title="Chart of accounts"
+        breadcrumb={[{ label: "Accounting" }, { label: "Chart of accounts" }]}
+        description="Canadian service-business starter chart. Control accounts marked as system accounts are written to by the posting engine and cannot be deleted."
+      />
+
+      <FilterBar
+        paramName="type"
+        searchPlaceholder="Search code or name…"
+        tabs={[
+          { label: "All", value: "" },
+          ...ACCOUNT_TYPES.map((type) => ({ label: TYPE_LABEL[type], value: type, count: countOf(type) })),
+        ]}
+      />
+
+      <div className="space-y-4">
+        {grouped.map((group) => (
+          <Card key={group.type} className="p-5">
+            <div className="mb-2 flex items-center gap-2">
+              <h2 className="text-[0.9375rem] font-semibold text-ink-900">{TYPE_LABEL[group.type]}</h2>
+              <span className="text-[0.75rem] text-muted-ink">
+                normal balance {NORMAL_BALANCE[group.type].toLowerCase()}
+              </span>
+            </div>
+            <Table>
+              <thead>
+                <tr>
+                  <Th width="5rem">Code</Th>
+                  <Th>Account</Th>
+                  <Th width="12rem">Classification</Th>
+                  <Th width="6rem" align="right">Entries</Th>
+                  <Th width="9rem" align="right">Balance</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {group.accounts.map((account) => {
+                  const stats = balanceById.get(account.id);
+                  const debit = stats?.debit ?? 0;
+                  const credit = stats?.credit ?? 0;
+                  const balance = NORMAL_BALANCE[group.type] === "DEBIT" ? debit - credit : credit - debit;
+                  return (
+                    <Tr key={account.id}>
+                      <Td className="tnum text-muted-ink">{account.code}</Td>
+                      <Td>
+                        <Link
+                          href={`/accounting/general-ledger?account=${account.id}`}
+                          className="font-medium text-ink-900 hover:text-brand-700 hover:underline"
+                        >
+                          {account.name}
+                        </Link>
+                        {account.description && (
+                          <span className="block text-[0.75rem] text-muted-ink">{account.description}</span>
+                        )}
+                      </Td>
+                      <Td>
+                        <span className="text-[0.75rem] text-muted-ink">
+                          {account.subtype.replace(/_/g, " ").toLowerCase()}
+                        </span>
+                        {account.isSystem && (
+                          <Badge tone="accent" className="ml-1.5">
+                            <Icon name="lock" className="h-2.5 w-2.5" />
+                            system
+                          </Badge>
+                        )}
+                        {!account.isActive && <Badge className="ml-1.5">archived</Badge>}
+                      </Td>
+                      <Td align="right" className="tnum text-muted-ink">{stats?.count ?? 0}</Td>
+                      <Td align="right"><Money cents={balance} bold={balance !== 0} blankZero /></Td>
+                    </Tr>
+                  );
+                })}
+              </tbody>
+            </Table>
+          </Card>
+        ))}
+      </div>
+
+      <p className="mt-6 text-[0.75rem] leading-5 text-muted-ink">
+        Accounts are archived rather than deleted so historical transactions keep their references intact. A CPA should
+        review this chart before it is used for filing.
+      </p>
+    </>
+  );
+}
