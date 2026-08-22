@@ -2,12 +2,14 @@ import Link from "next/link";
 import { db } from "@/lib/db";
 import { contains } from "@/lib/search";
 import { requireCapability } from "@/server/auth/context";
-import { CAPABILITIES } from "@/lib/permissions";
-import { ACCOUNT_TYPES, NORMAL_BALANCE, type AccountType } from "@/lib/enums";
+import { CAPABILITIES, can } from "@/lib/permissions";
+import { ACCOUNT_SUBTYPES, ACCOUNT_TYPES, NORMAL_BALANCE, type AccountType } from "@/lib/enums";
 import { today } from "@/lib/dates";
 import { Badge, Card, Money, PageHeader, Table, Td, Th, Tr } from "@/components/ui";
 import { FilterBar } from "@/components/filter-bar";
+import { ExportCsvButton } from "@/components/export-csv-button";
 import { Icon } from "@/components/shell/icons";
+import { SubtypePicker } from "./subtype-picker";
 
 export const metadata = { title: "Chart of accounts" };
 
@@ -20,7 +22,10 @@ const TYPE_LABEL: Record<AccountType, string> = {
 };
 
 export default async function ChartOfAccountsPage({ searchParams }: PageProps<"/accounting/chart-of-accounts">) {
-  const { company } = await requireCapability(CAPABILITIES.COA);
+  const { company, role } = await requireCapability(CAPABILITIES.COA);
+  // Classification decides which side of EBITDA an expense falls on, so it is
+  // gated on the same capability that governs the chart itself.
+  const canReclassify = can(role, CAPABILITIES.COA);
   const params = await searchParams;
   const typeFilter = typeof params.type === "string" ? params.type : "";
   const query = typeof params.q === "string" ? params.q : "";
@@ -60,6 +65,7 @@ export default async function ChartOfAccountsPage({ searchParams }: PageProps<"/
         title="Chart of accounts"
         breadcrumb={[{ label: "Accounting" }, { label: "Chart of accounts" }]}
         description="Canadian service-business starter chart. Control accounts marked as system accounts are written to by the posting engine and cannot be deleted."
+        actions={<ExportCsvButton report="chart-of-accounts" />}
       />
 
       <FilterBar
@@ -111,9 +117,12 @@ export default async function ChartOfAccountsPage({ searchParams }: PageProps<"/
                         )}
                       </Td>
                       <Td>
-                        <span className="text-[0.75rem] text-muted-ink">
-                          {account.subtype.replace(/_/g, " ").toLowerCase()}
-                        </span>
+                        <SubtypePicker
+                          accountId={account.id}
+                          subtype={account.subtype}
+                          options={ACCOUNT_SUBTYPES[account.type as AccountType] ?? [account.subtype]}
+                          disabled={!canReclassify}
+                        />
                         {account.isSystem && (
                           <Badge tone="accent" className="ml-1.5">
                             <Icon name="lock" className="h-2.5 w-2.5" />

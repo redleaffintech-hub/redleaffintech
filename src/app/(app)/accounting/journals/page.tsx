@@ -7,6 +7,7 @@ import { SOURCE_LABELS } from "@/lib/enums";
 import { fiscalYearOf, fiscalYearRange, isoDate, toUtcDay, today, formatDate } from "@/lib/dates";
 import { Badge, Card, EmptyState, LinkButton, Money, PageHeader, StatusBadge, Table, Td, Th, Tr } from "@/components/ui";
 import { FilterBar, RangePicker } from "@/components/filter-bar";
+import { ExportCsvButton } from "@/components/export-csv-button";
 import { Icon } from "@/components/shell/icons";
 
 export const metadata = { title: "Journal entries" };
@@ -50,10 +51,13 @@ export default async function JournalsPage({ searchParams }: PageProps<"/account
         breadcrumb={[{ label: "Accounting" }, { label: "Journal entries" }]}
         description="Every posting in the ledger, whatever created it. Posted entries are immutable — corrections are made by reversal."
         actions={
-          <LinkButton href="/accounting/journals/new" variant="primary">
+          <>
+            <ExportCsvButton report="journal-report" />
+            <LinkButton href="/accounting/journals/new" variant="primary">
             <Icon name="plus" className="h-3.5 w-3.5" />
-            New journal entry
-          </LinkButton>
+              New journal entry
+            </LinkButton>
+          </>
         }
       />
 

@@ -11,6 +11,10 @@ import { apAging, arAging } from "../src/server/reports/aging";
 import { taxSummary } from "../src/server/reports/tax";
 import { utcDate, toUtcDay } from "../src/lib/dates";
 import { calculateTax } from "../src/server/tax/engine";
+import { csvDate, csvFile, csvMoney, toCsv, asOfFilename, rangeFilename, type CsvColumn } from "../src/lib/csv";
+import { EXPORTS } from "../src/server/reports/exports";
+import { can } from "../src/lib/permissions";
+import { DEPRECIATION_AMORTIZATION_SUBTYPES } from "../src/lib/enums";
 import { formatMoney } from "../src/lib/money";
 import { DEFAULT_CURRENCY, normalizeCurrency } from "../src/lib/currency";
 import { taxRegistrationLines } from "../src/lib/tax-registration";
@@ -119,6 +123,8 @@ async function main() {
   }
 
   await companySettingsChecks();
+  await csvExportChecks();
+  await profitAndLossChecks();
 }
 
 /**
@@ -285,3 +291,227 @@ main()
     await db.$disconnect();
     if (failed.length) process.exitCode = 1;
   });
+
+/**
+ * CSV export: escaping, money and date formatting, filenames, the permission
+ * gate on each definition, and representative end-to-end builds.
+ */
+async function csvExportChecks() {
+  interface Cell {
+    text: string;
+    amount: number;
+    when: Date;
+  }
+  const columns: CsvColumn<Cell>[] = [
+    { header: "Text", value: (r) => r.text },
+    { header: "Amount (CAD)", value: (r) => csvMoney(r.amount), numeric: true },
+    { header: "Date", value: (r) => csvDate(r.when) },
+  ];
+  const AUG = new Date("2026-08-31T00:00:00.000Z");
+  const JAN = new Date("2026-01-01T00:00:00.000Z");
+
+  const tricky = toCsv(
+    [
+      { text: "Comma, inside", amount: 123456, when: AUG },
+      { text: 'He said "hello"', amount: -5, when: JAN },
+      { text: "Line\nbreak", amount: 0, when: AUG },
+      { text: "Café Lumière — ünïcode", amount: 100, when: AUG },
+    ],
+    columns,
+  );
+  const lines = tricky.split("\r\n");
+
+  check("CSV: a comma inside a field is quoted", lines[1].startsWith('"Comma, inside",'), lines[1]);
+  check("CSV: embedded quotes are doubled", lines[2].startsWith('"He said ""hello""",'), lines[2]);
+  check(
+    "CSV: a newline inside a field is quoted and preserved",
+    tricky.includes('"Line\nbreak"'),
+    "field kept its line break inside quotes",
+  );
+  check(
+    "CSV: Unicode passes through untouched",
+    tricky.includes("Café Lumière — ünïcode"),
+    "accents, em dash and diaeresis preserved",
+  );
+  check(
+    "CSV: header row first, CRLF line endings",
+    lines[0] === "Text,Amount (CAD),Date" && tricky.includes("\r\n"),
+    lines[0],
+  );
+
+  const payload = "=cmd|" + String.fromCharCode(39) + "/c calc" + String.fromCharCode(39) + "!A1";
+  const injected = toCsv([{ text: payload, amount: 0, when: AUG }], columns);
+  check(
+    "CSV: a formula-injection payload is neutralised",
+    injected.includes('"\t=cmd') && !injected.startsWith(payload) && !injected.includes("\n=cmd"),
+    "leading = is tab-prefixed inside quotes, so it is displayed and not evaluated",
+  );
+
+  check(
+    "CSV: a negative amount is still written as a bare number",
+    toCsv([{ text: "x", amount: -12345, when: AUG }], columns).includes(",-123.45,"),
+    csvMoney(-12345),
+  );
+  check(
+    "CSV: the file carries a UTF-8 BOM for Excel",
+    csvFile([], columns).charCodeAt(0) === 0xfeff,
+    "first code unit is U+FEFF",
+  );
+
+  const moneyCases: [number, string][] = [
+    [0, "0.00"],
+    [5, "0.05"],
+    [-5, "-0.05"],
+    [123456, "1234.56"],
+    [-100, "-1.00"],
+    [999999999, "9999999.99"],
+  ];
+  const badMoney = moneyCases.filter(([cents, want]) => csvMoney(cents) !== want);
+  check(
+    "CSV: integer cents export as decimal amounts",
+    badMoney.length === 0,
+    badMoney.length
+      ? badMoney.map(([c, w]) => `${c} -> ${csvMoney(c)} (want ${w})`).join("; ")
+      : `${moneyCases.length} cases exact`,
+  );
+
+  check(
+    "CSV: dates export as ISO YYYY-MM-DD in UTC",
+    csvDate(AUG) === "2026-08-31" && csvDate(JAN) === "2026-01-01",
+    `${csvDate(AUG)}, ${csvDate(JAN)}`,
+  );
+  check(
+    "CSV: filenames name the report and its period",
+    asOfFilename("Trial balance", AUG) === "trial-balance-2026-08-31.csv" &&
+      rangeFilename("Profit & loss", JAN, AUG) === "profit-and-loss-2026-01-01-to-2026-08-31.csv",
+    `${asOfFilename("Trial balance", AUG)} / ${rangeFilename("Profit & loss", JAN, AUG)}`,
+  );
+
+  const missingCapability = Object.entries(EXPORTS).filter(([, def]) => !def.capability);
+  check(
+    "CSV: every export declares a required capability",
+    missingCapability.length === 0,
+    missingCapability.length
+      ? missingCapability.map(([k]) => k).join(", ")
+      : `${Object.keys(EXPORTS).length} exports gated`,
+  );
+  check(
+    "CSV: a reviewer cannot export the tax detail",
+    !can("REVIEWER", EXPORTS["tax-detail"].capability) && can("PRIMARY", EXPORTS["tax-detail"].capability),
+    `reviewer ${can("REVIEWER", EXPORTS["tax-detail"].capability)}, primary ${can("PRIMARY", EXPORTS["tax-detail"].capability)}`,
+  );
+
+  const company = await db.company.findFirstOrThrow({
+    orderBy: { name: "asc" },
+    select: { id: true, baseCurrency: true, fiscalYearStartMonth: true },
+  });
+  const ctx = {
+    companyId: company.id,
+    currency: company.baseCurrency,
+    fiscalYearStartMonth: company.fiscalYearStartMonth,
+    params: new URLSearchParams({ from: "2026-01-01", to: "2026-12-31" }),
+  };
+
+  for (const key of ["trial-balance", "profit-and-loss", "general-ledger", "tax-summary"]) {
+    const result = await EXPORTS[key].build(ctx);
+    const body = result.body.replace(/^﻿/, "");
+    const rowCount = body.trim().split("\r\n").length - 1;
+    check(
+      `CSV: ${key} export builds`,
+      rowCount > 0 && result.filename.endsWith(".csv") && body.includes(company.baseCurrency),
+      `${result.filename}, ${rowCount} data row(s), currency in headings`,
+    );
+  }
+
+  // A window with no activity must yield headings and nothing else — that is
+  // how we know the requested range actually reached the query.
+  const empty = await EXPORTS["general-ledger"].build({
+    ...ctx,
+    params: new URLSearchParams({ from: "1990-01-01", to: "1990-12-31" }),
+  });
+  const emptyRows = empty.body.replace(/^﻿/, "").trim().split("\r\n").length - 1;
+  check("CSV: the requested date range filters the export", emptyRows === 0, `${emptyRows} rows for an empty 1990 window`);
+}
+
+/**
+ * Profit & Loss: the EBITDA ladder, its margins, and the invariant that
+ * restructuring the presentation did not change what the company earned.
+ */
+async function profitAndLossChecks() {
+  const companies = await db.company.findMany({ orderBy: { name: "asc" } });
+  const asOf = toUtcDay(new Date());
+  const range = { from: utcDate(asOf.getUTCFullYear(), 1, 1), to: asOf };
+
+  for (const company of companies) {
+    const tag = company.name.split(" ")[0];
+    const pl = await profitAndLoss(company.id, range);
+    const sec = (key: string) => pl.sections.find((s) => s.key === key)!;
+
+    check(
+      `${tag}: EBITDA = gross profit less operating expenses`,
+      pl.ebitdaCents === pl.grossProfitCents - sec("OPERATING_EXPENSE").totalCents,
+      `EBITDA ${money(pl.ebitdaCents)}`,
+    );
+    check(
+      `${tag}: EBIT = EBITDA less depreciation & amortization`,
+      pl.ebitCents === pl.ebitdaCents - sec("DEPRECIATION_AMORTIZATION").totalCents,
+      `EBIT ${money(pl.ebitCents)}, D&A ${money(sec("DEPRECIATION_AMORTIZATION").totalCents)}`,
+    );
+    check(
+      `${tag}: income before tax = EBIT + other income - other expense - interest`,
+      pl.incomeBeforeTaxCents ===
+        pl.ebitCents + sec("OTHER_INCOME").totalCents - sec("OTHER_EXPENSE").totalCents - sec("INTEREST_EXPENSE").totalCents,
+      `income before tax ${money(pl.incomeBeforeTaxCents)}`,
+    );
+    check(
+      `${tag}: net income = income before tax less income tax`,
+      pl.netIncomeCents === pl.incomeBeforeTaxCents - sec("INCOME_TAX_EXPENSE").totalCents,
+      `net income ${money(pl.netIncomeCents)}`,
+    );
+
+    const strayDA = sec("OPERATING_EXPENSE").rows.filter((r) =>
+      (DEPRECIATION_AMORTIZATION_SUBTYPES as readonly string[]).includes(r.subtype),
+    );
+    check(
+      `${tag}: depreciation is excluded from EBITDA operating expenses`,
+      strayDA.length === 0,
+      strayDA.length ? `found ${strayDA.map((r) => r.code).join(", ")}` : "no D&A accounts above EBITDA",
+    );
+
+    // Classification is by subtype, never by account name.
+    const namedInterest = sec("OPERATING_EXPENSE").rows.filter((r) => /interest/i.test(r.name));
+    check(
+      `${tag}: accounts are placed by subtype, not by name`,
+      namedInterest.every((r) => r.subtype === "OPERATING_EXPENSE"),
+      namedInterest.length
+        ? namedInterest.map((r) => `${r.code} ${r.name} = ${r.subtype}`).join("; ")
+        : "no name-ambiguous accounts in this file",
+    );
+
+    const bs = await balanceSheet(company.id, range.to);
+    check(
+      `${tag}: EBITDA-format net income still ties to the balance sheet`,
+      pl.netIncomeCents === bs.currentEarningsCents,
+      `P&L ${money(pl.netIncomeCents)} vs unclosed earnings ${money(bs.currentEarningsCents)}`,
+    );
+
+    if (pl.revenueCents > 0) {
+      const expected = (pl.ebitdaCents / pl.revenueCents) * 100;
+      check(
+        `${tag}: EBITDA margin = EBITDA / revenue`,
+        pl.ebitdaMarginPercent !== null && Math.abs(pl.ebitdaMarginPercent - expected) < 1e-9,
+        `${pl.ebitdaMarginPercent?.toFixed(2)}%`,
+      );
+    }
+  }
+
+  const emptyPl = await profitAndLoss(companies[0].id, { from: utcDate(1990, 1, 1), to: utcDate(1990, 12, 31) });
+  check(
+    "P&L: margins are null rather than NaN when there is no revenue",
+    emptyPl.revenueCents === 0 &&
+      emptyPl.ebitdaMarginPercent === null &&
+      emptyPl.grossMarginPercent === null &&
+      emptyPl.netMarginPercent === null,
+    "no revenue, all three margins null",
+  );
+}

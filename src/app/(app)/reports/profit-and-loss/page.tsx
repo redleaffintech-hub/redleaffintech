@@ -1,10 +1,10 @@
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
-import { profitAndLoss, monthlyPerformance } from "@/server/reports/financials";
+import { profitAndLoss, monthlyPerformance, type StatementSection } from "@/server/reports/financials";
 import { fiscalYearOf, fiscalYearRange, isoDate, toUtcDay, today, addMonths } from "@/lib/dates";
-import { formatMoney } from "@/lib/money";
-import { PageHeader, Money } from "@/components/ui";
+import { PageHeader } from "@/components/ui";
 import { RangePicker, PrintButton } from "@/components/filter-bar";
+import { ExportCsvButton } from "@/components/export-csv-button";
 import { GroupedBarChart } from "@/components/charts";
 import { ReportSheet, StatementRow, StatementSectionHeader, periodLabel } from "@/components/report-shell";
 
@@ -31,11 +31,30 @@ export default async function ProfitAndLossPage({ searchParams }: PageProps<"/re
   const revenue = find("REVENUE");
   const cogs = find("COST_OF_SALES");
   const opex = find("OPERATING_EXPENSE");
+  const depreciation = find("DEPRECIATION_AMORTIZATION");
   const otherIncome = find("OTHER_INCOME");
   const otherExpense = find("OTHER_EXPENSE");
+  const interest = find("INTEREST_EXPENSE");
+  const incomeTax = find("INCOME_TAX_EXPENSE");
 
   const glLink = (accountId: string) =>
     `/accounting/general-ledger?account=${accountId}&from=${isoDate(from)}&to=${isoDate(to)}`;
+
+  /** Accounts of a section, each drilling through to its ledger. */
+  const rowsOf = (section: StatementSection, negate = false) =>
+    section.rows.map((row) => (
+      <StatementRow
+        key={row.accountId}
+        label={row.name}
+        code={row.code}
+        value={negate ? -row.balanceCents : row.balanceCents}
+        comparison={negate ? -(row.comparisonCents ?? 0) : row.comparisonCents}
+        href={glLink(row.accountId)}
+        indent={1}
+      />
+    ));
+
+  const percent = (value: number | null) => (value === null ? "—" : `${value.toFixed(1)}%`);
 
   return (
     <>
@@ -53,6 +72,7 @@ export default async function ProfitAndLossPage({ searchParams }: PageProps<"/re
           <>
             <RangePicker from={isoDate(from)} to={isoDate(to)} />
             <PrintButton />
+            <ExportCsvButton report="profit-and-loss" />
           </>
         }
       >
@@ -83,48 +103,76 @@ export default async function ProfitAndLossPage({ searchParams }: PageProps<"/re
           </thead>
           <tbody>
             <StatementSectionHeader label="Revenue" />
-            {revenue.rows.map((row) => (
-              <StatementRow key={row.accountId} label={row.name} code={row.code} value={row.balanceCents} comparison={row.comparisonCents} href={glLink(row.accountId)} indent={1} />
-            ))}
+            {rowsOf(revenue)}
             <StatementRow label="Total revenue" value={revenue.totalCents} comparison={revenue.comparisonTotalCents} total />
 
             {cogs.rows.length > 0 && (
               <>
                 <StatementSectionHeader label="Cost of sales" />
-                {cogs.rows.map((row) => (
-                  <StatementRow key={row.accountId} label={row.name} code={row.code} value={row.balanceCents} comparison={row.comparisonCents} href={glLink(row.accountId)} indent={1} />
-                ))}
+                {rowsOf(cogs)}
                 <StatementRow label="Total cost of sales" value={cogs.totalCents} comparison={cogs.comparisonTotalCents} total />
+              </>
+            )}
+            <StatementRow
+              label="Gross profit"
+              value={report.grossProfitCents}
+              comparison={report.comparisonGrossProfitCents}
+              emphasis
+            />
+
+            <StatementSectionHeader label="Operating expenses (excluding depreciation & amortization)" />
+            {rowsOf(opex)}
+            <StatementRow label="Total operating expenses" value={opex.totalCents} comparison={opex.comparisonTotalCents} total />
+
+            {/* The point of the whole restructure: earnings before interest,
+                tax, depreciation and amortization, stated rather than implied. */}
+            <StatementRow label="EBITDA" value={report.ebitdaCents} comparison={report.comparisonEbitdaCents} emphasis />
+
+            {depreciation.rows.length > 0 && (
+              <>
+                <StatementSectionHeader label="Depreciation & amortization" />
+                {rowsOf(depreciation)}
                 <StatementRow
-                  label="Gross profit"
-                  value={report.grossProfitCents}
-                  comparison={(revenue.comparisonTotalCents ?? 0) - (cogs.comparisonTotalCents ?? 0)}
-                  emphasis
+                  label="Total depreciation & amortization"
+                  value={depreciation.totalCents}
+                  comparison={depreciation.comparisonTotalCents}
+                  total
                 />
               </>
             )}
-
-            <StatementSectionHeader label="Operating expenses" />
-            {opex.rows.map((row) => (
-              <StatementRow key={row.accountId} label={row.name} code={row.code} value={row.balanceCents} comparison={row.comparisonCents} href={glLink(row.accountId)} indent={1} />
-            ))}
-            <StatementRow label="Total operating expenses" value={opex.totalCents} comparison={opex.comparisonTotalCents} total />
             <StatementRow
-              label="Operating income"
-              value={report.operatingIncomeCents}
-              comparison={(revenue.comparisonTotalCents ?? 0) - (cogs.comparisonTotalCents ?? 0) - (opex.comparisonTotalCents ?? 0)}
+              label="EBIT — operating income"
+              value={report.ebitCents}
+              comparison={report.comparisonEbitCents}
               emphasis
             />
 
             {(otherIncome.rows.length > 0 || otherExpense.rows.length > 0) && (
               <>
                 <StatementSectionHeader label="Other income & expenses" />
-                {otherIncome.rows.map((row) => (
-                  <StatementRow key={row.accountId} label={row.name} code={row.code} value={row.balanceCents} comparison={row.comparisonCents} href={glLink(row.accountId)} indent={1} />
-                ))}
-                {otherExpense.rows.map((row) => (
-                  <StatementRow key={row.accountId} label={row.name} code={row.code} value={-row.balanceCents} comparison={-(row.comparisonCents ?? 0)} href={glLink(row.accountId)} indent={1} />
-                ))}
+                {rowsOf(otherIncome)}
+                {rowsOf(otherExpense, true)}
+              </>
+            )}
+
+            {interest.rows.length > 0 && (
+              <>
+                <StatementSectionHeader label="Interest expense" />
+                {rowsOf(interest, true)}
+              </>
+            )}
+
+            <StatementRow
+              label="Income before tax"
+              value={report.incomeBeforeTaxCents}
+              comparison={report.comparisonIncomeBeforeTaxCents}
+              emphasis
+            />
+
+            {incomeTax.rows.length > 0 && (
+              <>
+                <StatementSectionHeader label="Income tax expense" />
+                {rowsOf(incomeTax, true)}
               </>
             )}
 
@@ -137,9 +185,10 @@ export default async function ProfitAndLossPage({ searchParams }: PageProps<"/re
           </tbody>
         </table>
 
-        <div className="mt-6 grid gap-3 border-t border-paper-300 pt-5 sm:grid-cols-3">
-          <Metric label="Gross margin" value={report.revenueCents > 0 ? `${((report.grossProfitCents / report.revenueCents) * 100).toFixed(1)}%` : "—"} />
-          <Metric label="Net margin" value={report.revenueCents > 0 ? `${((report.netIncomeCents / report.revenueCents) * 100).toFixed(1)}%` : "—"} />
+        <div className="mt-6 grid gap-3 border-t border-paper-300 pt-5 sm:grid-cols-2 lg:grid-cols-4">
+          <Metric label="Gross margin" value={percent(report.grossMarginPercent)} />
+          <Metric label="EBITDA margin" value={percent(report.ebitdaMarginPercent)} />
+          <Metric label="Net margin" value={percent(report.netMarginPercent)} />
           <Metric
             label="Change vs prior year"
             value={

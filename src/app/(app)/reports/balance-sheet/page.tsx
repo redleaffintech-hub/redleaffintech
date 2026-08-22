@@ -5,6 +5,7 @@ import { isoDate, toUtcDay, today, addDays, formatDateLong, fiscalYearOf, fiscal
 import { formatMoney } from "@/lib/money";
 import { PageHeader } from "@/components/ui";
 import { PrintButton } from "@/components/filter-bar";
+import { ExportCsvButton } from "@/components/export-csv-button";
 import { AsOfPicker } from "../as-of-picker";
 import { ReconciliationBanner, ReportSheet, StatementRow, StatementSectionHeader, asOfLabel } from "@/components/report-shell";
 
@@ -47,6 +48,7 @@ export default async function BalanceSheetPage({ searchParams }: PageProps<"/rep
           <>
             <AsOfPicker value={isoDate(asOf)} />
             <PrintButton />
+            <ExportCsvButton report="balance-sheet" />
           </>
         }
       >

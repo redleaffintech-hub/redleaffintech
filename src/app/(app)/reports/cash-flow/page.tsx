@@ -5,6 +5,7 @@ import { fiscalYearOf, fiscalYearRange, isoDate, toUtcDay, today } from "@/lib/d
 import { formatMoney } from "@/lib/money";
 import { PageHeader } from "@/components/ui";
 import { RangePicker, PrintButton } from "@/components/filter-bar";
+import { ExportCsvButton } from "@/components/export-csv-button";
 import { ReconciliationBanner, ReportSheet, StatementRow, StatementSectionHeader, periodLabel } from "@/components/report-shell";
 
 export const metadata = { title: "Cash flow" };
@@ -37,6 +38,7 @@ export default async function CashFlowPage({ searchParams }: PageProps<"/reports
           <>
             <RangePicker from={isoDate(from)} to={isoDate(to)} />
             <PrintButton />
+            <ExportCsvButton report="cash-flow" />
           </>
         }
       >

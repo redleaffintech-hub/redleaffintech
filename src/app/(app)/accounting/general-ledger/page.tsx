@@ -7,6 +7,7 @@ import { SOURCE_LABELS } from "@/lib/enums";
 import { fiscalYearOf, fiscalYearRange, isoDate, toUtcDay, today, formatDate } from "@/lib/dates";
 import { Money, PageHeader, EmptyState } from "@/components/ui";
 import { RangePicker, PrintButton } from "@/components/filter-bar";
+import { ExportCsvButton } from "@/components/export-csv-button";
 import { AccountPicker } from "./account-picker";
 import { ReportSheet, periodLabel } from "@/components/report-shell";
 
@@ -53,6 +54,7 @@ export default async function GeneralLedgerPage({ searchParams }: PageProps<"/ac
             <AccountPicker accounts={accounts} value={accountId} />
             <RangePicker from={isoDate(from)} to={isoDate(to)} />
             <PrintButton />
+            <ExportCsvButton report="general-ledger" />
           </>
         }
       >

@@ -7,6 +7,7 @@ import { formatDate, today, daysBetween } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
 import { Badge, Card, EmptyState, LinkButton, Money, PageHeader, StatusBadge, Table, Td, Th, Tr } from "@/components/ui";
 import { FilterBar } from "@/components/filter-bar";
+import { ExportCsvButton } from "@/components/export-csv-button";
 import { Icon } from "@/components/shell/icons";
 
 export const metadata = { title: "Bills" };
@@ -58,6 +59,7 @@ export default async function BillsPage({ searchParams }: PageProps<"/purchases/
         }
         actions={
           <>
+            <ExportCsvButton report="bills" />
             <LinkButton href="/reports/ap-aging">A/P aging</LinkButton>
             <LinkButton href="/purchases/bills/new" variant="primary">
               <Icon name="plus" className="h-3.5 w-3.5" />

@@ -7,6 +7,7 @@ import { fiscalYearOf, fiscalYearRange, isoDate, toUtcDay, today, formatDate } f
 import { formatMoney } from "@/lib/money";
 import { Card, CardHeader, DefinitionList, LinkButton, Money, PageHeader } from "@/components/ui";
 import { RangePicker, PrintButton } from "@/components/filter-bar";
+import { ExportCsvButton } from "@/components/export-csv-button";
 import { DocumentList, PartyStatement } from "@/components/party-views";
 import { Icon } from "@/components/shell/icons";
 
@@ -51,6 +52,7 @@ export default async function VendorDetailPage({ params, searchParams }: PagePro
         actions={
           <>
             <PrintButton label="Print statement" />
+            <ExportCsvButton report="vendor-statement" params={{ party: vendor.id }} />
             <LinkButton href="/purchases/bills/new" variant="primary">
               <Icon name="plus" className="h-3.5 w-3.5" />
               New bill

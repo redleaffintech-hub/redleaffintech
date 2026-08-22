@@ -6,6 +6,7 @@ import { fiscalYearOf, fiscalYearRange, isoDate, toUtcDay, today, formatDate } f
 import { formatRate } from "@/lib/money";
 import { Badge, Money, PageHeader } from "@/components/ui";
 import { FilterBar, RangePicker, PrintButton } from "@/components/filter-bar";
+import { ExportCsvButton } from "@/components/export-csv-button";
 import { ReportSheet, periodLabel } from "@/components/report-shell";
 
 export const metadata = { title: "Tax detail" };
@@ -58,6 +59,7 @@ export default async function TaxDetailPage({ searchParams }: PageProps<"/report
           <>
             <RangePicker from={isoDate(from)} to={isoDate(to)} />
             <PrintButton />
+            <ExportCsvButton report="tax-detail" />
           </>
         }
       >

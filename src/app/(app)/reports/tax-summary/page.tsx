@@ -5,6 +5,7 @@ import { fiscalYearOf, fiscalYearRange, isoDate, toUtcDay, today } from "@/lib/d
 import { formatMoney } from "@/lib/money";
 import { Badge, LinkButton, Money, PageHeader } from "@/components/ui";
 import { RangePicker, PrintButton } from "@/components/filter-bar";
+import { ExportCsvButton } from "@/components/export-csv-button";
 import { ReconciliationBanner, ReportSheet, periodLabel } from "@/components/report-shell";
 
 export const metadata = { title: "Tax summary" };
@@ -38,6 +39,7 @@ export default async function TaxSummaryPage({ searchParams }: PageProps<"/repor
           <>
             <RangePicker from={isoDate(from)} to={isoDate(to)} />
             <PrintButton />
+            <ExportCsvButton report="tax-summary" />
           </>
         }
       >

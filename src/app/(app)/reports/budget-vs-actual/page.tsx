@@ -6,6 +6,7 @@ import { fiscalYearOf, fiscalYearRange, isoDate, today, toUtcDay } from "@/lib/d
 import { formatMoney } from "@/lib/money";
 import { EmptyState, Money, PageHeader } from "@/components/ui";
 import { PrintButton } from "@/components/filter-bar";
+import { ExportCsvButton } from "@/components/export-csv-button";
 import { ReportSheet, StatementSectionHeader, periodLabel } from "@/components/report-shell";
 
 export const metadata = { title: "Budget vs actual" };
@@ -95,7 +96,12 @@ export default async function BudgetVsActualPage({ searchParams }: PageProps<"/r
         title="Budget vs Actual"
         periodLabel={periodLabel(start, to)}
         basisNote="Favourable variance is more revenue or less spend than budgeted."
-        toolbar={<PrintButton />}
+        toolbar={
+          <>
+            <PrintButton />
+            <ExportCsvButton report="budget-vs-actual" />
+          </>
+        }
       >
         <table className="w-full text-[0.8125rem]">
           <thead>

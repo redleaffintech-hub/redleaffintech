@@ -11,10 +11,10 @@ const REPORT_GROUPS = [
   {
     label: "Financial statements",
     reports: [
+      { name: "Trial balance", href: "/accounting/trial-balance", description: "Opening, period movement and closing balance for every account." },
       { name: "Profit & loss", href: "/reports/profit-and-loss", description: "Revenue, cost of sales and expenses with prior-period comparison and drill-down." },
       { name: "Balance sheet", href: "/reports/balance-sheet", description: "Assets, liabilities and equity as at any date, with the balancing check shown." },
       { name: "Cash flow", href: "/reports/cash-flow", description: "Operating, investing and financing movements, reconciled to the change in cash." },
-      { name: "Trial balance", href: "/accounting/trial-balance", description: "Opening, period movement and closing balance for every account." },
     ],
   },
   {

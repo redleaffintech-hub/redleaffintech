@@ -40,8 +40,71 @@ export const ACCOUNT_SUBTYPES: Record<AccountType, string[]> = {
   ],
   EQUITY: ["SHARE_CAPITAL", "OWNER_EQUITY", "RETAINED_EARNINGS", "DRAWINGS"],
   REVENUE: ["OPERATING_REVENUE", "OTHER_INCOME"],
-  EXPENSE: ["OPERATING_EXPENSE", "COST_OF_SALES", "PAYROLL_EXPENSE", "OTHER_EXPENSE", "DEPRECIATION"],
+  EXPENSE: [
+    "OPERATING_EXPENSE",
+    "COST_OF_SALES",
+    "PAYROLL_EXPENSE",
+    "OTHER_EXPENSE",
+    "DEPRECIATION",
+    "AMORTIZATION",
+    "INTEREST_EXPENSE",
+    "INCOME_TAX_EXPENSE",
+  ],
 };
+
+/** Human-readable subtype names for pickers and the chart of accounts. */
+export const SUBTYPE_LABELS: Record<string, string> = {
+  BANK: "Bank & cash",
+  ACCOUNTS_RECEIVABLE: "Accounts receivable",
+  OTHER_CURRENT_ASSET: "Other current asset",
+  PREPAID_EXPENSE: "Prepaid expense",
+  INVENTORY: "Inventory",
+  FIXED_ASSET: "Fixed asset",
+  ACCUMULATED_DEPRECIATION: "Accumulated depreciation",
+  TAX_RECOVERABLE: "Tax recoverable",
+  ACCOUNTS_PAYABLE: "Accounts payable",
+  CREDIT_CARD: "Credit card",
+  SALES_TAX_PAYABLE: "Sales tax payable",
+  PAYROLL_LIABILITY: "Payroll liability",
+  OTHER_CURRENT_LIABILITY: "Other current liability",
+  LONG_TERM_LIABILITY: "Long-term liability",
+  SHARE_CAPITAL: "Share capital",
+  OWNER_EQUITY: "Owner equity",
+  RETAINED_EARNINGS: "Retained earnings",
+  DRAWINGS: "Drawings",
+  OPERATING_REVENUE: "Operating revenue",
+  OTHER_INCOME: "Other income",
+  OPERATING_EXPENSE: "Operating expense",
+  COST_OF_SALES: "Cost of sales",
+  PAYROLL_EXPENSE: "Payroll expense",
+  OTHER_EXPENSE: "Other expense",
+  DEPRECIATION: "Depreciation",
+  AMORTIZATION: "Amortization",
+  INTEREST_EXPENSE: "Interest expense",
+  INCOME_TAX_EXPENSE: "Income tax expense",
+};
+
+export function subtypeLabel(subtype: string): string {
+  return SUBTYPE_LABELS[subtype] ?? subtype.replace(/_/g, " ").toLowerCase();
+}
+
+/**
+ * How the Profit & Loss statement groups expenses, by SUBTYPE.
+ *
+ * Classification is by durable account subtype and never by account name or
+ * code pattern. Matching "interest" or "6xxx" at report runtime looks
+ * convenient and then silently misclassifies "Interest received", "Disinterest
+ * survey costs" or any renamed account — and a P&L that changes shape because
+ * someone edited a label is not a report anyone can rely on.
+ *
+ * EBITDA is earnings before interest, tax, depreciation and amortization, so
+ * each of those four has to be separable from ordinary operating cost. That is
+ * the whole reason the subtypes below exist.
+ */
+export const DEPRECIATION_AMORTIZATION_SUBTYPES = ["DEPRECIATION", "AMORTIZATION"] as const;
+export const EBITDA_OPERATING_EXPENSE_SUBTYPES = ["OPERATING_EXPENSE", "PAYROLL_EXPENSE"] as const;
+export const INTEREST_EXPENSE_SUBTYPES = ["INTEREST_EXPENSE"] as const;
+export const INCOME_TAX_SUBTYPES = ["INCOME_TAX_EXPENSE"] as const;
 
 /**
  * Control accounts the posting engine must be able to resolve by handle.

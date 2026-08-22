@@ -6,6 +6,7 @@ import { isoDate, toUtcDay, today, formatDate } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
 import { Money, PageHeader, StatusBadge } from "@/components/ui";
 import { PrintButton } from "@/components/filter-bar";
+import { ExportCsvButton } from "@/components/export-csv-button";
 import { AsOfPicker } from "../as-of-picker";
 import { AgingBar } from "@/components/charts";
 import { ReconciliationBanner, ReportSheet, asOfLabel } from "@/components/report-shell";
@@ -61,6 +62,7 @@ export async function AgingReport({
           <>
             <AsOfPicker value={isoDate(asOf)} />
             <PrintButton />
+            <ExportCsvButton report={isAr ? "ar-aging" : "ap-aging"} />
           </>
         }
       >

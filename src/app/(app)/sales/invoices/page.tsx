@@ -9,6 +9,7 @@ import {
   Card, EmptyState, LinkButton, Money, PageHeader, StatusBadge, Table, Td, Th, Tr,
 } from "@/components/ui";
 import { DateRangeFilter, FilterBar } from "@/components/filter-bar";
+import { ExportCsvButton } from "@/components/export-csv-button";
 import { Icon } from "@/components/shell/icons";
 
 export const metadata = { title: "Invoices" };
@@ -79,6 +80,7 @@ export default async function InvoicesPage({ searchParams }: PageProps<"/sales/i
         }
         actions={
           <>
+            <ExportCsvButton report="invoices" />
             <LinkButton href="/reports/ar-aging">A/R aging</LinkButton>
             <LinkButton href="/sales/invoices/new" variant="primary">
               <Icon name="plus" className="h-3.5 w-3.5" />

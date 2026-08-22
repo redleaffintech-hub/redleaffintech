@@ -8,7 +8,14 @@
  */
 
 import { db } from "@/lib/db";
-import { NORMAL_BALANCE, type AccountType } from "@/lib/enums";
+import {
+  DEPRECIATION_AMORTIZATION_SUBTYPES,
+  EBITDA_OPERATING_EXPENSE_SUBTYPES,
+  INCOME_TAX_SUBTYPES,
+  INTEREST_EXPENSE_SUBTYPES,
+  NORMAL_BALANCE,
+  type AccountType,
+} from "@/lib/enums";
 import { fiscalYearRange, fiscalYearOf, monthsBetween, endOfMonth } from "@/lib/dates";
 
 export interface DateRange {
@@ -122,12 +129,32 @@ export async function trialBalance(companyId: string, range: DateRange) {
 // Profit & Loss
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * The statement in presentation order, built so EBITDA is a visible subtotal
+ * rather than something the reader has to reconstruct.
+ *
+ * Depreciation and amortization are pulled OUT of operating expenses, and
+ * interest and income tax get their own sections, because EBITDA is by
+ * definition earnings before exactly those four. Every membership decision is
+ * by durable subtype (src/lib/enums.ts) — never by account name or code range.
+ */
 const PL_SECTIONS = [
   { key: "REVENUE", label: "Revenue", subtypes: ["OPERATING_REVENUE"] },
   { key: "COST_OF_SALES", label: "Cost of sales", subtypes: ["COST_OF_SALES"] },
-  { key: "OPERATING_EXPENSE", label: "Operating expenses", subtypes: ["OPERATING_EXPENSE", "PAYROLL_EXPENSE", "DEPRECIATION"] },
+  {
+    key: "OPERATING_EXPENSE",
+    label: "Operating expenses",
+    subtypes: [...EBITDA_OPERATING_EXPENSE_SUBTYPES],
+  },
+  {
+    key: "DEPRECIATION_AMORTIZATION",
+    label: "Depreciation & amortization",
+    subtypes: [...DEPRECIATION_AMORTIZATION_SUBTYPES],
+  },
   { key: "OTHER_INCOME", label: "Other income", subtypes: ["OTHER_INCOME"] },
   { key: "OTHER_EXPENSE", label: "Other expenses", subtypes: ["OTHER_EXPENSE"] },
+  { key: "INTEREST_EXPENSE", label: "Interest expense", subtypes: [...INTEREST_EXPENSE_SUBTYPES] },
+  { key: "INCOME_TAX_EXPENSE", label: "Income tax expense", subtypes: [...INCOME_TAX_SUBTYPES] },
 ] as const;
 
 export interface ComparedAccountBalance extends AccountBalance {
@@ -172,28 +199,88 @@ export async function profitAndLoss(
   }
 
   const find = (key: string) => sections.find((s) => s.key === key)!;
-  const revenue = find("REVENUE").totalCents;
-  const cogs = find("COST_OF_SALES").totalCents;
-  const opex = find("OPERATING_EXPENSE").totalCents;
-  const otherIncome = find("OTHER_INCOME").totalCents;
-  const otherExpense = find("OTHER_EXPENSE").totalCents;
+  const now = (key: string) => find(key).totalCents;
+  const was = (key: string) => find(key).comparisonTotalCents ?? 0;
 
-  const priorRevenue = find("REVENUE").comparisonTotalCents ?? 0;
-  const priorCogs = find("COST_OF_SALES").comparisonTotalCents ?? 0;
-  const priorOpex = find("OPERATING_EXPENSE").comparisonTotalCents ?? 0;
-  const priorOther = (find("OTHER_INCOME").comparisonTotalCents ?? 0) - (find("OTHER_EXPENSE").comparisonTotalCents ?? 0);
+  /**
+   * Both periods run through the same ladder, so a comparison column can never
+   * drift from the figure it is compared against.
+   *
+   * Net income is deliberately the same arithmetic as before this report was
+   * restructured. Depreciation simply moved out of `OPERATING_EXPENSE` into its
+   * own section, and interest and tax are new sections that are empty for any
+   * company that has not classified an account into them — so every existing
+   * file reports exactly the net income it did before, and continues to tie to
+   * the balance sheet and the cash flow statement.
+   */
+  const ladder = (total: (key: string) => number) => {
+    const revenue = total("REVENUE");
+    const costOfSales = total("COST_OF_SALES");
+    const operatingExpenses = total("OPERATING_EXPENSE");
+    const depreciationAmortization = total("DEPRECIATION_AMORTIZATION");
+    const otherIncome = total("OTHER_INCOME");
+    const otherExpense = total("OTHER_EXPENSE");
+    const interest = total("INTEREST_EXPENSE");
+    const incomeTax = total("INCOME_TAX_EXPENSE");
+
+    const grossProfit = revenue - costOfSales;
+    const ebitda = grossProfit - operatingExpenses;
+    const ebit = ebitda - depreciationAmortization;
+    const incomeBeforeTax = ebit + otherIncome - otherExpense - interest;
+
+    return {
+      revenue,
+      costOfSales,
+      operatingExpenses,
+      depreciationAmortization,
+      otherIncome,
+      otherExpense,
+      interest,
+      incomeTax,
+      grossProfit,
+      ebitda,
+      ebit,
+      incomeBeforeTax,
+      netIncome: incomeBeforeTax - incomeTax,
+      totalExpense: costOfSales + operatingExpenses + depreciationAmortization + otherExpense + interest + incomeTax,
+    };
+  };
+
+  const current_ = ladder(now);
+  const prior_ = ladder(was);
+
+  /** EBITDA / revenue. Null rather than 0 when there is no revenue to divide by. */
+  const margin = (numerator: number, revenue: number) =>
+    revenue > 0 ? (numerator / revenue) * 100 : null;
 
   return {
     range,
     comparison,
     sections,
-    grossProfitCents: revenue - cogs,
-    operatingIncomeCents: revenue - cogs - opex,
-    netIncomeCents: revenue - cogs - opex + otherIncome - otherExpense,
-    comparisonNetIncomeCents: priorRevenue - priorCogs - priorOpex + priorOther,
-    revenueCents: revenue,
-    comparisonRevenueCents: priorRevenue,
-    totalExpenseCents: cogs + opex + otherExpense,
+
+    // Subtotals, each with its prior-period counterpart.
+    grossProfitCents: current_.grossProfit,
+    comparisonGrossProfitCents: prior_.grossProfit,
+    ebitdaCents: current_.ebitda,
+    comparisonEbitdaCents: prior_.ebitda,
+    ebitCents: current_.ebit,
+    comparisonEbitCents: prior_.ebit,
+    incomeBeforeTaxCents: current_.incomeBeforeTax,
+    comparisonIncomeBeforeTaxCents: prior_.incomeBeforeTax,
+    netIncomeCents: current_.netIncome,
+    comparisonNetIncomeCents: prior_.netIncome,
+
+    /** EBIT. Kept under its previous name for callers that read operating income. */
+    operatingIncomeCents: current_.ebit,
+
+    revenueCents: current_.revenue,
+    comparisonRevenueCents: prior_.revenue,
+    totalExpenseCents: current_.totalExpense,
+
+    // Margins, null when revenue is zero so callers cannot divide by it.
+    grossMarginPercent: margin(current_.grossProfit, current_.revenue),
+    ebitdaMarginPercent: margin(current_.ebitda, current_.revenue),
+    netMarginPercent: margin(current_.netIncome, current_.revenue),
   };
 }
 

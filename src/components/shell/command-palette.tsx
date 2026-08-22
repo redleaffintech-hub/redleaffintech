@@ -19,9 +19,9 @@ const QUICK_ACTIONS: SearchHit[] = [
   { type: "Create", label: "New expense", sublabel: "Expenses", href: "/expenses/new" },
   { type: "Create", label: "New journal entry", sublabel: "Accounting", href: "/accounting/journals/new" },
   { type: "Go to", label: "Bank review queue", sublabel: "Banking", href: "/banking" },
+  { type: "Go to", label: "Trial balance", sublabel: "Accounting", href: "/accounting/trial-balance" },
   { type: "Go to", label: "Profit & loss", sublabel: "Reports", href: "/reports/profit-and-loss" },
   { type: "Go to", label: "Balance sheet", sublabel: "Reports", href: "/reports/balance-sheet" },
-  { type: "Go to", label: "Trial balance", sublabel: "Accounting", href: "/accounting/trial-balance" },
   { type: "Go to", label: "Tax Centre", sublabel: "Tax", href: "/tax" },
   { type: "Go to", label: "Chart of accounts", sublabel: "Accounting", href: "/accounting/chart-of-accounts" },
 ];
