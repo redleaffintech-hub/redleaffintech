@@ -9,6 +9,7 @@
 import type { Tx } from "@/lib/db";
 import { addDays, addMonths, fiscalYearRange, utcDate } from "@/lib/dates";
 import { DEFAULT_PLAN_ID, PLAN_SEATS } from "@/lib/plans";
+import { DEFAULT_CURRENCY, normalizeCurrency } from "@/lib/currency";
 import {
   CANADIAN_SERVICE_COA,
   PROVINCIAL_TAX_CODES,
@@ -23,6 +24,10 @@ export interface ProvisionCompanyInput {
   fiscalYearStartMonth?: number;
   businessNumber?: string;
   gstNumber?: string;
+  qstNumber?: string;
+  pstNumber?: string;
+  /** ISO 4217. Omitted means CAD, which is also the column default. */
+  baseCurrency?: string;
   email?: string;
   phone?: string;
   addressLine1?: string;
@@ -49,6 +54,11 @@ export async function provisionCompany(tx: Tx, input: ProvisionCompanyInput) {
       fiscalYearStartMonth,
       businessNumber: input.businessNumber,
       gstNumber: input.gstNumber,
+      qstNumber: input.qstNumber,
+      pstNumber: input.pstNumber,
+      // An unrecognised code must not create a company that formats as garbage;
+      // fall back to the default rather than storing whatever was passed.
+      baseCurrency: normalizeCurrency(input.baseCurrency) ?? DEFAULT_CURRENCY,
       email: input.email,
       phone: input.phone,
       addressLine1: input.addressLine1,

@@ -11,6 +11,7 @@ export const metadata = { title: "Tax summary" };
 
 export default async function TaxSummaryPage({ searchParams }: PageProps<"/reports/tax-summary">) {
   const { company } = await requireCapability(CAPABILITIES.REPORTS);
+  const currency = company.baseCurrency;
   const params = await searchParams;
 
   const defaults = fiscalYearRange(fiscalYearOf(today(), company.fiscalYearStartMonth), company.fiscalYearStartMonth);
@@ -47,7 +48,7 @@ export default async function TaxSummaryPage({ searchParams }: PageProps<"/repor
               ? "Tax subledger reconciles to the tax control accounts."
               : "Tax subledger does not match the tax control accounts."
           }
-          detail={`Collected: subledger ${formatMoney(report.reconciliation.subledgerCollected)} vs GL ${formatMoney(report.reconciliation.glCollected)}. ITCs: subledger ${formatMoney(report.reconciliation.subledgerRecoverable)} vs GL ${formatMoney(report.reconciliation.glRecoverable)}.`}
+          detail={`Collected: subledger ${formatMoney(report.reconciliation.subledgerCollected, { currency })} vs GL ${formatMoney(report.reconciliation.glCollected, { currency })}. ITCs: subledger ${formatMoney(report.reconciliation.subledgerRecoverable, { currency })} vs GL ${formatMoney(report.reconciliation.glRecoverable, { currency })}.`}
         />
 
         <div className="thin-scroll overflow-x-auto">
@@ -109,11 +110,11 @@ export default async function TaxSummaryPage({ searchParams }: PageProps<"/repor
               Net tax {report.totals.netCents >= 0 ? "payable" : "refundable"}
             </p>
             <p className="tnum mt-1 text-[1.5rem] font-semibold text-ink-950">
-              {formatMoney(Math.abs(report.totals.netCents))}
+              {formatMoney(Math.abs(report.totals.netCents), { currency })}
             </p>
             <p className="mt-1 text-[0.75rem] text-muted-ink">
-              Tax collected {formatMoney(report.totals.taxCollectedCents)} less input tax credits{" "}
-              {formatMoney(report.totals.recoverableCents)}.
+              Tax collected {formatMoney(report.totals.taxCollectedCents, { currency })} less input tax credits{" "}
+              {formatMoney(report.totals.recoverableCents, { currency })}.
             </p>
           </div>
           <div className="rounded-lg border border-paper-300 p-4">

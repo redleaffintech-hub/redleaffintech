@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import clsx from "clsx";
 import { Button, Field, inputClass } from "@/components/ui";
 import { Dialog } from "@/app/(app)/sales/invoices/[id]/invoice-actions";
-import { formatMoney } from "@/lib/money";
+import { useMoney } from "@/components/currency-context";
 import { approveBillAction, payBillAction, postBillAction, voidBillAction } from "../actions";
 
 export function BillActions({
@@ -29,6 +29,7 @@ export function BillActions({
   canApprove: boolean;
   canEdit: boolean;
 }) {
+  const money = useMoney();
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -95,7 +96,7 @@ export function BillActions({
             className="space-y-3"
           >
             <input type="hidden" name="billId" value={billId} />
-            <Field label="Amount" required hint={`Balance owing is ${formatMoney(balanceCents)}.`}>
+            <Field label="Amount" required hint={`Balance owing is ${money.format(balanceCents)}.`}>
               <input name="amount" defaultValue={(balanceCents / 100).toFixed(2)} inputMode="decimal" className={clsx(inputClass, "tnum")} required />
             </Field>
             <div className="grid grid-cols-2 gap-3">

@@ -12,6 +12,7 @@ export const metadata = { title: "Balance sheet" };
 
 export default async function BalanceSheetPage({ searchParams }: PageProps<"/reports/balance-sheet">) {
   const { company } = await requireCapability(CAPABILITIES.REPORTS);
+  const currency = company.baseCurrency;
   const params = await searchParams;
 
   const asOf = toUtcDay(typeof params.asOf === "string" ? params.asOf : isoDate(today()));
@@ -54,9 +55,9 @@ export default async function BalanceSheetPage({ searchParams }: PageProps<"/rep
           message={
             report.outOfBalanceCents === 0
               ? "Balance sheet balances."
-              : `Balance sheet is out by ${formatMoney(Math.abs(report.outOfBalanceCents))}.`
+              : `Balance sheet is out by ${formatMoney(Math.abs(report.outOfBalanceCents), { currency })}.`
           }
-          detail={`Total assets ${formatMoney(report.totalAssetsCents)} — total liabilities and equity ${formatMoney(report.totalLiabilitiesAndEquityCents)}.`}
+          detail={`Total assets ${formatMoney(report.totalAssetsCents, { currency })} — total liabilities and equity ${formatMoney(report.totalLiabilitiesAndEquityCents, { currency })}.`}
         />
 
         <table className="w-full">

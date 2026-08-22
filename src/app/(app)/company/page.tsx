@@ -2,6 +2,7 @@ import { db } from "@/lib/db";
 import { requireVisible } from "@/server/auth/context";
 import { CAPABILITIES, can } from "@/lib/permissions";
 import { formatDate } from "@/lib/dates";
+import { DEFAULT_CURRENCY, currencyLabel, currencyOptions } from "@/lib/currency";
 import { PROVINCES } from "@/lib/enums";
 import { Badge, Card, CardHeader, DefinitionList, PageHeader } from "@/components/ui";
 import { CompanyProfileForm, NumberingForm } from "./company-form";
@@ -39,6 +40,9 @@ export default async function CompanyPage() {
                 legalName: record.legalName ?? "",
                 businessNumber: record.businessNumber ?? "",
                 gstNumber: record.gstNumber ?? "",
+                qstNumber: record.qstNumber ?? "",
+                pstNumber: record.pstNumber ?? "",
+                baseCurrency: record.baseCurrency || DEFAULT_CURRENCY,
                 province: record.province,
                 addressLine1: record.addressLine1 ?? "",
                 city: record.city ?? "",
@@ -51,6 +55,7 @@ export default async function CompanyPage() {
                 defaultTaxInclusive: record.defaultTaxInclusive,
                 invoiceFooter: record.invoiceFooter ?? "",
               }}
+              currencies={currencyOptions(record.baseCurrency)}
               fiscalYearLocked={postedEntries > 0}
               postedEntries={postedEntries}
             />
@@ -64,6 +69,9 @@ export default async function CompanyPage() {
                   { label: "Province", value: provinceName },
                   { label: "Business number", value: record.businessNumber ?? "—" },
                   { label: "GST/HST number", value: record.gstNumber ?? "—" },
+                  { label: "QST number", value: record.qstNumber ?? "—" },
+                  { label: "PST number", value: record.pstNumber ?? "—" },
+                  { label: "Base currency", value: currencyLabel(record.baseCurrency || DEFAULT_CURRENCY) },
                   { label: "Address", value: [record.addressLine1, record.city, record.postalCode].filter(Boolean).join(", ") || "—" },
                   { label: "Email", value: record.email ?? "—" },
                   { label: "Phone", value: record.phone ?? "—" },
@@ -101,7 +109,7 @@ export default async function CompanyPage() {
             <CardHeader title="This file" />
             <dl className="mt-3 space-y-2.5 text-[0.8125rem]">
               <Row label="Jurisdiction" value={`${provinceName} · ${record.country}`} />
-              <Row label="Base currency" value={record.baseCurrency} />
+              <Row label="Base currency" value={currencyLabel(record.baseCurrency || DEFAULT_CURRENCY)} />
               <Row
                 label="Fiscal year starts"
                 value={new Intl.DateTimeFormat("en-CA", { month: "long", timeZone: "UTC" }).format(
@@ -118,8 +126,10 @@ export default async function CompanyPage() {
           <Card>
             <CardHeader title="Currency" />
             <p className="mt-2 text-[0.8125rem] leading-6 text-muted-ink">
-              This file keeps its books in {record.baseCurrency}. The base currency is fixed once a company exists —
-              restating a ledger into another currency is a conversion exercise, not a settings change.
+              This file keeps its books in {currencyLabel(record.baseCurrency || DEFAULT_CURRENCY)}, set under
+              Details. It is a display and reporting setting: amounts are stored as plain numbers, so changing it
+              relabels what every figure is presented as and converts nothing.
+              {postedEntries > 0 && " With entries already posted, the change asks for confirmation first."}
             </p>
           </Card>
         </div>

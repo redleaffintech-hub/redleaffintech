@@ -209,6 +209,13 @@ export function StatusBadge({ status }: { status: string }) {
 
 // ── Money ───────────────────────────────────────────────────────────────────
 
+/**
+ * `showCurrency` is off by default: inside a ledger or report every column is
+ * already in the company's currency, so repeating the symbol on every row is
+ * noise. That is also why `currency` is optional — it only changes the output
+ * when a symbol is actually printed. Pass `currency={company.baseCurrency}`
+ * whenever `showCurrency` is set, or the symbol falls back to CAD.
+ */
 export function Money({
   cents,
   className,
@@ -216,6 +223,7 @@ export function Money({
   colorNegative = false,
   bold = false,
   blankZero = false,
+  currency,
 }: {
   cents: number;
   className?: string;
@@ -223,6 +231,7 @@ export function Money({
   colorNegative?: boolean;
   bold?: boolean;
   blankZero?: boolean;
+  currency?: string;
 }) {
   return (
     <span
@@ -233,7 +242,7 @@ export function Money({
         className,
       )}
     >
-      {formatMoney(cents, { showCurrency, accountingNegative: true, blankZero })}
+      {formatMoney(cents, { showCurrency, accountingNegative: true, blankZero, currency })}
     </span>
   );
 }

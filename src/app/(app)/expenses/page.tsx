@@ -13,6 +13,7 @@ export const metadata = { title: "Expenses" };
 
 export default async function ExpensesPage({ searchParams }: PageProps<"/expenses">) {
   const { company } = await requireCapability(CAPABILITIES.EXPENSES);
+  const currency = company.baseCurrency;
   const params = await searchParams;
 
   const defaults = fiscalYearRange(fiscalYearOf(today(), company.fiscalYearStartMonth), company.fiscalYearStartMonth);
@@ -51,7 +52,7 @@ export default async function ExpensesPage({ searchParams }: PageProps<"/expense
     <>
       <PageHeader
         title="Expenses"
-        description={`${formatMoney(totalCents)} recorded in this period, including ${formatMoney(taxCents)} of sales tax. Expenses are money paid directly — anything invoiced by a supplier belongs on a bill.`}
+        description={`${formatMoney(totalCents, { currency })} recorded in this period, including ${formatMoney(taxCents, { currency })} of sales tax. Expenses are money paid directly — anything invoiced by a supplier belongs on a bill.`}
         actions={
           <LinkButton href="/expenses/new" variant="primary">
             <Icon name="plus" className="h-3.5 w-3.5" />

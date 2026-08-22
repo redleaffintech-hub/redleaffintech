@@ -227,7 +227,7 @@ export async function invoiceFormOptions() {
       where: { id: company.id },
       select: {
         name: true, legalName: true, addressLine1: true, city: true, province: true,
-        postalCode: true, gstNumber: true, invoiceFooter: true,
+        postalCode: true, gstNumber: true, qstNumber: true, pstNumber: true, invoiceFooter: true,
       },
     }),
   ]);

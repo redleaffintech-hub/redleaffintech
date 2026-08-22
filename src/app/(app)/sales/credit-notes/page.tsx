@@ -12,6 +12,7 @@ export const metadata = { title: "Credit notes" };
 
 export default async function CreditNotesPage({ searchParams }: PageProps<"/sales/credit-notes">) {
   const { company } = await requireCapability(CAPABILITIES.INVOICES);
+  const currency = company.baseCurrency;
   const params = await searchParams;
   const type = typeof params.type === "string" ? params.type : "";
   const issuedBetween = dateRangeWhere(params.from, params.to);
@@ -41,7 +42,7 @@ export default async function CreditNotesPage({ searchParams }: PageProps<"/sale
       <PageHeader
         title="Credit notes"
         breadcrumb={[{ label: "Sales", href: "/sales/invoices" }, { label: "Credit notes" }]}
-        description={`${formatMoney(openCents)} of unapplied credit. A credit note reverses revenue and the tax that went with it, then sits against the party until it is applied.`}
+        description={`${formatMoney(openCents, { currency })} of unapplied credit. A credit note reverses revenue and the tax that went with it, then sits against the party until it is applied.`}
         actions={
           <LinkButton href="/sales/credit-notes/new" variant="primary">
             <Icon name="plus" className="h-3.5 w-3.5" />

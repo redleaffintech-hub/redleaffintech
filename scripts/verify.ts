@@ -11,6 +11,9 @@ import { apAging, arAging } from "../src/server/reports/aging";
 import { taxSummary } from "../src/server/reports/tax";
 import { utcDate, toUtcDay } from "../src/lib/dates";
 import { calculateTax } from "../src/server/tax/engine";
+import { formatMoney } from "../src/lib/money";
+import { DEFAULT_CURRENCY, normalizeCurrency } from "../src/lib/currency";
+import { taxRegistrationLines } from "../src/lib/tax-registration";
 
 const results: { name: string; pass: boolean; detail: string }[] = [];
 function check(name: string, pass: boolean, detail: string) {
@@ -114,6 +117,156 @@ async function main() {
   } catch (error) {
     check("Tax: a not-yet-effective code is rejected", String(error).includes("not effective until"), (error as Error).message);
   }
+
+  await companySettingsChecks();
+}
+
+/**
+ * Company profile: tax registration numbers and base currency.
+ *
+ * The database checks run inside a transaction that is deliberately rolled back,
+ * so they exercise real Postgres round-trips (nullability, defaults) without
+ * leaving anything behind in the file they ran against.
+ */
+class Rollback extends Error {}
+
+async function companySettingsChecks() {
+  // ── Rendering: only populated registrations appear, each labelled ──────────
+  const allThree = taxRegistrationLines({
+    gstNumber: "123456789 RT0001",
+    qstNumber: "1234567890 TQ0001",
+    pstNumber: "PST-1234",
+  });
+  check(
+    "Company: all three tax registrations render with labels",
+    allThree.length === 3 &&
+      allThree[0].label === "GST/HST" &&
+      allThree[1].label === "QST" &&
+      allThree[2].label === "PST",
+    allThree.map((r) => `${r.label} ${r.value}`).join(", "),
+  );
+
+  const gstOnly = taxRegistrationLines({ gstNumber: "123456789 RT0001", qstNumber: null, pstNumber: null });
+  check(
+    "Company: blank tax registrations are not rendered",
+    gstOnly.length === 1 && gstOnly[0].label === "GST/HST",
+    `${gstOnly.length} line(s) from a GST-only company`,
+  );
+
+  const blankish = taxRegistrationLines({ gstNumber: "   ", qstNumber: "", pstNumber: null });
+  check(
+    "Company: whitespace-only registrations are treated as blank",
+    blankish.length === 0,
+    `${blankish.length} line(s) from whitespace/empty values`,
+  );
+
+  // ── Currency validation ───────────────────────────────────────────────────
+  check(
+    "Company: valid ISO 4217 codes are accepted and upper-cased",
+    normalizeCurrency("usd") === "USD" && normalizeCurrency(" eur ") === "EUR" && normalizeCurrency("CAD") === "CAD",
+    `usd -> ${normalizeCurrency("usd")}, " eur " -> ${normalizeCurrency(" eur ")}`,
+  );
+
+  const rejected = ["XXX", "ZZZ", "CA", "CADD", "12A", "", null];
+  const stillAccepted = rejected.filter((code) => normalizeCurrency(code) !== null);
+  check(
+    "Company: invalid currency codes are rejected",
+    stillAccepted.length === 0,
+    stillAccepted.length ? `wrongly accepted ${stillAccepted.join(", ")}` : `rejected ${rejected.length} bad codes`,
+  );
+
+  // ── Formatting follows the selected currency ──────────────────────────────
+  const cad = formatMoney(123_456, { currency: "CAD" });
+  const eur = formatMoney(123_456, { currency: "EUR" });
+  const gbp = formatMoney(123_456, { currency: "GBP" });
+  check(
+    "Company: amounts format in the selected base currency",
+    cad.includes("1,234.56") && eur.startsWith("€") && gbp.startsWith("£") && eur !== cad,
+    `CAD ${cad} · EUR ${eur} · GBP ${gbp}`,
+  );
+  check(
+    "Company: formatting defaults to CAD when no currency is given",
+    formatMoney(123_456) === cad,
+    `${formatMoney(123_456)} vs ${cad}`,
+  );
+  check(
+    "Company: an unknown currency renders without throwing",
+    formatMoney(123_456, { currency: "XXX" }).includes("1,234.56"),
+    formatMoney(123_456, { currency: "XXX" }),
+  );
+
+  // ── Database round-trips (rolled back) ────────────────────────────────────
+  const sample = await db.company.findFirst({
+    orderBy: { name: "asc" },
+    select: { id: true, baseCurrency: true, qstNumber: true, pstNumber: true },
+  });
+  if (!sample) {
+    check("Company: QST/PST save and clear", false, "no company in the database to test against");
+    return;
+  }
+
+  try {
+    await db.$transaction(async (tx) => {
+      const saved = await tx.company.update({
+        where: { id: sample.id },
+        data: { qstNumber: "1234567890 TQ0001", pstNumber: "PST-9999" },
+        select: { qstNumber: true, pstNumber: true },
+      });
+      check(
+        "Company: QST and PST numbers save",
+        saved.qstNumber === "1234567890 TQ0001" && saved.pstNumber === "PST-9999",
+        `QST ${saved.qstNumber}, PST ${saved.pstNumber}`,
+      );
+
+      const cleared = await tx.company.update({
+        where: { id: sample.id },
+        data: { qstNumber: null, pstNumber: null },
+        select: { qstNumber: true, pstNumber: true },
+      });
+      check(
+        "Company: QST and PST numbers clear to null",
+        cleared.qstNumber === null && cleared.pstNumber === null,
+        `QST ${cleared.qstNumber}, PST ${cleared.pstNumber}`,
+      );
+
+      const switched = await tx.company.update({
+        where: { id: sample.id },
+        data: { baseCurrency: "USD" },
+        select: { baseCurrency: true },
+      });
+      check(
+        "Company: a valid non-CAD base currency saves",
+        switched.baseCurrency === "USD",
+        `baseCurrency ${switched.baseCurrency}`,
+      );
+
+      const fresh = await tx.company.create({
+        data: { name: "Currency default probe", province: "ON" },
+        select: { baseCurrency: true },
+      });
+      check(
+        "Company: a new company defaults to CAD",
+        fresh.baseCurrency === DEFAULT_CURRENCY,
+        `baseCurrency ${fresh.baseCurrency}`,
+      );
+
+      throw new Rollback();
+    });
+  } catch (error) {
+    if (!(error instanceof Rollback)) throw error;
+  }
+
+  const untouched = await db.company.findUniqueOrThrow({
+    where: { id: sample.id },
+    select: { baseCurrency: true, qstNumber: true, pstNumber: true },
+  });
+  check(
+    "Company: the settings probe left the file unchanged",
+    untouched.baseCurrency === sample.baseCurrency &&
+      untouched.qstNumber === sample.qstNumber &&
+      untouched.pstNumber === sample.pstNumber,
+    `baseCurrency ${untouched.baseCurrency} (was ${sample.baseCurrency}), QST ${untouched.qstNumber}, PST ${untouched.pstNumber}`,
+  );
 }
 
 main()

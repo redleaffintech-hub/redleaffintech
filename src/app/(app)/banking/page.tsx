@@ -15,6 +15,7 @@ export const metadata = { title: "Banking" };
 
 export default async function BankingPage() {
   const { company } = await requireCapability(CAPABILITIES.BANKING);
+  const currency = company.baseCurrency;
   const { accounts, taxCodes, bankAccounts } = await bankingOptions();
 
   const [queue, recent, transfers, defaults] = await Promise.all([
@@ -51,7 +52,7 @@ export default async function BankingPage() {
         breadcrumb={[{ label: "Banking" }, { label: "Review queue" }]}
         description={
           queue.length > 0
-            ? `${queue.length} transactions waiting — ${formatMoney(inflowCents)} in, ${formatMoney(Math.abs(outflowCents))} out. Nothing here has touched the ledger yet.`
+            ? `${queue.length} transactions waiting — ${formatMoney(inflowCents, { currency })} in, ${formatMoney(Math.abs(outflowCents), { currency })} out. Nothing here has touched the ledger yet.`
             : "Everything imported has been categorised, matched or excluded."
         }
         actions={

@@ -4,7 +4,8 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import clsx from "clsx";
 import { Button, Card, CardHeader, Field, inputClass } from "@/components/ui";
-import { formatMoney, toCents } from "@/lib/money";
+import { toCents } from "@/lib/money";
+import { useMoney } from "@/components/currency-context";
 import { calculateTax, type TaxCodeSpec } from "@/server/tax/engine";
 import { createExpenseAction } from "../actions";
 
@@ -23,6 +24,7 @@ export function ExpenseForm({
   taxCodes: TaxCodeSpec[];
   vendors: { id: string; name: string; taxCodeId: string | null }[];
 }) {
+  const money = useMoney();
   const router = useRouter();
   const [amount, setAmount] = useState("");
   const [taxCodeId, setTaxCodeId] = useState(taxCodes.find((c) => c.components.length > 0)?.id ?? taxCodes[0]?.id ?? "");
@@ -187,7 +189,7 @@ export function ExpenseForm({
               ))}
               <div className="flex items-center justify-between border-t border-paper-300 pt-2 font-semibold">
                 <dt className="text-ink-900">Receipt total</dt>
-                <dd className="tnum text-ink-950">{formatMoney(split.totalCents)}</dd>
+                <dd className="tnum text-ink-950">{money.format(split.totalCents)}</dd>
               </div>
             </dl>
             <p className="mt-3 rounded-md bg-paper-100 px-3 py-2 text-[0.75rem] leading-5 text-muted-ink">
@@ -205,10 +207,11 @@ export function ExpenseForm({
 }
 
 function Row({ label, value }: { label: string; value: number }) {
+  const money = useMoney();
   return (
     <div className="flex items-center justify-between">
       <dt className="text-muted-ink">{label}</dt>
-      <dd className="tnum text-ink-900">{formatMoney(value)}</dd>
+      <dd className="tnum text-ink-900">{money.format(value)}</dd>
     </div>
   );
 }

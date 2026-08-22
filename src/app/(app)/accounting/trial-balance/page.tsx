@@ -13,6 +13,7 @@ export const metadata = { title: "Trial balance" };
 
 export default async function TrialBalancePage({ searchParams }: PageProps<"/accounting/trial-balance">) {
   const { company } = await requireCapability(CAPABILITIES.REPORTS);
+  const currency = company.baseCurrency;
   const params = await searchParams;
 
   const defaults = fiscalYearRange(fiscalYearOf(today(), company.fiscalYearStartMonth), company.fiscalYearStartMonth);
@@ -43,7 +44,7 @@ export default async function TrialBalancePage({ searchParams }: PageProps<"/acc
         <ReconciliationBanner
           reconciled={report.balanced}
           message={report.balanced ? "Debits equal credits." : "Trial balance does not balance."}
-          detail={`Period movement ${formatMoney(report.totalDebitCents)} Dr / ${formatMoney(report.totalCreditCents)} Cr. Closing ${formatMoney(report.closingDebitCents)} Dr / ${formatMoney(report.closingCreditCents)} Cr.`}
+          detail={`Period movement ${formatMoney(report.totalDebitCents, { currency })} Dr / ${formatMoney(report.totalCreditCents, { currency })} Cr. Closing ${formatMoney(report.closingDebitCents, { currency })} Dr / ${formatMoney(report.closingCreditCents, { currency })} Cr.`}
         />
 
         <div className="thin-scroll overflow-x-auto">

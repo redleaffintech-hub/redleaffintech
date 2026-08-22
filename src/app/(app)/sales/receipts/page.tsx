@@ -10,6 +10,7 @@ export default async function ReceiptsPage({ searchParams }: PageProps<"/sales/r
     companyId: company.id,
     companyName: company.name,
     fiscalYearStartMonth: company.fiscalYearStartMonth,
+    currency: company.baseCurrency,
     type: "RECEIPT",
     searchParams: await searchParams,
   });

@@ -20,6 +20,7 @@ const SOURCE_HREF: Record<string, string> = {
 
 export default async function JournalDetailPage({ params }: PageProps<"/accounting/journals/[id]">) {
   const { company, role } = await requireCapability(CAPABILITIES.REPORTS);
+  const currency = company.baseCurrency;
   const { id } = await params;
 
   const entry = await db.journalEntry.findFirst({
@@ -148,8 +149,8 @@ export default async function JournalDetailPage({ params }: PageProps<"/accounti
           >
             <span className="h-1.5 w-1.5 rounded-full bg-current" />
             {entry.totalDebitCents === entry.totalCreditCents
-              ? `Balanced — debits and credits both total ${formatMoney(entry.totalDebitCents)}.`
-              : `Out of balance by ${formatMoney(Math.abs(entry.totalDebitCents - entry.totalCreditCents))}.`}
+              ? `Balanced — debits and credits both total ${formatMoney(entry.totalDebitCents, { currency })}.`
+              : `Out of balance by ${formatMoney(Math.abs(entry.totalDebitCents - entry.totalCreditCents), { currency })}.`}
           </div>
         </Card>
 

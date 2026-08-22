@@ -15,6 +15,7 @@ export const metadata = { title: "Invoices" };
 
 export default async function InvoicesPage({ searchParams }: PageProps<"/sales/invoices">) {
   const { company } = await requireCapability(CAPABILITIES.INVOICES);
+  const currency = company.baseCurrency;
   const params = await searchParams;
   const status = typeof params.status === "string" ? params.status : "";
   const query = typeof params.q === "string" ? params.q : "";
@@ -73,7 +74,7 @@ export default async function InvoicesPage({ searchParams }: PageProps<"/sales/i
         title="Invoices"
         description={
           outstandingCents > 0
-            ? `${formatMoney(outstandingCents)} outstanding across ${countOf(["SENT", "PARTIALLY_PAID", "OVERDUE"])} open invoices.`
+            ? `${formatMoney(outstandingCents, { currency })} outstanding across ${countOf(["SENT", "PARTIALLY_PAID", "OVERDUE"])} open invoices.`
             : "Every invoice is settled."
         }
         actions={

@@ -49,6 +49,8 @@ export interface CompanyContext {
     baseCurrency: string;
     fiscalYearStartMonth: number;
     gstNumber: string | null;
+    qstNumber: string | null;
+    pstNumber: string | null;
     businessNumber: string | null;
     isReadOnly: boolean;
     defaultTaxInclusive: boolean;
@@ -82,7 +84,8 @@ export const requireCompany = cache(async (companyId?: string): Promise<CompanyC
     where: { id: membership.companyId },
     select: {
       id: true, name: true, legalName: true, province: true, baseCurrency: true,
-      fiscalYearStartMonth: true, gstNumber: true, businessNumber: true, isReadOnly: true,
+      fiscalYearStartMonth: true, gstNumber: true, qstNumber: true, pstNumber: true,
+      businessNumber: true, isReadOnly: true,
       defaultTaxInclusive: true, defaultPaymentTermsDays: true,
     },
   });

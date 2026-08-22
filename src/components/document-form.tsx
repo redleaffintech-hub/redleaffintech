@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import clsx from "clsx";
 import { computeDocument, type RawLine } from "@/server/documents/lines";
 import type { TaxCodeSpec } from "@/server/tax/engine";
-import { formatMoney, toCents } from "@/lib/money";
+import { toCents } from "@/lib/money";
+import { useMoney } from "@/components/currency-context";
 import { PROVINCES } from "@/lib/enums";
 import {
   codesForPlaceOfSupply,
@@ -225,6 +226,7 @@ export function DocumentForm({
   provincesWithSalesTax?: readonly string[];
   canManageTaxCodes?: boolean;
 }) {
+  const money = useMoney();
   const router = useRouter();
   const config = KINDS[kind];
 
@@ -786,11 +788,11 @@ export function DocumentForm({
                       </Cell>
                       <Cell align="right">
                         <span className="tnum block pt-1.5 font-medium text-ink-900">
-                          {computed ? formatMoney(computed.totalCents) : "—"}
+                          {computed ? money.format(computed.totalCents) : "—"}
                         </span>
                         {computed && computed.taxCents > 0 && (
                           <span className="tnum block text-[0.6875rem] text-muted-ink">
-                            incl. {formatMoney(computed.taxCents)} tax
+                            incl. {money.format(computed.taxCents)} tax
                           </span>
                         )}
                       </Cell>
@@ -856,7 +858,7 @@ export function DocumentForm({
             ))}
             <div className="flex items-center justify-between border-t border-paper-300 pt-2 text-[0.9375rem] font-semibold">
               <dt className="text-ink-900">Total</dt>
-              <dd className="tnum text-ink-950">{formatMoney(preview.totalCents)}</dd>
+              <dd className="tnum text-ink-950">{money.format(preview.totalCents)}</dd>
             </div>
           </dl>
 
@@ -1096,21 +1098,23 @@ function groupNet(preview: ReturnType<typeof computeDocument>) {
 }
 
 function SummaryRow({ label, value }: { label: string; value: number }) {
+  const money = useMoney();
   return (
     <div className="flex items-center justify-between">
       <dt className="text-ink-700">{label}</dt>
-      <dd className="tnum text-ink-900">{formatMoney(value)}</dd>
+      <dd className="tnum text-ink-900">{money.format(value)}</dd>
     </div>
   );
 }
 
 function JournalRow({ side, label, value }: { side: "Dr" | "Cr"; label: string; value: number }) {
+  const money = useMoney();
   if (value === 0) return null;
   return (
     <li className="flex items-center gap-2">
       <span className={clsx("w-5 font-semibold", side === "Dr" ? "text-info" : "text-maple-600")}>{side}</span>
       <span className="min-w-0 flex-1 truncate">{label}</span>
-      <span className="tnum">{formatMoney(value)}</span>
+      <span className="tnum">{money.format(value)}</span>
     </li>
   );
 }

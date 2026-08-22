@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import clsx from "clsx";
 import { Button, Card, CardHeader, Field, Money, inputClass } from "@/components/ui";
-import { formatMoney } from "@/lib/money";
+import { useMoney } from "@/components/currency-context";
 import { completeReconciliationAction, startReconciliationAction, toggleClearedAction } from "../actions";
 
 export function StartReconciliationForm({
@@ -22,6 +22,7 @@ export function StartReconciliationForm({
   defaultOpening: string;
   suggestedClosing: string;
 }) {
+  const money = useMoney();
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
 
@@ -55,7 +56,7 @@ export function StartReconciliationForm({
         <Field label="Opening balance" required hint="Carried forward from the last reconciliation.">
           <input name="openingBalance" defaultValue={defaultOpening} inputMode="decimal" className={clsx(inputClass, "tnum")} required />
         </Field>
-        <Field label="Closing balance" required hint={`Your books show ${formatMoney(Math.round(Number(suggestedClosing) * 100))} at that date.`}>
+        <Field label="Closing balance" required hint={`Your books show ${money.format(Math.round(Number(suggestedClosing) * 100))} at that date.`}>
           <input name="closingBalance" defaultValue={suggestedClosing} inputMode="decimal" className={clsx(inputClass, "tnum")} required />
         </Field>
 
@@ -88,6 +89,7 @@ export function ReconcileWorkspace({
   };
   transactions: { id: string; date: string; description: string; amountCents: number; cleared: boolean; posted: boolean }[];
 }) {
+  const money = useMoney();
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -167,7 +169,7 @@ export function ReconcileWorkspace({
             )}
           >
             <p className={clsx("tnum text-[1.75rem] font-semibold tracking-[-0.02em]", balanced ? "text-positive" : "text-caution")}>
-              {formatMoney(state.differenceCents)}
+              {money.format(state.differenceCents)}
             </p>
             <p className={clsx("mt-0.5 text-[0.75rem]", balanced ? "text-positive" : "text-caution")}>
               {balanced ? "Reconciled — ready to finish" : "Keep clearing lines until this reaches zero"}
@@ -225,6 +227,7 @@ export function ReconcileWorkspace({
 }
 
 function Row({ label, value }: { label: string; value: number }) {
+  const money = useMoney();
   return (
     <div className="flex items-center justify-between">
       <dt className="text-muted-ink">{label}</dt>

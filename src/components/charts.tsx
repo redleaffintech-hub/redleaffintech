@@ -2,7 +2,7 @@
 
 import { useId, useState } from "react";
 import clsx from "clsx";
-import { formatCompact, formatMoney } from "@/lib/money";
+import { useMoney } from "@/components/currency-context";
 
 /**
  * Inline-SVG charts.
@@ -27,7 +27,7 @@ export function TrendChart({
   height = 200,
   seriesLabel = "Cash on hand",
   color = "var(--color-series-1)",
-  formatValue = (v: number) => formatMoney(v),
+  formatValue,
 }: {
   points: TrendPoint[];
   height?: number;
@@ -35,6 +35,8 @@ export function TrendChart({
   color?: string;
   formatValue?: (value: number) => string;
 }) {
+  const money = useMoney();
+  const format = formatValue ?? ((value: number) => money.format(value));
   const gradientId = useId();
   const [hover, setHover] = useState<number | null>(null);
 
@@ -76,7 +78,7 @@ export function TrendChart({
           <g key={tick}>
             <line x1={pad.left} x2={width - pad.right} y1={y(tick)} y2={y(tick)} stroke={GRID} strokeWidth="1" />
             <text x={pad.left - 8} y={y(tick) + 3.5} textAnchor="end" fontSize="10" fill={AXIS_INK} className="tnum">
-              {formatCompact(tick)}
+              {money.compact(tick)}
             </text>
           </g>
         ))}
@@ -123,7 +125,7 @@ export function TrendChart({
         <Tooltip
           leftPercent={(x(hover) / width) * 100}
           topPercent={(y(points[hover].value) / height) * 100}
-          rows={[{ color, label: seriesLabel, value: formatValue(points[hover].value) }]}
+          rows={[{ color, label: seriesLabel, value: format(points[hover].value) }]}
           title={points[hover].label}
         />
       )}
@@ -150,6 +152,7 @@ export function GroupedBarChart({
   labelA?: string;
   labelB?: string;
 }) {
+  const money = useMoney();
   const [hover, setHover] = useState<number | null>(null);
   if (points.length === 0) return <ChartEmpty height={height} message="No activity in this period." />;
 
@@ -178,7 +181,7 @@ export function GroupedBarChart({
             <g key={tick}>
               <line x1={pad.left} x2={width - pad.right} y1={y(tick)} y2={y(tick)} stroke={GRID} strokeWidth="1" />
               <text x={pad.left - 8} y={y(tick) + 3.5} textAnchor="end" fontSize="10" fill={AXIS_INK} className="tnum">
-                {formatCompact(tick)}
+                {money.compact(tick)}
               </text>
             </g>
           ))}
@@ -205,9 +208,9 @@ export function GroupedBarChart({
             topPercent={(y(Math.max(points[hover].a, points[hover].b)) / height) * 100}
             title={points[hover].label}
             rows={[
-              { color: "var(--color-series-1)", label: labelA, value: formatMoney(points[hover].a) },
-              { color: "var(--color-series-2)", label: labelB, value: formatMoney(points[hover].b) },
-              { color: null, label: "Net", value: formatMoney(points[hover].a - points[hover].b) },
+              { color: "var(--color-series-1)", label: labelA, value: money.format(points[hover].a) },
+              { color: "var(--color-series-2)", label: labelB, value: money.format(points[hover].b) },
+              { color: null, label: "Net", value: money.format(points[hover].a - points[hover].b) },
             ]}
           />
         )}
@@ -225,6 +228,7 @@ export function AgingBar({
   buckets: { label: string; value: number }[];
   total: number;
 }) {
+  const money = useMoney();
   const [hover, setHover] = useState<number | null>(null);
   const ramp = ["var(--color-age-0)", "var(--color-age-1)", "var(--color-age-2)", "var(--color-age-3)", "var(--color-age-4)"];
   const positive = Math.max(total, 1);
@@ -232,7 +236,7 @@ export function AgingBar({
   return (
     <div>
       <div className="flex h-3 w-full gap-0.5 overflow-hidden rounded-full bg-paper-200" role="img"
-        aria-label={buckets.map((b) => `${b.label} ${formatMoney(b.value)}`).join(", ")}>
+        aria-label={buckets.map((b) => `${b.label} ${money.format(b.value)}`).join(", ")}>
         {buckets.map((bucket, index) => {
           const share = Math.max(bucket.value, 0) / positive;
           if (share <= 0) return null;
@@ -265,7 +269,7 @@ export function AgingBar({
           >
             <span className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: ramp[Math.min(index, ramp.length - 1)] }} />
             <span className="flex-1 text-ink-700">{bucket.label}</span>
-            <span className="tnum font-medium text-ink-900">{formatMoney(bucket.value)}</span>
+            <span className="tnum font-medium text-ink-900">{money.format(bucket.value)}</span>
             <span className="tnum w-11 text-right text-[0.75rem] text-muted-ink">
               {total > 0 ? `${Math.round((bucket.value / positive) * 100)}%` : "—"}
             </span>

@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Button, Field, inputClass } from "@/components/ui";
 import { Dialog } from "@/app/(app)/sales/invoices/[id]/invoice-actions";
-import { formatMoney } from "@/lib/money";
+import { useMoney } from "@/components/currency-context";
 import { setTaxPeriodStatusAction } from "./actions";
 
 /**
@@ -24,6 +24,7 @@ export function FilePeriodButton({
   status: string;
   netCents: number;
 }) {
+  const money = useMoney();
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [dialog, setDialog] = useState<"file" | "lock" | null>(null);
@@ -85,7 +86,7 @@ export function FilePeriodButton({
             <p className="text-[0.8125rem] leading-6 text-ink-700">
               This records that the return was submitted and stores the{" "}
               {payable ? "net tax payable" : "net refund"} of{" "}
-              <span className="font-semibold text-ink-900">{formatMoney(Math.abs(netCents))}</span> against the period.
+              <span className="font-semibold text-ink-900">{money.format(Math.abs(netCents))}</span> against the period.
               It does not post the remittance — enter the payment to the CRA as an expense or bank transaction when the
               money actually moves.
             </p>

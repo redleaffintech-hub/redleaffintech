@@ -9,6 +9,8 @@
  * Quantities are `milli` integers: qty * 1_000. 7.5h -> 7_500.
  */
 
+import { DEFAULT_CURRENCY } from "./currency";
+
 export const MICRO = 1_000_000n;
 export const MILLI = 1_000n;
 
@@ -60,35 +62,80 @@ export function fromCents(cents: number): number {
   return cents / 100;
 }
 
-const CAD = new Intl.NumberFormat("en-CA", {
-  style: "currency",
-  currency: "CAD",
-  currencyDisplay: "narrowSymbol",
-});
+/**
+ * Formatters are cached per currency. Constructing an Intl.NumberFormat is
+ * expensive relative to formatting with one, and a ledger page formats hundreds
+ * of amounts.
+ *
+ * `DEFAULT_CURRENCY` is the fallback for the many call sites that render money
+ * with no company in scope. Where company context IS available, pass
+ * `currency: company.baseCurrency` — client components get it from
+ * `useMoney()` (src/components/currency-context.tsx).
+ */
+const currencyFormatters = new Map<string, Intl.NumberFormat>();
+const symbols = new Map<string, string>();
+
+function currencyFormatter(currency: string): Intl.NumberFormat {
+  const cached = currencyFormatters.get(currency);
+  if (cached) return cached;
+  let fmt: Intl.NumberFormat;
+  try {
+    fmt = new Intl.NumberFormat("en-CA", { style: "currency", currency, currencyDisplay: "narrowSymbol" });
+  } catch {
+    // An unknown code must not throw mid-render. Fall back to the default.
+    fmt = currencyFormatter(DEFAULT_CURRENCY);
+  }
+  currencyFormatters.set(currency, fmt);
+  return fmt;
+}
+
+/** The narrow symbol for a currency: "$" for CAD, "€" for EUR, "CHF" for CHF. */
+export function currencySymbol(currency: string = DEFAULT_CURRENCY): string {
+  const cached = symbols.get(currency);
+  if (cached) return cached;
+  const part = currencyFormatter(currency)
+    .formatToParts(0)
+    .find((p) => p.type === "currency");
+  const symbol = part?.value ?? currency;
+  symbols.set(currency, symbol);
+  return symbol;
+}
+
 const PLAIN = new Intl.NumberFormat("en-CA", {
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
 });
 
+export interface MoneyFormatOptions {
+  showCurrency?: boolean;
+  accountingNegative?: boolean;
+  blankZero?: boolean;
+  /** ISO 4217 code. Defaults to CAD — pass the company's baseCurrency. */
+  currency?: string;
+}
+
 /** $1,234.56 — negatives in parentheses, the accounting convention. */
-export function formatMoney(
-  cents: number,
-  opts: { showCurrency?: boolean; accountingNegative?: boolean; blankZero?: boolean } = {},
-): string {
-  const { showCurrency = true, accountingNegative = false, blankZero = false } = opts;
+export function formatMoney(cents: number, opts: MoneyFormatOptions = {}): string {
+  const {
+    showCurrency = true,
+    accountingNegative = false,
+    blankZero = false,
+    currency = DEFAULT_CURRENCY,
+  } = opts;
   if (blankZero && cents === 0) return "—";
-  const fmt = showCurrency ? CAD : PLAIN;
+  const fmt = showCurrency ? currencyFormatter(currency) : PLAIN;
   if (accountingNegative && cents < 0) return `(${fmt.format(Math.abs(cents) / 100)})`;
   return fmt.format(cents / 100);
 }
 
 /** Compact form for KPI tiles: $1.2M, $84.3K, $912 */
-export function formatCompact(cents: number): string {
+export function formatCompact(cents: number, opts: { currency?: string } = {}): string {
+  const symbol = currencySymbol(opts.currency ?? DEFAULT_CURRENCY);
   const abs = Math.abs(cents);
   const sign = cents < 0 ? "-" : "";
-  if (abs >= 100_000_000) return `${sign}$${(abs / 100_000_000).toFixed(1)}M`;
-  if (abs >= 1_000_000) return `${sign}$${(abs / 100_000).toFixed(1)}K`;
-  return `${sign}$${Math.round(abs / 100).toLocaleString("en-CA")}`;
+  if (abs >= 100_000_000) return `${sign}${symbol}${(abs / 100_000_000).toFixed(1)}M`;
+  if (abs >= 1_000_000) return `${sign}${symbol}${(abs / 100_000).toFixed(1)}K`;
+  return `${sign}${symbol}${Math.round(abs / 100).toLocaleString("en-CA")}`;
 }
 
 export function formatRate(rateMicro: number): string {

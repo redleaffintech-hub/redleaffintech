@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { addDays } from "@/lib/dates";
+import { normalizeCurrency } from "@/lib/currency";
 import { COMPANY_ROLES, PROVINCES } from "@/lib/enums";
 import { CAPABILITIES } from "@/lib/permissions";
 import { PLAN_SEATS } from "@/lib/plans";
@@ -17,6 +18,11 @@ const profileSchema = z.object({
   legalName: z.string().trim().max(120).optional(),
   businessNumber: z.string().trim().max(30).optional(),
   gstNumber: z.string().trim().max(30).optional(),
+  qstNumber: z.string().trim().max(30).optional(),
+  pstNumber: z.string().trim().max(30).optional(),
+  baseCurrency: z.string().trim().min(3).max(3),
+  /** Set by the form once the user has acknowledged a currency relabel. */
+  confirmCurrencyChange: z.string().optional(),
   province: z.string().trim().length(2),
   addressLine1: z.string().trim().max(120).optional(),
   city: z.string().trim().max(60).optional(),
@@ -45,6 +51,31 @@ export async function saveCompanyProfileAction(formData: FormData) {
     return { error: "Enter a valid email address, or leave it blank." };
   }
 
+  // Base currency is a LABEL, not a conversion. Amounts are stored as integer
+  // cents with no currency attached, so changing this restates what every
+  // historical figure claims to be denominated in without touching a single
+  // number. That is legitimate for a file set up under the wrong currency and
+  // corrected before use; it is not legitimate once real transactions exist.
+  // Hence: validate the code, then require an explicit acknowledgement if
+  // anything has been posted.
+  const baseCurrency = normalizeCurrency(input.baseCurrency);
+  if (!baseCurrency) {
+    return { error: `${input.baseCurrency.toUpperCase()} is not a valid ISO 4217 currency code.` };
+  }
+  const currencyChanged = baseCurrency !== company.baseCurrency;
+  if (currencyChanged) {
+    const posted = await db.journalEntry.count({ where: { companyId: company.id } });
+    if (posted > 0 && input.confirmCurrencyChange !== "on") {
+      return {
+        error:
+          `Changing the base currency from ${company.baseCurrency} to ${baseCurrency} relabels ` +
+          `${posted.toLocaleString("en-CA")} posted entries without converting any amounts. ` +
+          `Tick the confirmation box to proceed.`,
+        needsCurrencyConfirmation: true,
+      };
+    }
+  }
+
   // The fiscal year start defines every period boundary. Once anything has been
   // posted, moving it would silently re-file historical entries into the wrong
   // year, so it becomes read-only rather than being quietly re-applied.
@@ -64,6 +95,9 @@ export async function saveCompanyProfileAction(formData: FormData) {
       legalName: input.legalName || null,
       businessNumber: input.businessNumber || null,
       gstNumber: input.gstNumber || null,
+      qstNumber: input.qstNumber || null,
+      pstNumber: input.pstNumber || null,
+      baseCurrency,
       province: input.province.toUpperCase(),
       addressLine1: input.addressLine1 || null,
       city: input.city || null,
@@ -84,7 +118,12 @@ export async function saveCompanyProfileAction(formData: FormData) {
     action: "UPDATE",
     entityType: "Company",
     entityId: company.id,
-    summary: `Company profile updated`,
+    // A currency relabel changes what every historical figure claims to be
+    // denominated in, so it is called out rather than hidden inside a generic
+    // "profile updated".
+    summary: currencyChanged
+      ? `Company profile updated — base currency changed from ${company.baseCurrency} to ${baseCurrency} (no amounts converted)`
+      : `Company profile updated`,
   });
 
   revalidatePath("/company");

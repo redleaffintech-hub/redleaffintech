@@ -5,6 +5,7 @@ import { CAPABILITIES, can } from "@/lib/permissions";
 import { taxPeriodReturn } from "@/server/reports/tax";
 import { addDays, addMonths, endOfMonth, formatDate, today } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
+import { taxRegistrationLines } from "@/lib/tax-registration";
 import { Badge, Callout, Card, CardHeader, LinkButton, Money, PageHeader, StatusBadge, Table, Td, Th, Tr } from "@/components/ui";
 import { FilePeriodButton } from "./file-period-button";
 
@@ -12,6 +13,8 @@ export const metadata = { title: "Tax Centre" };
 
 export default async function TaxCentrePage({ searchParams }: PageProps<"/tax">) {
   const { company, role } = await requireCapability(CAPABILITIES.TAX_FILING);
+  const currency = company.baseCurrency;
+  const registrations = taxRegistrationLines(company);
   const params = await searchParams;
 
   const periods = await db.taxPeriod.findMany({
@@ -39,7 +42,7 @@ export default async function TaxCentrePage({ searchParams }: PageProps<"/tax">)
     <>
       <PageHeader
         title="Tax Centre"
-        description={`GST/HST and provincial sales tax for ${company.name} (${company.province})${company.gstNumber ? ` · ${company.gstNumber}` : ""}.`}
+        description={`GST/HST and provincial sales tax for ${company.name} (${company.province})${registrations.map((r) => ` · ${r.label} ${r.value}`).join("")}.`}
         actions={
           <>
             <LinkButton href="/reports/tax-detail">Transaction detail</LinkButton>
@@ -64,24 +67,28 @@ export default async function TaxCentrePage({ searchParams }: PageProps<"/tax">)
 
               <dl className="mt-5 divide-y divide-paper-200">
                 <ReturnLine
+                  currency={currency}
                   line="101"
                   label="Sales and other revenue"
                   hint="Total supplies made in the period, including zero-rated and exempt."
                   value={result.line101SuppliesCents}
                 />
                 <ReturnLine
+                  currency={currency}
                   line="105"
                   label="GST/HST and adjustments collected"
                   hint="Tax charged on invoices, bank deposits and other taxable sales."
                   value={result.line105CollectedCents}
                 />
                 <ReturnLine
+                  currency={currency}
                   line="108"
                   label="Input tax credits (ITCs)"
                   hint="Recoverable tax paid on bills and expenses. Non-recoverable PST is excluded."
                   value={result.line108ItcCents}
                 />
                 <ReturnLine
+                  currency={currency}
                   line="109"
                   label={result.line109NetCents >= 0 ? "Net tax payable" : "Net tax refundable"}
                   hint="Line 105 less line 108."
@@ -138,8 +145,8 @@ export default async function TaxCentrePage({ searchParams }: PageProps<"/tax">)
                 </tbody>
               </Table>
               <p className="mt-3 text-[0.75rem] leading-5 text-muted-ink">
-                Tax collected per the subledger {formatMoney(result.summary.reconciliation.subledgerCollected)} vs the
-                general ledger {formatMoney(result.summary.reconciliation.glCollected)}. A difference means tax was
+                Tax collected per the subledger {formatMoney(result.summary.reconciliation.subledgerCollected, { currency })} vs the
+                general ledger {formatMoney(result.summary.reconciliation.glCollected, { currency })}. A difference means tax was
                 posted by manual journal without a matching tax entry — find it before you file.
               </p>
             </Card>
@@ -234,12 +241,14 @@ function ReturnLine({
   hint,
   value,
   emphasis,
+  currency,
 }: {
   line: string;
   label: string;
   hint: string;
   value: number;
   emphasis?: boolean;
+  currency: string;
 }) {
   return (
     <div className={`flex items-start gap-4 py-3 ${emphasis ? "bg-paper-100 -mx-2 px-2 rounded-md" : ""}`}>
@@ -253,7 +262,7 @@ function ReturnLine({
         <span className="block text-[0.75rem] leading-5 text-muted-ink">{hint}</span>
       </span>
       <span className={`tnum shrink-0 ${emphasis ? "text-[1.125rem] font-semibold text-ink-950" : "text-[0.9375rem] text-ink-900"}`}>
-        {formatMoney(value)}
+        {formatMoney(value, { currency })}
       </span>
     </div>
   );

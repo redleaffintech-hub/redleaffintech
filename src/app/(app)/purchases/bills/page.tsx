@@ -13,6 +13,7 @@ export const metadata = { title: "Bills" };
 
 export default async function BillsPage({ searchParams }: PageProps<"/purchases/bills">) {
   const { company } = await requireCapability(CAPABILITIES.BILLS);
+  const currency = company.baseCurrency;
   const params = await searchParams;
   const status = typeof params.status === "string" ? params.status : "";
   const query = typeof params.q === "string" ? params.q : "";
@@ -52,7 +53,7 @@ export default async function BillsPage({ searchParams }: PageProps<"/purchases/
         title="Bills"
         description={
           owingCents > 0
-            ? `${formatMoney(owingCents)} owing across ${countOf(["OPEN", "PARTIALLY_PAID", "OVERDUE"])} open bills.`
+            ? `${formatMoney(owingCents, { currency })} owing across ${countOf(["OPEN", "PARTIALLY_PAID", "OVERDUE"])} open bills.`
             : "Nothing outstanding to suppliers."
         }
         actions={

@@ -5,6 +5,7 @@ import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES, can } from "@/lib/permissions";
 import { formatDate, formatDateLong, formatDateTime, daysBetween, today } from "@/lib/dates";
 import { formatMoney, formatQty, formatRate } from "@/lib/money";
+import { taxRegistrationLines } from "@/lib/tax-registration";
 import {
   Badge, Card, CardHeader, Money, PageHeader, StatusBadge, Table, Td, Th, Tr,
 } from "@/components/ui";
@@ -12,6 +13,7 @@ import { InvoiceActions } from "./invoice-actions";
 
 export default async function InvoiceDetailPage({ params }: PageProps<"/sales/invoices/[id]">) {
   const { company, role } = await requireCapability(CAPABILITIES.INVOICES);
+  const currency = company.baseCurrency;
   const { id } = await params;
 
   const invoice = await db.invoice.findFirst({
@@ -52,7 +54,7 @@ export default async function InvoiceDetailPage({ params }: PageProps<"/sales/in
     }),
     db.company.findUniqueOrThrow({
       where: { id: company.id },
-      select: { name: true, legalName: true, addressLine1: true, city: true, province: true, postalCode: true, gstNumber: true, email: true, phone: true, invoiceFooter: true },
+      select: { name: true, legalName: true, addressLine1: true, city: true, province: true, postalCode: true, gstNumber: true, qstNumber: true, pstNumber: true, email: true, phone: true, invoiceFooter: true },
     }),
   ]);
 
@@ -126,12 +128,12 @@ export default async function InvoiceDetailPage({ params }: PageProps<"/sales/in
                 {companyProfile.addressLine1}
                 {companyProfile.addressLine1 && <br />}
                 {[companyProfile.city, companyProfile.province, companyProfile.postalCode].filter(Boolean).join(", ")}
-                {companyProfile.gstNumber && (
-                  <>
+                {taxRegistrationLines(companyProfile).map((registration) => (
+                  <span key={registration.label}>
                     <br />
-                    GST/HST: {companyProfile.gstNumber}
-                  </>
-                )}
+                    {registration.label}: {registration.value}
+                  </span>
+                ))}
               </p>
             </div>
             <div className="text-right">
@@ -235,20 +237,20 @@ export default async function InvoiceDetailPage({ params }: PageProps<"/sales/in
 
           <div className="mt-4 flex justify-end">
             <dl className="w-full max-w-xs space-y-1.5 text-[0.8125rem]">
-              <Row label="Subtotal" value={invoice.subtotalCents} />
-              {invoice.discountCents > 0 && <Row label="Discount" value={-invoice.discountCents} />}
+              <Row label="Subtotal" value={invoice.subtotalCents} currency={currency} />
+              {invoice.discountCents > 0 && <Row label="Discount" value={-invoice.discountCents} currency={currency} />}
               {groupTax(taxEntries).map(([label, cents]) => (
-                <Row key={label} label={label} value={cents} />
+                <Row key={label} label={label} value={cents} currency={currency} />
               ))}
               <div className="flex items-center justify-between border-t border-paper-300 pt-2 text-[0.9375rem] font-semibold">
                 <dt className="text-ink-900">Total</dt>
-                <dd className="tnum text-ink-950">{formatMoney(invoice.totalCents)}</dd>
+                <dd className="tnum text-ink-950">{formatMoney(invoice.totalCents, { currency })}</dd>
               </div>
-              {invoice.amountPaidCents > 0 && <Row label="Paid" value={-invoice.amountPaidCents} />}
-              {invoice.writtenOffCents > 0 && <Row label="Written off" value={-invoice.writtenOffCents} />}
+              {invoice.amountPaidCents > 0 && <Row label="Paid" value={-invoice.amountPaidCents} currency={currency} />}
+              {invoice.writtenOffCents > 0 && <Row label="Written off" value={-invoice.writtenOffCents} currency={currency} />}
               <div className="flex items-center justify-between rounded-md bg-paper-100 px-2 py-1.5 text-[0.9375rem] font-semibold">
                 <dt className="text-ink-900">Balance due</dt>
-                <dd className="tnum text-ink-950">{formatMoney(invoice.balanceCents)}</dd>
+                <dd className="tnum text-ink-950">{formatMoney(invoice.balanceCents, { currency })}</dd>
               </div>
             </dl>
           </div>
@@ -296,7 +298,7 @@ export default async function InvoiceDetailPage({ params }: PageProps<"/sales/in
                   ))}
                 </ul>
                 <p className="mt-3 rounded bg-positive-soft px-2 py-1 text-[0.75rem] text-positive">
-                  Debits {formatMoney(invoice.journalEntry.totalDebitCents)} = credits {formatMoney(invoice.journalEntry.totalCreditCents)}
+                  Debits {formatMoney(invoice.journalEntry.totalDebitCents, { currency })} = credits {formatMoney(invoice.journalEntry.totalCreditCents, { currency })}
                 </p>
               </>
             ) : (
@@ -403,11 +405,11 @@ function groupTax(entries: { kind: string; rateMicro: number; taxCents: number }
   return [...map.entries()];
 }
 
-function Row({ label, value }: { label: string; value: number }) {
+function Row({ label, value, currency }: { label: string; value: number; currency: string }) {
   return (
     <div className="flex items-center justify-between">
       <dt className="text-muted-ink">{label}</dt>
-      <dd className="tnum text-ink-900">{formatMoney(value)}</dd>
+      <dd className="tnum text-ink-900">{formatMoney(value, { currency })}</dd>
     </div>
   );
 }

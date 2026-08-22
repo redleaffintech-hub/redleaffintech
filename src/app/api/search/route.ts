@@ -10,6 +10,7 @@ import { contains } from "@/lib/search";
  */
 export async function GET(request: Request) {
   const { company } = await requireCompany();
+  const currency = company.baseCurrency;
   const query = new URL(request.url).searchParams.get("q")?.trim() ?? "";
   if (query.length < 2) return NextResponse.json([]);
 
@@ -55,14 +56,14 @@ export async function GET(request: Request) {
       label: `${i.number} — ${i.customer.name}`,
       sublabel: i.status.replace(/_/g, " ").toLowerCase(),
       href: `/sales/invoices/${i.id}`,
-      amount: formatMoney(i.totalCents),
+      amount: formatMoney(i.totalCents, { currency }),
     })),
     ...bills.map((b) => ({
       type: "Bill",
       label: `${b.number} — ${b.vendor.name}`,
       sublabel: b.status.replace(/_/g, " ").toLowerCase(),
       href: `/purchases/bills/${b.id}`,
-      amount: formatMoney(b.totalCents),
+      amount: formatMoney(b.totalCents, { currency }),
     })),
     ...customers.map((c) => ({
       type: "Customer",

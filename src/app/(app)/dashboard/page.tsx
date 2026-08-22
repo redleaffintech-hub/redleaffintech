@@ -12,6 +12,7 @@ export const metadata = { title: "Dashboard" };
 
 export default async function DashboardPage() {
   const { company, user, role } = await requireCompany();
+  const currency = company.baseCurrency;
   const data = await dashboardData(company.id);
 
   const firstName = user.name.split(" ")[0];
@@ -40,22 +41,24 @@ export default async function DashboardPage() {
       />
 
       {/* Attention strip */}
-      <ActionStrip data={data} />
+      <ActionStrip data={data} currency={currency} />
 
       {/* KPI row */}
       <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatTile
+          currency={currency}
           label="Cash on hand"
           value={data.kpis.cashOnHandCents}
           caption={
             data.kpis.creditCardOwingCents > 0
-              ? `${formatMoney(data.kpis.creditCardOwingCents)} owing on cards`
+              ? `${formatMoney(data.kpis.creditCardOwingCents, { currency })} owing on cards`
               : "Across all bank & cash accounts"
           }
           spark={data.cashTrend.map((p) => p.value)}
           href="/banking/accounts"
         />
         <StatTile
+          currency={currency}
           label="Revenue year to date"
           value={data.kpis.revenueCents}
           delta={delta(data.kpis.revenueCents, data.kpis.priorRevenueCents)}
@@ -65,6 +68,7 @@ export default async function DashboardPage() {
           href="/reports/profit-and-loss"
         />
         <StatTile
+          currency={currency}
           label="Expenses year to date"
           value={data.kpis.expenseCents}
           delta={delta(data.kpis.expenseCents, data.kpis.priorExpenseCents)}
@@ -75,6 +79,7 @@ export default async function DashboardPage() {
           href="/reports/profit-and-loss"
         />
         <StatTile
+          currency={currency}
           label="Net income year to date"
           value={data.kpis.netIncomeCents}
           delta={delta(data.kpis.netIncomeCents, data.kpis.priorNetIncomeCents)}
@@ -110,7 +115,7 @@ export default async function DashboardPage() {
         <Card>
           <CardHeader
             title="Accounts receivable"
-            subtitle={`${formatMoney(data.ar.totalCents)} outstanding`}
+            subtitle={`${formatMoney(data.ar.totalCents, { currency })} outstanding`}
             action={<LinkButton href="/reports/ar-aging">Aging</LinkButton>}
           />
           <div className="mt-4">
@@ -118,7 +123,7 @@ export default async function DashboardPage() {
           </div>
           {data.ar.overdueCents > 0 && (
             <p className="mt-3 rounded-md bg-negative-soft px-2.5 py-1.5 text-[0.8125rem] text-negative">
-              <Money cents={data.ar.overdueCents} bold showCurrency /> is past due.
+              <Money cents={data.ar.overdueCents} bold showCurrency currency={currency} /> is past due.
             </p>
           )}
           <TopParties title="Largest balances" rows={data.ar.top} hrefBase="/sales/customers" />
@@ -127,7 +132,7 @@ export default async function DashboardPage() {
         <Card>
           <CardHeader
             title="Accounts payable"
-            subtitle={`${formatMoney(data.ap.totalCents)} owing`}
+            subtitle={`${formatMoney(data.ap.totalCents, { currency })} owing`}
             action={<LinkButton href="/reports/ap-aging">Aging</LinkButton>}
           />
           <div className="mt-4">
@@ -135,7 +140,7 @@ export default async function DashboardPage() {
           </div>
           {data.ap.dueSoonCents > 0 && (
             <p className="mt-3 rounded-md bg-caution-soft px-2.5 py-1.5 text-[0.8125rem] text-caution">
-              <Money cents={data.ap.dueSoonCents} bold showCurrency /> falls due in the next 7 days.
+              <Money cents={data.ap.dueSoonCents} bold showCurrency currency={currency} /> falls due in the next 7 days.
             </p>
           )}
           <TopParties title="Largest balances" rows={data.ap.top} hrefBase="/purchases/vendors" />
@@ -154,7 +159,7 @@ export default async function DashboardPage() {
                   Net tax {data.tax.netCents >= 0 ? "payable" : "refundable"}
                 </p>
                 <p className="tnum mt-1 text-[1.75rem] font-semibold leading-9 tracking-[-0.02em] text-ink-950">
-                  {formatMoney(Math.abs(data.tax.netCents))}
+                  {formatMoney(Math.abs(data.tax.netCents), { currency })}
                 </p>
                 <p className="mt-1 text-[0.75rem] text-muted-ink">
                   {data.tax.daysUntilDue >= 0
@@ -266,7 +271,7 @@ export default async function DashboardPage() {
   );
 }
 
-function ActionStrip({ data }: { data: Awaited<ReturnType<typeof dashboardData>> }) {
+function ActionStrip({ data, currency }: { data: Awaited<ReturnType<typeof dashboardData>>; currency: string }) {
   const items = [
     data.bankQueue > 0 && {
       tone: "caution" as const,
@@ -278,7 +283,7 @@ function ActionStrip({ data }: { data: Awaited<ReturnType<typeof dashboardData>>
     data.ar.overdueCents > 0 && {
       tone: "negative" as const,
       icon: "warning",
-      label: `${formatMoney(data.ar.overdueCents)} in overdue invoices`,
+      label: `${formatMoney(data.ar.overdueCents, { currency })} in overdue invoices`,
       href: "/sales/invoices?status=OVERDUE",
       cta: "Chase",
     },
@@ -342,9 +347,11 @@ function StatTile({
   sparkColor,
   href,
   emphasis,
+  currency,
 }: {
   label: string;
   value: number;
+  currency: string;
   caption?: string;
   delta?: number | null;
   invertDelta?: boolean;
@@ -364,7 +371,7 @@ function StatTile({
       <p className="text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-muted-ink">{label}</p>
       <div className="mt-1.5 flex items-end justify-between gap-2">
         <p className="tnum text-[1.625rem] font-semibold leading-8 tracking-[-0.025em] text-ink-950">
-          {formatMoney(value, { accountingNegative: true })}
+          {formatMoney(value, { accountingNegative: true, currency })}
         </p>
         {spark && spark.length > 1 && <Sparkline values={spark} color={sparkColor} />}
       </div>

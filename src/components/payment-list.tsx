@@ -13,12 +13,14 @@ export async function PaymentListPage({
   companyId,
   companyName,
   fiscalYearStartMonth,
+  currency,
   type,
   searchParams,
 }: {
   companyId: string;
   companyName: string;
   fiscalYearStartMonth: number;
+  currency: string;
   type: "RECEIPT" | "PAYMENT";
   searchParams: Record<string, string | string[] | undefined>;
 }) {
@@ -51,8 +53,8 @@ export async function PaymentListPage({
         ]}
         description={
           isReceipt
-            ? `${formatMoney(totalCents)} received in this period. Each receipt posts Dr Bank / Cr Accounts receivable and is applied to the invoices it settles.`
-            : `${formatMoney(totalCents)} paid in this period. Each payment posts Dr Accounts payable / Cr Bank and is applied to the bills it settles.`
+            ? `${formatMoney(totalCents, { currency })} received in this period. Each receipt posts Dr Bank / Cr Accounts receivable and is applied to the invoices it settles.`
+            : `${formatMoney(totalCents, { currency })} paid in this period. Each payment posts Dr Accounts payable / Cr Bank and is applied to the bills it settles.`
         }
       />
 
@@ -60,7 +62,7 @@ export async function PaymentListPage({
         <RangePicker from={isoDate(from)} to={isoDate(to)} />
         {unappliedCents > 0 && (
           <span className="rounded-full bg-caution-soft px-3 py-1 text-[0.8125rem] font-medium text-caution">
-            {formatMoney(unappliedCents)} unapplied
+            {formatMoney(unappliedCents, { currency })} unapplied
           </span>
         )}
       </div>

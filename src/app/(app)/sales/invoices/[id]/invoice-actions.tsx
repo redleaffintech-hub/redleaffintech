@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import clsx from "clsx";
 import { Button, Field, inputClass } from "@/components/ui";
 import { Icon } from "@/components/shell/icons";
-import { formatMoney } from "@/lib/money";
+import { useMoney } from "@/components/currency-context";
 import {
   markInvoiceSentAction, postInvoiceAction, recordReceiptAction, voidInvoiceAction, writeOffInvoiceAction,
 } from "../actions";
@@ -27,6 +27,7 @@ export function InvoiceActions({
   bankAccounts: { id: string; name: string }[];
   canRecordPayment: boolean;
 }) {
+  const money = useMoney();
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -99,7 +100,7 @@ export function InvoiceActions({
             className="space-y-3"
           >
             <input type="hidden" name="invoiceId" value={invoiceId} />
-            <Field label="Amount received" required hint={`Outstanding balance is ${formatMoney(balanceCents)}.`}>
+            <Field label="Amount received" required hint={`Outstanding balance is ${money.format(balanceCents)}.`}>
               <input name="amount" defaultValue={(balanceCents / 100).toFixed(2)} inputMode="decimal" className={clsx(inputClass, "tnum")} required />
             </Field>
             <div className="grid grid-cols-2 gap-3">
@@ -152,14 +153,14 @@ export function InvoiceActions({
           >
             <p className="text-[0.8125rem] leading-6 text-ink-700">
               Writing off posts <span className="font-medium">Dr Bad debt expense / Cr Accounts receivable</span> for the
-              remaining {formatMoney(balanceCents)}. The invoice stays in the books with its history intact.
+              remaining {money.format(balanceCents)}. The invoice stays in the books with its history intact.
             </p>
             <Field label="Reason" required>
               <input name="reason" className={inputClass} placeholder="Customer insolvent — uncollectible" required />
             </Field>
             <div className="flex justify-end gap-2">
               <Button onClick={() => setDialog(null)}>Cancel</Button>
-              <Button type="submit" variant="danger">Write off {formatMoney(balanceCents)}</Button>
+              <Button type="submit" variant="danger">Write off {money.format(balanceCents)}</Button>
             </div>
           </form>
         </Dialog>

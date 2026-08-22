@@ -10,6 +10,7 @@ import { BillActions } from "./bill-actions";
 
 export default async function BillDetailPage({ params }: PageProps<"/purchases/bills/[id]">) {
   const { company, role } = await requireCapability(CAPABILITIES.BILLS);
+  const currency = company.baseCurrency;
   const { id } = await params;
 
   const bill = await db.bill.findFirst({
@@ -109,16 +110,16 @@ export default async function BillDetailPage({ params }: PageProps<"/purchases/b
 
           <div className="mt-4 flex justify-end">
             <dl className="w-full max-w-xs space-y-1.5 text-[0.8125rem]">
-              <Row label="Subtotal" value={bill.subtotalCents} />
-              <Row label="Tax" value={bill.taxCents} />
+              <Row label="Subtotal" value={bill.subtotalCents} currency={currency} />
+              <Row label="Tax" value={bill.taxCents} currency={currency} />
               <div className="flex items-center justify-between border-t border-paper-300 pt-2 text-[0.9375rem] font-semibold">
                 <dt className="text-ink-900">Total</dt>
-                <dd className="tnum text-ink-950">{formatMoney(bill.totalCents)}</dd>
+                <dd className="tnum text-ink-950">{formatMoney(bill.totalCents, { currency })}</dd>
               </div>
-              {bill.amountPaidCents > 0 && <Row label="Paid" value={-bill.amountPaidCents} />}
+              {bill.amountPaidCents > 0 && <Row label="Paid" value={-bill.amountPaidCents} currency={currency} />}
               <div className="flex items-center justify-between rounded-md bg-paper-100 px-2 py-1.5 text-[0.9375rem] font-semibold">
                 <dt className="text-ink-900">Balance owing</dt>
-                <dd className="tnum text-ink-950">{formatMoney(bill.balanceCents)}</dd>
+                <dd className="tnum text-ink-950">{formatMoney(bill.balanceCents, { currency })}</dd>
               </div>
             </dl>
           </div>
@@ -238,11 +239,11 @@ export default async function BillDetailPage({ params }: PageProps<"/purchases/b
   );
 }
 
-function Row({ label, value }: { label: string; value: number }) {
+function Row({ label, value, currency }: { label: string; value: number; currency: string }) {
   return (
     <div className="flex items-center justify-between">
       <dt className="text-muted-ink">{label}</dt>
-      <dd className="tnum text-ink-900">{formatMoney(value)}</dd>
+      <dd className="tnum text-ink-900">{formatMoney(value, { currency })}</dd>
     </div>
   );
 }

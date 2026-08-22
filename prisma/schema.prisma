@@ -90,6 +90,8 @@ model Company {
   legalName            String?
   businessNumber       String?
   gstNumber            String?
+  qstNumber            String?
+  pstNumber            String?
   province             String   @default("ON")
   country              String   @default("CA")
   addressLine1         String?

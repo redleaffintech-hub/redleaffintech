@@ -11,6 +11,7 @@ export const metadata = { title: "Cash flow" };
 
 export default async function CashFlowPage({ searchParams }: PageProps<"/reports/cash-flow">) {
   const { company } = await requireCapability(CAPABILITIES.REPORTS);
+  const currency = company.baseCurrency;
   const params = await searchParams;
 
   const defaults = fiscalYearRange(fiscalYearOf(today(), company.fiscalYearStartMonth), company.fiscalYearStartMonth);
@@ -44,9 +45,9 @@ export default async function CashFlowPage({ searchParams }: PageProps<"/reports
           message={
             report.tieOutCents === 0
               ? "Cash flow ties to the movement in bank accounts."
-              : `Cash flow does not tie — out by ${formatMoney(Math.abs(report.tieOutCents))}.`
+              : `Cash flow does not tie — out by ${formatMoney(Math.abs(report.tieOutCents), { currency })}.`
           }
-          detail={`Opening cash ${formatMoney(report.cashOpeningCents)} + net change ${formatMoney(report.netChangeCents)} = closing cash ${formatMoney(report.cashClosingCents)}.`}
+          detail={`Opening cash ${formatMoney(report.cashOpeningCents, { currency })} + net change ${formatMoney(report.netChangeCents, { currency })} = closing cash ${formatMoney(report.cashClosingCents, { currency })}.`}
         />
 
         <table className="w-full">

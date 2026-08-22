@@ -1,6 +1,8 @@
 "use client";
 
-import { formatMoney, formatQty, formatRate } from "@/lib/money";
+import { formatQty, formatRate } from "@/lib/money";
+import { taxRegistrationLines } from "@/lib/tax-registration";
+import { useMoney } from "@/components/currency-context";
 import { formatDateLong, formatDate } from "@/lib/dates";
 import { Table, Td, Th, Tr } from "@/components/ui";
 import { AddressLines, isAddressEmpty, type DocumentAddress } from "@/components/document-address";
@@ -14,6 +16,8 @@ export interface PreviewCompany {
   province: string;
   postalCode: string | null;
   gstNumber: string | null;
+  qstNumber: string | null;
+  pstNumber: string | null;
   invoiceFooter: string | null;
 }
 
@@ -56,6 +60,7 @@ export function DocumentPreview({
   accountName: (accountId: string) => string;
   computed: ReturnType<typeof computeDocument>;
 }) {
+  const money = useMoney();
   const issued = new Date(`${issueDate}T00:00:00.000Z`);
 
   return (
@@ -70,12 +75,12 @@ export function DocumentPreview({
             {company.addressLine1}
             {company.addressLine1 && <br />}
             {[company.city, company.province, company.postalCode].filter(Boolean).join(", ")}
-            {company.gstNumber && (
-              <>
+            {taxRegistrationLines(company).map((registration) => (
+              <span key={registration.label}>
                 <br />
-                GST/HST: {company.gstNumber}
-              </>
-            )}
+                {registration.label}: {registration.value}
+              </span>
+            ))}
           </p>
         </div>
         <div className="text-right">
@@ -142,8 +147,8 @@ export function DocumentPreview({
                   <span className="block text-[0.75rem] text-muted-ink">{accountName(line.accountId)}</span>
                 </Td>
                 <Td align="right" className="tnum">{formatQty(line.quantityMilli)}</Td>
-                <Td align="right" className="tnum">{formatMoney(line.unitPriceCents)}</Td>
-                <Td align="right" className="tnum">{formatMoney(line.netCents)}</Td>
+                <Td align="right" className="tnum">{money.format(line.unitPriceCents)}</Td>
+                <Td align="right" className="tnum">{money.format(line.netCents)}</Td>
               </Tr>
             ))}
           </tbody>
@@ -166,7 +171,7 @@ export function DocumentPreview({
             ))}
           <div className="flex items-center justify-between border-t border-paper-300 pt-2 text-[0.9375rem] font-semibold">
             <dt className="text-ink-900">Total</dt>
-            <dd className="tnum text-ink-950">{formatMoney(computed.totalCents)}</dd>
+            <dd className="tnum text-ink-950">{money.format(computed.totalCents)}</dd>
           </div>
         </dl>
       </div>
@@ -187,10 +192,11 @@ export function DocumentPreview({
 }
 
 function Row({ label, value }: { label: string; value: number }) {
+  const money = useMoney();
   return (
     <div className="flex items-center justify-between">
       <dt className="text-muted-ink">{label}</dt>
-      <dd className="tnum text-ink-900">{formatMoney(value)}</dd>
+      <dd className="tnum text-ink-900">{money.format(value)}</dd>
     </div>
   );
 }

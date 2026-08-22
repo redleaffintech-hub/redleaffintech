@@ -10,6 +10,7 @@ export default async function VendorPaymentsPage({ searchParams }: PageProps<"/p
     companyId: company.id,
     companyName: company.name,
     fiscalYearStartMonth: company.fiscalYearStartMonth,
+    currency: company.baseCurrency,
     type: "PAYMENT",
     searchParams: await searchParams,
   });

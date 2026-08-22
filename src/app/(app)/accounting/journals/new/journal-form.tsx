@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import clsx from "clsx";
 import { Button, Field, inputClass } from "@/components/ui";
 import { Icon } from "@/components/shell/icons";
-import { formatMoney, toCents } from "@/lib/money";
+import { toCents } from "@/lib/money";
+import { useMoney } from "@/components/currency-context";
 import { postJournalAction } from "../actions";
 
 interface Line {
@@ -28,6 +29,7 @@ export function JournalForm({
   accounts: { id: string; code: string; name: string; type: string }[];
   canPostAdjusting: boolean;
 }) {
+  const money = useMoney();
   const router = useRouter();
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [memo, setMemo] = useState("");
@@ -167,8 +169,8 @@ export function JournalForm({
             <tfoot>
               <tr className="border-t border-paper-300">
                 <td colSpan={2} className="px-2 py-2.5 pl-5 font-medium text-ink-800">Totals</td>
-                <td className="tnum px-2 py-2.5 text-right font-semibold text-ink-950">{formatMoney(totals.debit)}</td>
-                <td className="tnum px-2 py-2.5 text-right font-semibold text-ink-950">{formatMoney(totals.credit)}</td>
+                <td className="tnum px-2 py-2.5 text-right font-semibold text-ink-950">{money.format(totals.debit)}</td>
+                <td className="tnum px-2 py-2.5 text-right font-semibold text-ink-950">{money.format(totals.credit)}</td>
                 <td />
               </tr>
             </tfoot>
@@ -199,7 +201,7 @@ export function JournalForm({
               ? "Balanced"
               : totals.debit === 0 && totals.credit === 0
                 ? "Enter amounts"
-                : `Out of balance by ${formatMoney(Math.abs(totals.difference))}`}
+                : `Out of balance by ${money.format(Math.abs(totals.difference))}`}
           </span>
         </div>
       </section>

@@ -12,6 +12,7 @@ import { Icon } from "@/components/shell/icons";
 
 export default async function VendorDetailPage({ params, searchParams }: PageProps<"/purchases/vendors/[id]">) {
   const { company } = await requireCapability(CAPABILITIES.BILLS);
+  const currency = company.baseCurrency;
   const { id } = await params;
   const search = await searchParams;
 
@@ -59,9 +60,9 @@ export default async function VendorDetailPage({ params, searchParams }: PagePro
       />
 
       <div className="mb-4 grid gap-4 sm:grid-cols-3">
-        <Stat label="Balance owing" value={owingCents} emphasis />
-        <Stat label="Spent to date" value={spentCents} />
-        <Stat label="Open bills" value={bills.filter((b) => b.balanceCents > 0).length} plain />
+        <Stat label="Balance owing" value={owingCents} emphasis currency={currency} />
+        <Stat label="Spent to date" value={spentCents} currency={currency} />
+        <Stat label="Open bills" value={bills.filter((b) => b.balanceCents > 0).length} plain currency={currency} />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[1fr_19rem] lg:items-start">
@@ -167,12 +168,12 @@ export default async function VendorDetailPage({ params, searchParams }: PagePro
   );
 }
 
-function Stat({ label, value, emphasis, plain }: { label: string; value: number; emphasis?: boolean; plain?: boolean }) {
+function Stat({ label, value, emphasis, plain, currency }: { label: string; value: number; emphasis?: boolean; plain?: boolean; currency: string }) {
   return (
     <div className={`rounded-[--radius-card] border bg-white p-4 ${emphasis ? "border-ink-900/15" : "border-paper-300"}`}>
       <p className="text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-muted-ink">{label}</p>
       <p className="tnum mt-1 text-[1.375rem] font-semibold tracking-[-0.02em] text-ink-950">
-        {plain ? value : formatMoney(value)}
+        {plain ? value : formatMoney(value, { currency })}
       </p>
     </div>
   );

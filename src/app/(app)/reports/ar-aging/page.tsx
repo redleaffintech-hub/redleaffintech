@@ -25,6 +25,7 @@ export async function AgingReport({
   kind: "AR" | "AP";
 }) {
   const { company } = await requireCapability(CAPABILITIES.REPORTS);
+  const currency = company.baseCurrency;
   const params = await searchParams;
   const asOf = toUtcDay(typeof params.asOf === "string" ? params.asOf : isoDate(today()));
 
@@ -68,9 +69,9 @@ export async function AgingReport({
           message={
             report.reconciliation.reconciled
               ? `Subledger reconciles to the ${isAr ? "A/R" : "A/P"} control account.`
-              : `Subledger differs from the control account by ${formatMoney(Math.abs(report.reconciliation.differenceCents))}.`
+              : `Subledger differs from the control account by ${formatMoney(Math.abs(report.reconciliation.differenceCents), { currency })}.`
           }
-          detail={`Subledger ${formatMoney(report.reconciliation.subledgerTotalCents)} vs general ledger ${formatMoney(report.reconciliation.controlAccountCents)}.`}
+          detail={`Subledger ${formatMoney(report.reconciliation.subledgerTotalCents, { currency })} vs general ledger ${formatMoney(report.reconciliation.controlAccountCents, { currency })}.`}
         />
 
         <div className="no-print mb-6 rounded-lg border border-paper-300 p-4">

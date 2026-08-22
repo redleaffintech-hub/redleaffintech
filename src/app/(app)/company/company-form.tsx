@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import clsx from "clsx";
 import { Button, Card, CardHeader, Field, inputClass } from "@/components/ui";
+import type { CurrencyOption } from "@/lib/currency";
 import { PROVINCES } from "@/lib/enums";
 import { saveCompanyProfileAction, saveNumberingAction } from "./actions";
 
@@ -17,6 +18,9 @@ interface CompanyProfile {
   legalName: string;
   businessNumber: string;
   gstNumber: string;
+  qstNumber: string;
+  pstNumber: string;
+  baseCurrency: string;
   province: string;
   addressLine1: string;
   city: string;
@@ -32,16 +36,24 @@ interface CompanyProfile {
 
 export function CompanyProfileForm({
   company,
+  currencies,
   fiscalYearLocked,
   postedEntries,
 }: {
   company: CompanyProfile;
+  currencies: CurrencyOption[];
   fiscalYearLocked: boolean;
   postedEntries: number;
 }) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [currency, setCurrency] = useState(company.baseCurrency);
+
+  // Relabelling a ledger is only worth warning about once something has been
+  // posted into it; a file being set up can be corrected freely.
+  const currencyChanged = currency !== company.baseCurrency;
+  const currencyNeedsConfirmation = currencyChanged && postedEntries > 0;
 
   return (
     <Card className="p-5">
@@ -70,7 +82,13 @@ export function CompanyProfileForm({
             <input name="businessNumber" defaultValue={company.businessNumber} className={clsx(inputClass, "tnum")} placeholder="123456789" />
           </Field>
           <Field label="GST/HST number" hint="Must appear on every invoice charging GST/HST.">
-            <input name="gstNumber" defaultValue={company.gstNumber} className={clsx(inputClass, "tnum")} placeholder="123456789 RT0001" />
+            <input name="gstNumber" defaultValue={company.gstNumber} maxLength={30} className={clsx(inputClass, "tnum")} placeholder="123456789 RT0001" />
+          </Field>
+          <Field label="QST number" hint="Québec sales tax registration, if you are registered.">
+            <input name="qstNumber" defaultValue={company.qstNumber} maxLength={30} className={clsx(inputClass, "tnum")} placeholder="1234567890 TQ0001" />
+          </Field>
+          <Field label="PST number" hint="Provincial sales tax registration (BC, SK, MB).">
+            <input name="pstNumber" defaultValue={company.pstNumber} maxLength={30} className={clsx(inputClass, "tnum")} placeholder="PST registration number" />
           </Field>
         </div>
 
@@ -107,7 +125,24 @@ export function CompanyProfileForm({
           </Field>
         </div>
 
-        <div className="grid gap-3 border-t border-paper-200 pt-4 sm:grid-cols-2">
+        <div className="grid gap-3 border-t border-paper-200 pt-4 sm:grid-cols-3">
+          <Field
+            label="Base currency"
+            hint="How amounts are displayed and reported. Does not convert anything."
+          >
+            <select
+              name="baseCurrency"
+              value={currency}
+              onChange={(event) => setCurrency(event.target.value)}
+              className={clsx(inputClass, "pr-8")}
+              required
+            >
+              {currencies.map((option) => (
+                <option key={option.code} value={option.code}>{option.label}</option>
+              ))}
+            </select>
+          </Field>
+
           <Field
             label="Fiscal year starts"
             hint={
@@ -141,6 +176,24 @@ export function CompanyProfileForm({
             />
           </Field>
         </div>
+
+        {currencyNeedsConfirmation && (
+          <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-[color:var(--color-caution)]/40 bg-caution-soft p-3">
+            <input
+              type="checkbox"
+              name="confirmCurrencyChange"
+              className="mt-0.5 h-3.5 w-3.5 accent-[color:var(--color-maple-600)]"
+            />
+            <span className="text-[0.8125rem] leading-5 text-ink-800">
+              Relabel this ledger from {company.baseCurrency} to {currency}
+              <span className="mt-0.5 block text-[0.75rem] text-muted-ink">
+                {postedEntries.toLocaleString("en-CA")} entries are already posted. Their amounts are stored as
+                numbers with no currency attached, so this changes what every historical figure is presented as
+                without converting any of it. Only do this if the file was set up under the wrong currency.
+              </span>
+            </span>
+          </label>
+        )}
 
         <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-paper-300 p-3">
           <input

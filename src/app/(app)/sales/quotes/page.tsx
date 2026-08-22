@@ -15,6 +15,7 @@ export const metadata = { title: "Sales quotes" };
 
 export default async function QuotesPage({ searchParams }: PageProps<"/sales/quotes">) {
   const { company } = await requireCapability(CAPABILITIES.INVOICES);
+  const currency = company.baseCurrency;
   const params = await searchParams;
   const status = typeof params.status === "string" ? params.status : "";
   const query = typeof params.q === "string" ? params.q : "";
@@ -45,7 +46,7 @@ export default async function QuotesPage({ searchParams }: PageProps<"/sales/quo
       <PageHeader
         title="Sales quotes"
         breadcrumb={[{ label: "Sales", href: "/sales/invoices" }, { label: "Sales quotes" }]}
-        description={`${formatMoney(pipelineCents)} of quoted work outstanding. A quote posts nothing to the ledger — only converting it to an invoice does.`}
+        description={`${formatMoney(pipelineCents, { currency })} of quoted work outstanding. A quote posts nothing to the ledger — only converting it to an invoice does.`}
         actions={
           <LinkButton href="/sales/quotes/new" variant="primary">
             <Icon name="plus" className="h-3.5 w-3.5" />

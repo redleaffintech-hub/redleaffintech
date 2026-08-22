@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import clsx from "clsx";
 import { Badge, Button, Money, inputClass } from "@/components/ui";
 import { Icon } from "@/components/shell/icons";
-import { formatMoney } from "@/lib/money";
+import { useMoney } from "@/components/currency-context";
 import { categorizeAction, excludeAction, matchAction, suggestionsAction } from "./actions";
 
 export interface QueueTransaction {
@@ -96,6 +96,7 @@ function QueueRow({
   open: boolean;
   onToggle: () => void;
 }) {
+  const money = useMoney();
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
@@ -167,7 +168,7 @@ function QueueRow({
                         {match.number} — {match.partyName}
                       </span>
                       <span className="block text-[0.75rem] text-muted-ink">
-                        Balance {formatMoney(match.balanceCents)} · {match.reason}
+                        Balance {money.format(match.balanceCents)} · {match.reason}
                       </span>
                     </span>
                     <span

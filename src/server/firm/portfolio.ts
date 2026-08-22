@@ -19,6 +19,7 @@ import { checkLedgerIntegrity } from "@/server/accounting/ledger";
 import { apAging, arAging } from "@/server/reports/aging";
 import { taxControlReconciliation } from "@/server/reports/tax";
 import { requireUser } from "@/server/auth/context";
+import { DEFAULT_CURRENCY } from "@/lib/currency";
 
 export interface FirmClient {
   id: string;
@@ -26,6 +27,8 @@ export interface FirmClient {
   province: string;
   fiscalYearStartMonth: number;
   isReadOnly: boolean;
+  /** Each client keeps its own books — never format one in another's currency. */
+  baseCurrency: string;
 }
 
 /**
@@ -39,7 +42,10 @@ export const requireFirmAccess = cache(async () => {
     where: { userId: user.id, role: "ACCOUNTANT", status: "ACTIVE" },
     include: {
       company: {
-        select: { id: true, name: true, province: true, fiscalYearStartMonth: true, isReadOnly: true, firmId: true },
+        select: {
+          id: true, name: true, province: true, fiscalYearStartMonth: true,
+          isReadOnly: true, baseCurrency: true, firmId: true,
+        },
       },
     },
     orderBy: { company: { name: "asc" } },
@@ -58,6 +64,7 @@ export const requireFirmAccess = cache(async () => {
       province: m.company.province,
       fiscalYearStartMonth: m.company.fiscalYearStartMonth,
       isReadOnly: m.company.isReadOnly,
+      baseCurrency: m.company.baseCurrency,
     })) satisfies FirmClient[],
   };
 });
@@ -104,6 +111,7 @@ export interface ClientSnapshot {
  */
 export async function clientSnapshot(client: FirmClient): Promise<ClientSnapshot> {
   const asOf = today();
+  const currency = client.baseCurrency;
 
   const [integrity, bankQueue, billsAwaitingApproval, overdue, lastEntry, periodsBehind, taxPeriod, uncategorized] =
     await Promise.all([
@@ -151,7 +159,7 @@ export async function clientSnapshot(client: FirmClient): Promise<ClientSnapshot
     add(
       "critical",
       "Ledger is out of balance",
-      `Debits and credits differ by ${formatMoney(Math.abs(integrity.outOfBalanceCents))}.`,
+      `Debits and credits differ by ${formatMoney(Math.abs(integrity.outOfBalanceCents), { currency })}.`,
       "/accounting/trial-balance",
     );
   }
@@ -159,7 +167,7 @@ export async function clientSnapshot(client: FirmClient): Promise<ClientSnapshot
     add(
       "critical",
       "Balance sheet does not balance",
-      `Assets less liabilities, equity and earnings leaves ${formatMoney(integrity.equationGapCents)}.`,
+      `Assets less liabilities, equity and earnings leaves ${formatMoney(integrity.equationGapCents, { currency })}.`,
       "/reports/balance-sheet",
     );
   }
@@ -184,7 +192,7 @@ export async function clientSnapshot(client: FirmClient): Promise<ClientSnapshot
     add(
       "warning",
       "Uncategorised accounts hold a balance",
-      `${formatMoney(Math.abs(uncategorized))} still sits in uncategorised income or expense.`,
+      `${formatMoney(Math.abs(uncategorized), { currency })} still sits in uncategorised income or expense.`,
       "/accounting/general-ledger",
     );
   }
@@ -195,7 +203,7 @@ export async function clientSnapshot(client: FirmClient): Promise<ClientSnapshot
     add(
       "info",
       "Receivables overdue",
-      `${overdue._count._all} invoices past due, ${formatMoney(overdue._sum.balanceCents ?? 0)} outstanding.`,
+      `${overdue._count._all} invoices past due, ${formatMoney(overdue._sum.balanceCents ?? 0, { currency })} outstanding.`,
       "/reports/ar-aging",
     );
   }
@@ -261,6 +269,11 @@ export interface CloseChecklist {
  */
 export async function closeChecklist(companyId: string, periodId?: string): Promise<CloseChecklist | null> {
   const asOf = today();
+  // Only an id is passed in, so the currency has to be fetched: a firm's
+  // clients do not necessarily share one.
+  const currency =
+    (await db.company.findUnique({ where: { id: companyId }, select: { baseCurrency: true } }))?.baseCurrency ??
+    DEFAULT_CURRENCY;
   const period = periodId
     ? await db.fiscalPeriod.findFirst({ where: { id: periodId, companyId } })
     : await db.fiscalPeriod.findFirst({
@@ -297,7 +310,7 @@ export async function closeChecklist(companyId: string, periodId?: string): Prom
       label: "The ledger balances",
       detail: integrity.balanced
         ? "Total debits equal total credits."
-        : `Out of balance by ${formatMoney(Math.abs(integrity.outOfBalanceCents))}.`,
+        : `Out of balance by ${formatMoney(Math.abs(integrity.outOfBalanceCents), { currency })}.`,
       state: integrity.balanced ? "pass" : "fail",
       href: "/accounting/trial-balance",
     },
@@ -307,7 +320,7 @@ export async function closeChecklist(companyId: string, periodId?: string): Prom
       detail:
         integrity.equationGapCents === 0
           ? "The accounting equation holds."
-          : `Gap of ${formatMoney(integrity.equationGapCents)}.`,
+          : `Gap of ${formatMoney(integrity.equationGapCents, { currency })}.`,
       state: integrity.equationGapCents === 0 ? "pass" : "fail",
       href: "/reports/balance-sheet",
     },
@@ -338,7 +351,7 @@ export async function closeChecklist(companyId: string, periodId?: string): Prom
       label: "A/R aging ties to the control account",
       detail: ar.reconciliation.reconciled
         ? "The subledger agrees with the general ledger."
-        : `Subledger ${formatMoney(ar.reconciliation.subledgerTotalCents)} vs GL ${formatMoney(ar.reconciliation.controlAccountCents)}.`,
+        : `Subledger ${formatMoney(ar.reconciliation.subledgerTotalCents, { currency })} vs GL ${formatMoney(ar.reconciliation.controlAccountCents, { currency })}.`,
       state: ar.reconciliation.reconciled ? "pass" : "fail",
       href: "/reports/ar-aging",
     },
@@ -347,7 +360,7 @@ export async function closeChecklist(companyId: string, periodId?: string): Prom
       label: "A/P aging ties to the control account",
       detail: ap.reconciliation.reconciled
         ? "The subledger agrees with the general ledger."
-        : `Subledger ${formatMoney(ap.reconciliation.subledgerTotalCents)} vs GL ${formatMoney(ap.reconciliation.controlAccountCents)}.`,
+        : `Subledger ${formatMoney(ap.reconciliation.subledgerTotalCents, { currency })} vs GL ${formatMoney(ap.reconciliation.controlAccountCents, { currency })}.`,
       state: ap.reconciliation.reconciled ? "pass" : "fail",
       href: "/reports/ap-aging",
     },
@@ -356,7 +369,7 @@ export async function closeChecklist(companyId: string, periodId?: string): Prom
       label: "Tax subledger ties to the control accounts",
       detail: tax.reconciled
         ? "Tax collected and input credits agree with the ledger."
-        : `Collected differs by ${formatMoney(tax.collectedDifferenceCents)}, ITCs by ${formatMoney(tax.recoverableDifferenceCents)}.`,
+        : `Collected differs by ${formatMoney(tax.collectedDifferenceCents, { currency })}, ITCs by ${formatMoney(tax.recoverableDifferenceCents, { currency })}.`,
       state: tax.reconciled ? "pass" : "fail",
       href: "/reports/tax-summary",
     },
@@ -366,7 +379,7 @@ export async function closeChecklist(companyId: string, periodId?: string): Prom
       detail:
         uncategorized === 0
           ? "The holding accounts are clear."
-          : `${formatMoney(Math.abs(uncategorized))} still sits in uncategorised income or expense.`,
+          : `${formatMoney(Math.abs(uncategorized), { currency })} still sits in uncategorised income or expense.`,
       state: uncategorized === 0 ? "pass" : "attention",
       href: "/accounting/general-ledger",
     },
