@@ -15,7 +15,7 @@ import type { NextRequest } from "next/server";
  * construction because it never calls requireUser/requireCompany, and security
  * headers are set in next.config.ts so they also cover static assets.
  */
-export function proxy(request: NextRequest) {
+export function middleware(request: NextRequest) {
   if (request.cookies.has("rlf_session")) {
     return NextResponse.redirect(new URL("/dashboard", request.url));
   }

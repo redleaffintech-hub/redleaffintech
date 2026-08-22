@@ -61,3 +61,12 @@ dev.log
 
 # The template IS meant to be committed; the .env* rule above would swallow it.
 !.env.example
+
+# Local Netlify folder
+.netlify
+
+# Netlify's edge-function bundler (Deno) writes this during a local build.
+deno.lock
+
+# Firebase CLI debug output.
+firebase-debug.log

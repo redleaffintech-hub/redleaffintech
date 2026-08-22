@@ -1,0 +1,37 @@
+# Netlify build configuration.
+#
+# The app itself carries no host-specific code — no platform SDKs, no
+# platform env vars — so this file plus the four environment variables in
+# .env.example is the whole of what Netlify needs.
+
+[build]
+  # `npm run build` is `prisma migrate deploy && prisma generate && next build
+  # --webpack`. Two things there are deliberate:
+  #
+  #  - The migrate step needs DATABASE_URL_UNPOOLED at BUILD time: Prisma's
+  #    migration advisory lock is session-level and does not survive a pooler.
+  #  - `--webpack` is required. Next 16 builds with Turbopack by default, and
+  #    the Netlify adapter bundles src/proxy.ts (middleware) into an edge
+  #    function that then cannot resolve Turbopack's chunk layout:
+  #    "Cannot find module './chunks/[turbopack]_runtime.js'". The flag lives in
+  #    package.json rather than only here so a local build reproduces CI.
+  command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  # Next.js 16 requires Node 20+. Pinned rather than left to Netlify's default
+  # so a change to their default cannot silently move the runtime underneath us.
+  NODE_VERSION = "22"
+  # Prisma downloads its engines at install time; keep that off the critical
+  # path of every function cold start.
+  PRISMA_CLI_QUERY_ENGINE_TYPE = "library"
+
+[[plugins]]
+  # Next.js Runtime — routes SSR, server actions, middleware/proxy and image
+  # optimisation to Netlify Functions. Declared explicitly rather than relying
+  # on auto-detection so the build fails loudly if it is ever missing.
+  package = "@netlify/plugin-nextjs"
+
+# Security headers are set in next.config.ts rather than here, so that they
+# apply to server-rendered responses as well as static assets, and stay with
+# the application if it is ever hosted somewhere else again.
