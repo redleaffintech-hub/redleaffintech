@@ -97,6 +97,17 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [{ label: "All reports", href: "/reports", capability: CAPABILITIES.REPORTS, exact: true }],
   },
   {
+    label: "HR",
+    module: "HR",
+    icon: "users",
+    items: [
+      { label: "Employees", href: "/hr/employees", capability: CAPABILITIES.HR, exact: true },
+      { label: "Departments", href: "/hr/departments", capability: CAPABILITIES.HR },
+      { label: "Time off", href: "/hr/time-off", capability: CAPABILITIES.HR },
+      { label: "Leave types", href: "/hr/time-off/leave-types", capability: CAPABILITIES.HR },
+    ],
+  },
+  {
     label: "Company",
     icon: "building",
     items: [

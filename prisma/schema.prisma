@@ -168,6 +168,10 @@ model Company {
   defaultTaxInclusive     Boolean @default(false)
   invoiceFooter           String?
 
+  // HR module numbering (§ numbering.ts)
+  employeePrefix     String @default("EMP-")
+  nextEmployeeNumber Int    @default(1001)
+
   firm Firm? @relation(fields: [firmId], references: [id])
 
   users            CompanyUser[]
@@ -200,6 +204,12 @@ model Company {
   budgets          Budget[]
   recurring        RecurringTemplate[]
   subscription     Subscription?
+
+  departments          Department[]
+  employees            Employee[]
+  leaveTypes           LeaveType[]
+  leaveRequests        LeaveRequest[]
+  leaveBalanceAdjustments LeaveBalanceAdjustment[]
 }
 
 /// Membership + role of a user within one company (§3, §34).
@@ -1436,6 +1446,165 @@ model AuditLog {
 
   @@index([companyId, createdAt])
   @@index([entityType, entityId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HR module (records only — no pay run engine; see src/server/hr and
+// src/server/tax/regional-rates.ts for the equivalent boundary on tax rates)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Department {
+  id        String   @id @default(cuid())
+  companyId String
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employees Employee[]
+
+  @@unique([companyId, name])
+}
+
+model Employee {
+  id             String @id @default(cuid())
+  companyId      String
+  employeeNumber String
+
+  // Personal
+  legalFirstName String
+  legalLastName  String
+  preferredName  String?
+  dateOfBirth    DateTime?
+  personalEmail  String?
+  personalPhone  String?
+  addressLine1   String?
+  addressLine2   String?
+  city           String?
+  province       String?
+  postalCode     String?
+  country        String  @default("CA")
+
+  emergencyContactName     String?
+  emergencyContactPhone    String?
+  emergencyContactRelation String?
+
+  /// CRA Social Insurance Number. Only the last 3 digits and a one-way SHA-256
+  /// fingerprint are ever stored — never the reversible number — so this record
+  /// carries no plaintext SIN to protect. A future payroll module that must
+  /// print a full SIN on a T4 will need a properly encrypted-at-rest field,
+  /// which this deliberately is not (see employment-standards.ts).
+  sinLast3 String?
+  sinHash  String?
+
+  // Employment
+  jobTitle             String
+  departmentId         String?
+  managerId            String?
+  provinceOfEmployment String
+  employeeType         String // FULL_TIME | PART_TIME | CASUAL | SEASONAL | CONTRACT
+  employmentStatus     String   @default("ACTIVE") // ACTIVE | ON_LEAVE | TERMINATED
+  hireDate             DateTime
+  terminationDate      DateTime?
+  terminationReason    String? // TERMINATION_REASON_CATEGORIES
+  terminationNote      String?
+
+  compensationType     String // SALARY | HOURLY
+  payRateCents         Int    // annual (SALARY) or hourly (HOURLY) rate, integer cents
+  payFrequency         String // WEEKLY | BIWEEKLY | SEMI_MONTHLY | MONTHLY
+  standardHoursPerWeek Float?
+
+  /// Overrides the province-derived minimum vacation % (rateMicro convention)
+  /// when a company pays above the statutory minimum. Null defers to
+  /// `vacationEntitlement()`.
+  vacationPercentOverrideMicro Int?
+
+  notes String?
+
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  company    Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  department Department? @relation(fields: [departmentId], references: [id])
+  manager    Employee?   @relation("EmployeeManager", fields: [managerId], references: [id], onDelete: SetNull)
+  reports    Employee[]  @relation("EmployeeManager")
+
+  leaveRequests     LeaveRequest[]
+  leaveAdjustments  LeaveBalanceAdjustment[]
+
+  @@unique([companyId, employeeNumber])
+  @@index([companyId, employmentStatus])
+  @@index([managerId])
+  @@index([departmentId])
+}
+
+model LeaveType {
+  id           String   @id @default(cuid())
+  companyId    String
+  name         String
+  category     String // LEAVE_CATEGORIES
+  isPaid       Boolean  @default(true)
+  /// Whether a running balance applies at all — job-protected statutory leaves
+  /// (parental, compassionate care) are recorded for history but are not drawn
+  /// from a balance the way vacation or sick time is.
+  trackBalance Boolean  @default(true)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  company       Company                  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  leaveRequests LeaveRequest[]
+  adjustments   LeaveBalanceAdjustment[]
+
+  @@unique([companyId, name])
+}
+
+model LeaveRequest {
+  id            String    @id @default(cuid())
+  companyId     String
+  employeeId    String
+  leaveTypeId   String
+  startDate     DateTime
+  endDate       DateTime
+  hours         Float
+  status        String    @default("PENDING") // LEAVE_REQUEST_STATUSES
+  reason        String?
+  requestedById String?
+  decidedById   String?
+  decidedAt     DateTime?
+  decisionNote  String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee  Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  leaveType LeaveType @relation(fields: [leaveTypeId], references: [id])
+
+  @@index([companyId, employeeId])
+  @@index([companyId, status])
+}
+
+/// A signed entry in an employee's leave ledger: a positive grant/carryover or a
+/// negative correction. The current balance is always the sum of these plus the
+/// hours of every APPROVED LeaveRequest against the same leave type — computed
+/// on read rather than cached, the same way this app never stores a mutable
+/// running total anywhere else money or time is tracked.
+model LeaveBalanceAdjustment {
+  id            String   @id @default(cuid())
+  companyId     String
+  employeeId    String
+  leaveTypeId   String
+  hours         Float
+  reason        String
+  effectiveDate DateTime
+  createdById   String?
+  createdAt     DateTime @default(now())
+
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee  Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  leaveType LeaveType @relation(fields: [leaveTypeId], references: [id])
+
+  @@index([companyId, employeeId, leaveTypeId])
 }
 
 model Notification {

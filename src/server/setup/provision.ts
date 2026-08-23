@@ -11,6 +11,7 @@ import { addDays, addMonths, fiscalYearRange, utcDate } from "@/lib/dates";
 import { CYCLE_MONTHS, DEFAULT_PLAN_CODE, isValidCycle, type BillingCycle } from "@/lib/plans";
 import { resolveAssignment } from "@/server/plans/catalogue";
 import { provincialTaxCodeTemplates } from "@/server/tax/regional-rates";
+import { createDefaultLeaveTypes } from "@/server/hr/leave";
 import { DEFAULT_CURRENCY, normalizeCurrency } from "@/lib/currency";
 import {
   BASE_TAX_CODES,
@@ -88,6 +89,7 @@ async function createCompanyAndSetup(tx: Tx, input: ProvisionCompanyInput) {
 
   await createChartOfAccounts(tx, company.id);
   await createTaxCodes(tx, company.id, input.province);
+  await createDefaultLeaveTypes(tx, company.id);
 
   const currentYear = new Date().getUTCFullYear();
   const years = input.fiscalYears ?? [currentYear - 1, currentYear, currentYear + 1];

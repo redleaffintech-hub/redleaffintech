@@ -77,9 +77,9 @@ export const MODULE_CATALOG: ModuleInfo[] = [
   {
     id: "HR",
     name: "Red Leaf HR",
-    blurb: "Employee records, time off, onboarding and documents in one place.",
+    blurb: "Employee records, time off and org structure in one place — no payroll calculations yet.",
     icon: "users",
-    available: false,
+    available: true,
   },
   {
     id: "TAX",

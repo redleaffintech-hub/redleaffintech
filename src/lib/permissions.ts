@@ -24,6 +24,7 @@ export const CAPABILITIES = {
   REPORTS: "reports",
   AUDIT: "audit",
   SUBSCRIPTION: "subscription",
+  HR: "hr.employees",
 } as const;
 
 export type Capability = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];
@@ -42,28 +43,28 @@ const MATRIX: Record<CompanyRole, Record<Capability, AccessLevel>> = {
     "sales.invoices": "FULL", "purchases.bills": "FULL", expenses: "FULL",
     payments: "FULL", "accounting.journals": "FULL", "accounting.period_close": "FULL",
     "tax.settings": "FULL", "tax.filing": "FULL", banking: "FULL",
-    reports: "FULL", audit: "FULL", subscription: "FULL",
+    reports: "FULL", audit: "FULL", subscription: "FULL", "hr.employees": "FULL",
   },
   SECONDARY: {
     "company.settings": "VIEW", "company.users": "NONE", "accounting.coa": "VIEW",
     "sales.invoices": "FULL", "purchases.bills": "FULL", expenses: "FULL",
     payments: "FULL", "accounting.journals": "VIEW", "accounting.period_close": "NONE",
     "tax.settings": "VIEW", "tax.filing": "VIEW", banking: "FULL",
-    reports: "FULL", audit: "VIEW", subscription: "NONE",
+    reports: "FULL", audit: "VIEW", subscription: "NONE", "hr.employees": "FULL",
   },
   REVIEWER: {
     "company.settings": "VIEW", "company.users": "NONE", "accounting.coa": "VIEW",
     "sales.invoices": "REVIEW", "purchases.bills": "REVIEW", expenses: "REVIEW",
     payments: "REVIEW", "accounting.journals": "REVIEW", "accounting.period_close": "REVIEW",
     "tax.settings": "VIEW", "tax.filing": "VIEW", banking: "VIEW",
-    reports: "FULL", audit: "VIEW", subscription: "NONE",
+    reports: "FULL", audit: "VIEW", subscription: "NONE", "hr.employees": "VIEW",
   },
   ACCOUNTANT: {
     "company.settings": "VIEW", "company.users": "NONE", "accounting.coa": "FULL",
     "sales.invoices": "FULL", "purchases.bills": "FULL", expenses: "FULL",
     payments: "FULL", "accounting.journals": "FULL", "accounting.period_close": "FULL",
     "tax.settings": "FULL", "tax.filing": "FULL", banking: "FULL",
-    reports: "FULL", audit: "FULL", subscription: "NONE",
+    reports: "FULL", audit: "FULL", subscription: "NONE", "hr.employees": "VIEW",
   },
 };
 
