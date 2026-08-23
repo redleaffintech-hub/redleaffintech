@@ -5,7 +5,8 @@ import { CAPABILITIES } from "@/lib/permissions";
 import { isoDate } from "@/lib/dates";
 import { Card, PageHeader } from "@/components/ui";
 import { maskSin } from "@/server/hr/employment-standards";
-import { EmployeeForm, type EmployeeFormValues } from "../../employee-form";
+import { EmployeeForm } from "../../employee-form";
+import type { EmployeeFormValues } from "../../employee-form-values";
 
 export const metadata = { title: "Edit employee" };
 

@@ -13,50 +13,7 @@ import {
 } from "@/lib/hr-enums";
 import { Button, Field, SectionDivider, Select, inputClass } from "@/components/ui";
 import { createEmployeeAction, updateEmployeeAction } from "./actions";
-
-export interface EmployeeFormValues {
-  id?: string;
-  legalFirstName: string;
-  legalLastName: string;
-  preferredName: string;
-  dateOfBirth: string;
-  personalEmail: string;
-  personalPhone: string;
-  addressLine1: string;
-  addressLine2: string;
-  city: string;
-  province: string;
-  postalCode: string;
-  emergencyContactName: string;
-  emergencyContactPhone: string;
-  emergencyContactRelation: string;
-  sinMasked: string | null;
-  jobTitle: string;
-  departmentId: string;
-  managerId: string;
-  provinceOfEmployment: string;
-  employeeType: string;
-  hireDate: string;
-  compensationType: string;
-  payRate: string;
-  payFrequency: string;
-  standardHoursPerWeek: string;
-  notes: string;
-}
-
-export function blankEmployee(companyProvince: string): EmployeeFormValues {
-  return {
-    legalFirstName: "", legalLastName: "", preferredName: "", dateOfBirth: "",
-    personalEmail: "", personalPhone: "",
-    addressLine1: "", addressLine2: "", city: "", province: "", postalCode: "",
-    emergencyContactName: "", emergencyContactPhone: "", emergencyContactRelation: "",
-    sinMasked: null,
-    jobTitle: "", departmentId: "", managerId: "",
-    provinceOfEmployment: companyProvince, employeeType: "FULL_TIME", hireDate: "",
-    compensationType: "SALARY", payRate: "", payFrequency: "BIWEEKLY", standardHoursPerWeek: "40",
-    notes: "",
-  };
-}
+import type { EmployeeFormValues } from "./employee-form-values";
 
 export function EmployeeForm({
   initial,

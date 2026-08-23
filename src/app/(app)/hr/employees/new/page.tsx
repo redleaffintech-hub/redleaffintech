@@ -2,7 +2,8 @@ import { db } from "@/lib/db";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
 import { Card, PageHeader } from "@/components/ui";
-import { EmployeeForm, blankEmployee } from "../employee-form";
+import { EmployeeForm } from "../employee-form";
+import { blankEmployee } from "../employee-form-values";
 
 export const metadata = { title: "New employee" };
 
