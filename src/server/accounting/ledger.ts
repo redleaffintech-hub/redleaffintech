@@ -132,11 +132,20 @@ export async function postJournal(tx: Tx, input: PostJournalInput) {
   // the customer's, whatever the state of their account.
   const owner = await tx.company.findUnique({
     where: { id: companyId },
-    select: { isReadOnly: true },
+    select: { isReadOnly: true, archivedAt: true },
   });
   if (owner?.isReadOnly) {
     throw new PostingError(
       "This company file is read-only. Its books remain readable and exportable, but no new entries can be posted.",
+      "READ_ONLY",
+    );
+  }
+  // Archived is a separate state from the platform's isReadOnly, checked
+  // independently: restoring an archived company must never depend on, or
+  // interfere with, a suspension the platform applied for its own reasons.
+  if (owner?.archivedAt) {
+    throw new PostingError(
+      "This company is archived. Restore it from Company → Companies before posting.",
       "READ_ONLY",
     );
   }

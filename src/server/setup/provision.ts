@@ -50,15 +50,15 @@ export interface ProvisionCompanyInput {
   trialDays?: number;
 }
 
-export async function provisionCompany(tx: Tx, input: ProvisionCompanyInput) {
+/**
+ * The company row plus everything the posting engine needs before a single
+ * transaction can be recorded: chart of accounts, effective-dated tax codes,
+ * fiscal periods and tax periods. No subscription — that is a separate concern
+ * with two different callers (a fresh signup creates one; a Primary adding a
+ * sibling company under their existing plan must not).
+ */
+async function createCompanyAndSetup(tx: Tx, input: ProvisionCompanyInput) {
   const fiscalYearStartMonth = input.fiscalYearStartMonth ?? 1;
-  const cycle: BillingCycle = isValidCycle(input.billingCycle) ? input.billingCycle : "MONTHLY";
-
-  // The plan, its seat allowance and its price all come from the published
-  // catalogue — the same snapshot a self-serve customer would have been quoted.
-  // A database with no published plans yet still provisions: the company is
-  // created without a subscription rather than on invented terms.
-  const assignment = await resolveAssignment(tx, input.plan ?? DEFAULT_PLAN_CODE, cycle);
 
   const company = await tx.company.create({
     data: {
@@ -95,6 +95,32 @@ export async function provisionCompany(tx: Tx, input: ProvisionCompanyInput) {
     await createFiscalYear(tx, company.id, year, fiscalYearStartMonth);
   }
   await createTaxPeriods(tx, company.id, years, input.taxFilingFrequency ?? "QUARTERLY");
+
+  return company;
+}
+
+/**
+ * Add a company under an EXISTING subscription — self-service, from a Primary
+ * who already has a plan. Deliberately the same setup pipeline as a fresh
+ * signup and deliberately no subscription of its own: the caller is
+ * responsible for attaching the returned company to a subscription (see
+ * src/server/companies/families.ts) inside the same transaction, after
+ * confirming the plan's company limit under a row lock.
+ */
+export async function provisionAdditionalCompany(tx: Tx, input: ProvisionCompanyInput) {
+  return createCompanyAndSetup(tx, input);
+}
+
+export async function provisionCompany(tx: Tx, input: ProvisionCompanyInput) {
+  const cycle: BillingCycle = isValidCycle(input.billingCycle) ? input.billingCycle : "MONTHLY";
+
+  // The plan, its seat allowance and its price all come from the published
+  // catalogue — the same snapshot a self-serve customer would have been quoted.
+  // A database with no published plans yet still provisions: the company is
+  // created without a subscription rather than on invented terms.
+  const assignment = await resolveAssignment(tx, input.plan ?? DEFAULT_PLAN_CODE, cycle);
+
+  const company = await createCompanyAndSetup(tx, input);
 
   if (assignment) {
     const now = new Date();

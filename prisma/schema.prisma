@@ -137,6 +137,13 @@ model Company {
   logoUrl              String?
   firmId               String?
   isReadOnly           Boolean  @default(false)
+  /// Self-service archive (distinct from `isReadOnly`, which the platform
+  /// subscription lifecycle owns). Both are checked at the posting chokepoint,
+  /// so restoring an archived company can never silently un-suspend one the
+  /// platform separately locked for billing reasons.
+  archivedAt           DateTime?
+  archivedById         String?
+  archiveReason        String?
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 
@@ -169,6 +176,7 @@ model Company {
   taxPeriods       TaxPeriod[]
   fiscalPeriods    FiscalPeriod[]
   fiscalCalendarChanges FiscalCalendarChange[]
+  subscriptionCompany   SubscriptionCompany?
   customers        Customer[]
   vendors          Vendor[]
   items            ServiceItem[]
@@ -272,6 +280,7 @@ model Subscription {
   planVersion PlanVersion?        @relation(fields: [planVersionId], references: [id])
   events      SubscriptionEvent[]
   notes       SubscriptionNote[]
+  additionalCompanies SubscriptionCompany[]
 
   @@index([status])
   @@index([planId])
@@ -459,6 +468,32 @@ model TaxEntry {
 /// It is deliberately append-only from the application's point of view — there
 /// is no edit or delete path in the UI — because a fiscal calendar that can be
 /// rewritten after the fact is not evidence of anything.
+/// A company covered by a subscription beyond the one it was sold with.
+///
+/// `Subscription.companyId` is the original, billing company — that
+/// relationship is untouched, so every screen the admin portal already built
+/// (client lookup, provisioning, the subscription detail page) keeps working
+/// exactly as it does today. This table is additive: a self-service Primary can
+/// attach more companies to their existing subscription, up to the plan's
+/// `companies` limit, without a second subscription ever being created.
+///
+/// `companyId` is unique because a company belongs to exactly one subscription
+/// family at a time. Deliberately no cascade note needed on delete — removing a
+/// company through the safe workflow removes this row with it, and nothing
+/// here carries accounting history of its own.
+model SubscriptionCompany {
+  id             String   @id @default(cuid())
+  subscriptionId String
+  companyId      String   @unique
+  addedById      String?
+  createdAt      DateTime @default(now())
+
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  company      Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([subscriptionId])
+}
+
 model FiscalCalendarChange {
   id                  String   @id @default(cuid())
   companyId           String

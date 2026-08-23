@@ -101,6 +101,7 @@ export const NAV_GROUPS: NavGroup[] = [
     icon: "building",
     items: [
       { label: "Profile & preferences", href: "/company", capability: CAPABILITIES.COMPANY_SETTINGS, exact: true },
+      { label: "Companies", href: "/company/companies", capability: CAPABILITIES.COMPANY_SETTINGS },
       { label: "Products & services", href: "/company/products-services", capability: CAPABILITIES.COMPANY_SETTINGS },
       { label: "Users & access", href: "/company/users", capability: CAPABILITIES.USERS },
       { label: "Audit log", href: "/company/audit", capability: CAPABILITIES.AUDIT },
