@@ -1,24 +1,35 @@
 import { db } from "@/lib/db";
 import { requireCapability } from "@/server/auth/context";
-import { CAPABILITIES } from "@/lib/permissions";
+import { CAPABILITIES, can } from "@/lib/permissions";
 import { accountBalance } from "@/server/reports/financials";
 import { formatDate, formatDateTime, today } from "@/lib/dates";
 import { Badge, Card, LinkButton, Money, PageHeader, Table, Td, Th, Tr } from "@/components/ui";
+import { EditBankAccountButton } from "./edit-bank-account";
 
 export const metadata = { title: "Bank accounts" };
 
 export default async function BankAccountsPage() {
-  const { company } = await requireCapability(CAPABILITIES.BANKING);
+  const { company, role } = await requireCapability(CAPABILITIES.BANKING);
+  const canEdit = can(role, CAPABILITIES.BANKING);
 
-  const bankAccounts = await db.bankAccount.findMany({
-    where: { companyId: company.id },
-    include: {
-      account: true,
-      reconciliations: { where: { status: "COMPLETED" }, orderBy: { statementEndDate: "desc" }, take: 1 },
-      _count: { select: { transactions: true } },
-    },
-    orderBy: { name: "asc" },
-  });
+  const [bankAccounts, glAccounts] = await Promise.all([
+    db.bankAccount.findMany({
+      where: { companyId: company.id },
+      include: {
+        account: true,
+        reconciliations: { where: { status: "COMPLETED" }, orderBy: { statementEndDate: "desc" }, take: 1 },
+        _count: { select: { transactions: true, reconciliations: true } },
+      },
+      orderBy: { name: "asc" },
+    }),
+    // Both sides of a possible relink: assets for BANK/CASH, liabilities for
+    // CREDIT_CARD. The edit dialog filters to what the selected type allows.
+    db.account.findMany({
+      where: { companyId: company.id, isActive: true, type: { in: ["ASSET", "LIABILITY"] } },
+      select: { id: true, code: true, name: true, type: true },
+      orderBy: { code: "asc" },
+    }),
+  ]);
 
   const asOf = today();
   const rows = await Promise.all(
@@ -55,6 +66,7 @@ export default async function BankAccountsPage() {
               <Th width="7rem" align="right">Transactions</Th>
               <Th width="10rem">Last reconciled</Th>
               <Th width="10rem" align="right">Balance</Th>
+              {canEdit && <Th width="4rem" align="right">{""}</Th>}
             </tr>
           </thead>
           <tbody>
@@ -92,6 +104,24 @@ export default async function BankAccountsPage() {
                     : "Never"}
                 </Td>
                 <Td align="right"><Money cents={balanceCents} bold /></Td>
+                {canEdit && (
+                  <Td align="right">
+                    <EditBankAccountButton
+                      account={{
+                        id: bankAccount.id,
+                        name: bankAccount.name,
+                        institution: bankAccount.institution ?? "",
+                        accountNumberMasked: bankAccount.accountNumberMasked ?? "",
+                        type: bankAccount.type,
+                        currency: bankAccount.currency,
+                        accountId: bankAccount.accountId,
+                        isActive: bankAccount.isActive,
+                        locked: bankAccount._count.transactions > 0 || bankAccount._count.reconciliations > 0,
+                      }}
+                      glAccounts={glAccounts}
+                    />
+                  </Td>
+                )}
               </Tr>
             ))}
           </tbody>

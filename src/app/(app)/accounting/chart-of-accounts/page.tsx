@@ -10,6 +10,7 @@ import { FilterBar } from "@/components/filter-bar";
 import { ExportCsvButton } from "@/components/export-csv-button";
 import { Icon } from "@/components/shell/icons";
 import { SubtypePicker } from "./subtype-picker";
+import { AccountRowActions, NewAccountButton } from "./account-dialog";
 
 export const metadata = { title: "Chart of accounts" };
 
@@ -51,6 +52,43 @@ export default async function ChartOfAccountsPage({ searchParams }: PageProps<"/
     balances.map((b) => [b.accountId, { debit: b._sum.debitCents ?? 0, credit: b._sum.creditCents ?? 0, count: b._count }]),
   );
 
+  // A cheap presence check for the Delete button: one query per source table
+  // that can reference an account, unioned into a set, rather than one query
+  // per account. The server action re-verifies the real count before ever
+  // deleting anything — this only decides whether the button is worth showing.
+  const [
+    journalAccountIds, docAccountIds, budgetAccountIds, bankAccountIds,
+    itemAccountIds, taxComponentAccountIds, parentAccountIds,
+  ] = await Promise.all([
+    db.journalLine.findMany({ where: { companyId: company.id }, select: { accountId: true }, distinct: ["accountId"] }),
+    Promise.all([
+      db.invoiceLine.findMany({ where: { invoice: { companyId: company.id } }, select: { accountId: true }, distinct: ["accountId"] }),
+      db.estimateLine.findMany({ where: { estimate: { companyId: company.id } }, select: { accountId: true }, distinct: ["accountId"] }),
+      db.creditNoteLine.findMany({ where: { creditNote: { companyId: company.id } }, select: { accountId: true }, distinct: ["accountId"] }),
+      db.billLine.findMany({ where: { bill: { companyId: company.id } }, select: { accountId: true }, distinct: ["accountId"] }),
+      db.expenseLine.findMany({ where: { expense: { companyId: company.id } }, select: { accountId: true }, distinct: ["accountId"] }),
+    ]).then((groups) => groups.flat()),
+    db.budgetLine.findMany({ where: { budget: { companyId: company.id } }, select: { accountId: true }, distinct: ["accountId"] }),
+    db.bankAccount.findMany({ where: { companyId: company.id }, select: { accountId: true } }),
+    db.serviceItem.findMany({
+      where: { companyId: company.id },
+      select: { incomeAccountId: true, expenseAccountId: true },
+    }),
+    db.taxComponent.findMany({
+      where: { taxCode: { companyId: company.id } },
+      select: { liabilityAccountId: true, recoverableAccountId: true },
+    }),
+    db.account.findMany({ where: { companyId: company.id, parentId: { not: null } }, select: { parentId: true } }),
+  ]);
+  const referencedIds = new Set<string>();
+  for (const r of journalAccountIds) referencedIds.add(r.accountId);
+  for (const r of docAccountIds) referencedIds.add(r.accountId);
+  for (const r of budgetAccountIds) referencedIds.add(r.accountId);
+  for (const r of bankAccountIds) referencedIds.add(r.accountId);
+  for (const r of itemAccountIds) { if (r.incomeAccountId) referencedIds.add(r.incomeAccountId); if (r.expenseAccountId) referencedIds.add(r.expenseAccountId); }
+  for (const r of taxComponentAccountIds) { if (r.liabilityAccountId) referencedIds.add(r.liabilityAccountId); if (r.recoverableAccountId) referencedIds.add(r.recoverableAccountId); }
+  for (const r of parentAccountIds) { if (r.parentId) referencedIds.add(r.parentId); }
+
   const grouped = ACCOUNT_TYPES.map((type) => ({
     type,
     accounts: accounts.filter((a) => a.type === type),
@@ -65,7 +103,12 @@ export default async function ChartOfAccountsPage({ searchParams }: PageProps<"/
         title="Chart of accounts"
         breadcrumb={[{ label: "Accounting" }, { label: "Chart of accounts" }]}
         description="Canadian service-business starter chart. Control accounts marked as system accounts are written to by the posting engine and cannot be deleted."
-        actions={<ExportCsvButton report="chart-of-accounts" />}
+        actions={
+          <>
+            <ExportCsvButton report="chart-of-accounts" />
+            <NewAccountButton />
+          </>
+        }
       />
 
       <FilterBar
@@ -94,6 +137,7 @@ export default async function ChartOfAccountsPage({ searchParams }: PageProps<"/
                   <Th width="12rem">Classification</Th>
                   <Th width="6rem" align="right">Entries</Th>
                   <Th width="9rem" align="right">Balance</Th>
+                  {canReclassify && <Th width="10rem" align="right">{""}</Th>}
                 </tr>
               </thead>
               <tbody>
@@ -133,6 +177,23 @@ export default async function ChartOfAccountsPage({ searchParams }: PageProps<"/
                       </Td>
                       <Td align="right" className="tnum text-muted-ink">{stats?.count ?? 0}</Td>
                       <Td align="right"><Money cents={balance} bold={balance !== 0} blankZero /></Td>
+                      {canReclassify && (
+                        <Td align="right">
+                          <AccountRowActions
+                            account={{
+                              id: account.id,
+                              code: account.code,
+                              name: account.name,
+                              type: account.type as AccountType,
+                              subtype: account.subtype,
+                              description: account.description ?? "",
+                              isActive: account.isActive,
+                              isSystem: account.isSystem,
+                            }}
+                            referenced={referencedIds.has(account.id)}
+                          />
+                        </Td>
+                      )}
                     </Tr>
                   );
                 })}
