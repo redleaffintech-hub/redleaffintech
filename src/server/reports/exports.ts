@@ -14,6 +14,7 @@ import {
 import { NORMAL_BALANCE, type AccountType } from "@/lib/enums";
 import { CAPABILITIES, type Capability } from "@/lib/permissions";
 import { isoDate, toUtcDay, today, fiscalYearOf, fiscalYearRange } from "@/lib/dates";
+import { resolveFiscalYearRange } from "@/server/accounting/fiscal-calendar";
 import {
   balanceSheet,
   cashFlow,
@@ -89,7 +90,7 @@ const money = (label: string, ctx: ExportContext) => moneyHeader(label, ctx.curr
  * `periods` how many columns back from it, defaulting to the current year and
  * three before it. Clamped to four, which is what fits a printed page.
  */
-function incomeStatementPeriods(ctx: ExportContext) {
+async function incomeStatementPeriods(ctx: ExportContext) {
   const currentFy = fiscalYearOf(today(), ctx.fiscalYearStartMonth);
   const requestedEnd = Number(ctx.params.get("end") ?? "");
   const endYear =
@@ -101,7 +102,8 @@ function incomeStatementPeriods(ctx: ExportContext) {
   const periods: ReportPeriod[] = [];
   for (let offset = count - 1; offset >= 0; offset--) {
     const year = endYear - offset;
-    const range = fiscalYearRange(year, ctx.fiscalYearStartMonth);
+    // Same source of truth as the screen: stored periods first.
+    const range = await resolveFiscalYearRange(ctx.companyId, year, ctx.fiscalYearStartMonth);
     const to = year === currentFy && range.end > today() ? today() : range.end;
     const month = new Intl.DateTimeFormat("en-CA", { month: "short", timeZone: "UTC" }).format(range.end);
     periods.push({
@@ -163,7 +165,7 @@ const trialBalanceExport: ExportDefinition = {
 const incomeStatementExport: ExportDefinition = {
   capability: CAPABILITIES.REPORTS,
   build: async (ctx) => {
-    const { periods, endYear, count } = incomeStatementPeriods(ctx);
+    const { periods, endYear, count } = await incomeStatementPeriods(ctx);
     const statement = await incomeStatement(ctx.companyId, periods, ctx.currency);
 
     /**

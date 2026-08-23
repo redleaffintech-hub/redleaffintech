@@ -3,11 +3,12 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { addDays } from "@/lib/dates";
+import { addDays, isoDate } from "@/lib/dates";
+import { applyFiscalYearChange, planFiscalYearChange } from "@/server/accounting/fiscal-calendar";
 import { normalizeCurrency } from "@/lib/currency";
 import { COMPANY_ROLES, PROVINCES } from "@/lib/enums";
 import { CAPABILITIES } from "@/lib/permissions";
-import { PLAN_SEATS } from "@/lib/plans";
+import { assignmentFromPlan, sellablePlanByCode } from "@/server/plans/catalogue";
 import { hashPassword } from "@/server/auth/password";
 import { recordAudit, requireCapability } from "@/server/auth/context";
 
@@ -76,17 +77,11 @@ export async function saveCompanyProfileAction(formData: FormData) {
     }
   }
 
-  // The fiscal year start defines every period boundary. Once anything has been
-  // posted, moving it would silently re-file historical entries into the wrong
-  // year, so it becomes read-only rather than being quietly re-applied.
-  if (input.fiscalYearStartMonth !== company.fiscalYearStartMonth) {
-    const posted = await db.journalEntry.count({ where: { companyId: company.id } });
-    if (posted > 0) {
-      return {
-        error: `The fiscal year start cannot change once ${posted} entries have been posted. Start a new company file instead.`,
-      };
-    }
-  }
+  // The fiscal year start is NOT saved here. It defines every period boundary,
+  // so it moves through `changeFiscalYearStartAction`, which plans the change,
+  // creates the periods and records why — all in one transaction. Saving the
+  // rest of the profile must never move it as a side effect.
+  const fiscalYearStartChanged = input.fiscalYearStartMonth !== company.fiscalYearStartMonth;
 
   await db.company.update({
     where: { id: company.id },
@@ -105,7 +100,6 @@ export async function saveCompanyProfileAction(formData: FormData) {
       phone: input.phone || null,
       email: input.email || null,
       website: input.website || null,
-      fiscalYearStartMonth: input.fiscalYearStartMonth,
       defaultPaymentTermsDays: input.defaultPaymentTermsDays,
       defaultTaxInclusive: input.defaultTaxInclusive === "on",
       invoiceFooter: input.invoiceFooter || null,
@@ -128,7 +122,153 @@ export async function saveCompanyProfileAction(formData: FormData) {
 
   revalidatePath("/company");
   revalidatePath("/", "layout");
-  return { ok: true };
+  return { ok: true, fiscalYearStartIgnored: fiscalYearStartChanged };
+}
+
+// ── Fiscal calendar ─────────────────────────────────────────────────────────
+
+const fiscalChangeSchema = z.object({
+  fiscalYearStartMonth: z.coerce.number().int().min(1).max(12),
+  /** Calendar year the new basis begins in. Absent means "earliest safe". */
+  effectiveYear: z.coerce.number().int().min(1900).max(2200).optional(),
+  reason: z.string().trim().max(500).optional(),
+  confirm: z.string().optional(),
+});
+
+/**
+ * What a proposed fiscal-year change would do.
+ *
+ * Read-only, and scoped to the caller's own company — the company id is never
+ * accepted from the browser. The form calls this to fill the confirmation
+ * dialog before anything is written.
+ */
+export async function previewFiscalYearChangeAction(month: number, effectiveYear?: number) {
+  const { company } = await requireCapability(CAPABILITIES.COMPANY_SETTINGS);
+  if (!Number.isInteger(month) || month < 1 || month > 12) {
+    return { error: "Choose a month between January and December." };
+  }
+  const plan = await planFiscalYearChange(company.id, month, effectiveYear);
+  return {
+    ok: true as const,
+    plan: {
+      currentStartMonth: plan.currentStartMonth,
+      newStartMonth: plan.newStartMonth,
+      postedEntries: plan.postedEntries,
+      existingPeriods: plan.existingPeriods,
+      closedOrLockedPeriods: plan.closedOrLockedPeriods,
+      effectiveDate: isoDate(plan.effectiveDate),
+      effectiveFiscalYear: plan.effectiveFiscalYear,
+      immediate: plan.immediate,
+      transition: plan.transition
+        ? {
+            start: isoDate(plan.transition.start),
+            end: isoDate(plan.transition.end),
+            months: plan.transition.months,
+          }
+        : null,
+      firstNewYear: {
+        fiscalYear: plan.firstNewYear.fiscalYear,
+        start: isoDate(plan.firstNewYear.start),
+        end: isoDate(plan.firstNewYear.end),
+      },
+      blockers: plan.blockers,
+    },
+  };
+}
+
+/**
+ * Move the fiscal year start.
+ *
+ * Prospective by construction: existing periods keep their dates, posted
+ * entries keep their periods, and closed or locked periods are never touched.
+ * The company row, the new periods and the audit record are written in one
+ * transaction, so a partial calendar cannot survive a failure.
+ */
+export async function changeFiscalYearStartAction(formData: FormData) {
+  const { company, user } = await requireCapability(CAPABILITIES.COMPANY_SETTINGS);
+  const parsed = fiscalChangeSchema.safeParse(Object.fromEntries(formData));
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? "Check the fiscal year details and try again." };
+  }
+  const input = parsed.data;
+
+  if (input.fiscalYearStartMonth === company.fiscalYearStartMonth) {
+    return { error: "That is already the fiscal year start." };
+  }
+  if (input.confirm !== "on") {
+    return { error: "Confirm the change before saving." };
+  }
+
+  const plan = await planFiscalYearChange(company.id, input.fiscalYearStartMonth, input.effectiveYear);
+  if (plan.blockers.length > 0) return { error: plan.blockers[0] };
+
+  // A reason is evidence, and it is only meaningful once there is history to
+  // explain. A file with nothing posted is still being set up.
+  if (plan.postedEntries > 0 && !input.reason) {
+    return { error: "Give a reason for the change — it is written to the audit log." };
+  }
+
+  try {
+    const result = await db.$transaction(async (tx) => {
+      // Re-read inside the transaction: another change may have landed between
+      // the preview and the save.
+      const fresh = await tx.company.findUniqueOrThrow({
+        where: { id: company.id },
+        select: { fiscalYearStartMonth: true },
+      });
+      if (fresh.fiscalYearStartMonth !== plan.currentStartMonth) {
+        throw new Error("The fiscal year start changed while you were confirming. Reload and try again.");
+      }
+      return applyFiscalYearChange(
+        tx,
+        {
+          companyId: company.id,
+          userId: user.id,
+          newStartMonth: input.fiscalYearStartMonth,
+          effectiveYear: input.effectiveYear,
+          reason: input.reason,
+        },
+        plan,
+      );
+    });
+
+    const monthName = (m: number) =>
+      new Intl.DateTimeFormat("en-CA", { month: "long", timeZone: "UTC" }).format(new Date(Date.UTC(2000, m - 1, 1)));
+
+    await recordAudit({
+      companyId: company.id,
+      userId: user.id,
+      action: "UPDATE",
+      entityType: "Company",
+      entityId: company.id,
+      summary:
+        `Fiscal year start changed from ${monthName(plan.currentStartMonth)} to ${monthName(plan.newStartMonth)}, ` +
+        `effective FY${plan.effectiveFiscalYear} (${isoDate(plan.effectiveDate)}). ` +
+        `${result.periodsCreated} period(s) created` +
+        (result.periodsRemoved ? `, ${result.periodsRemoved} unused period(s) replaced` : "") +
+        (plan.transition ? `, transition ${isoDate(plan.transition.start)} to ${isoDate(plan.transition.end)}` : "") +
+        `. ${plan.postedEntries} posted entr${plan.postedEntries === 1 ? "y" : "ies"} left untouched` +
+        (input.reason ? `. Reason: ${input.reason}` : ""),
+    });
+
+    revalidatePath("/company");
+    revalidatePath("/accounting/periods");
+    revalidatePath("/", "layout");
+
+    return {
+      ok: true as const,
+      message:
+        `Fiscal year now starts in ${monthName(plan.newStartMonth)}, effective ` +
+        `${isoDate(plan.effectiveDate)} (FY${plan.effectiveFiscalYear}). ` +
+        (plan.transition
+          ? `A ${plan.transition.months}-month transition covers ${isoDate(plan.transition.start)} to ${isoDate(plan.transition.end)}. `
+          : "No transition period was needed. ") +
+        `${result.periodsCreated} fiscal period(s) created; existing periods and posted entries are unchanged.`,
+    };
+  } catch (error) {
+    // The transaction rolled back, so nothing was partially applied.
+    return { error: (error as Error).message };
+  }
 }
 
 const numberingSchema = z.object({
@@ -338,27 +478,58 @@ export async function removeMembershipAction(membershipId: string) {
 
 export async function changePlanAction(plan: string) {
   const { company, user } = await requireCapability(CAPABILITIES.SUBSCRIPTION);
-  const seats = PLAN_SEATS[plan];
-  if (!seats) return { error: "That is not a plan we offer." };
+
+  // The plan, its seat allowance and its price all come from the published
+  // catalogue — the single source both this screen and the public pricing page
+  // read, so a customer can never be moved onto terms that were never offered.
+  const catalogue = await sellablePlanByCode(plan);
+  if (!catalogue) return { error: "That is not a plan we offer." };
+
+  const existing = await db.subscription.findUnique({ where: { companyId: company.id } });
+
+  // A negotiated seat allowance set by Red Leaf support outranks the plan's, and
+  // a self-serve plan change must not quietly take those extra seats away.
+  const seats =
+    existing?.seatsOverridden && existing.seats > catalogue.seats ? existing.seats : catalogue.seats;
 
   const inUse = await db.companyUser.count({
     where: { companyId: company.id, status: { in: ["ACTIVE", "INVITED"] } },
   });
   if (inUse > seats) {
-    return { error: `${inUse} people have access — the ${plan.toLowerCase()} plan only includes ${seats} seats.` };
+    return { error: `${inUse} people have access — the ${catalogue.name} plan only includes ${seats} seats.` };
   }
 
-  const existing = await db.subscription.findUnique({ where: { companyId: company.id } });
+  // Keep whatever cycle they are already on; changing plan is not a decision to
+  // change how often they are billed.
+  const assignment = assignmentFromPlan(catalogue, (existing?.billingCycle as never) ?? "MONTHLY");
+
   await db.subscription.upsert({
     where: { companyId: company.id },
     create: {
       companyId: company.id,
-      plan,
+      plan: assignment.planCode,
+      planId: assignment.planId,
+      planVersionId: assignment.planVersionId,
+      billingCycle: assignment.billingCycle,
+      currency: assignment.currency,
+      priceCents: assignment.priceCents,
+      monthlyEquivalentCents: assignment.monthlyEquivalentCents,
       seats,
       status: "TRIALING",
+      trialStartsAt: new Date(),
       trialEndsAt: addDays(new Date(), 30),
     },
-    update: { plan, seats },
+    update: {
+      plan: assignment.planCode,
+      planId: assignment.planId,
+      // The snapshot moves with the plan: this *is* a new agreement, made now,
+      // at the price currently published.
+      planVersionId: assignment.planVersionId,
+      currency: assignment.currency,
+      priceCents: assignment.priceCents,
+      monthlyEquivalentCents: assignment.monthlyEquivalentCents,
+      seats,
+    },
   });
 
   await recordAudit({
@@ -367,7 +538,7 @@ export async function changePlanAction(plan: string) {
     action: "UPDATE",
     entityType: "Subscription",
     entityId: company.id,
-    summary: `Plan changed from ${existing?.plan ?? "none"} to ${plan}`,
+    summary: `Plan changed from ${existing?.plan ?? "none"} to ${assignment.planCode}`,
   });
 
   revalidatePath("/company/subscription");

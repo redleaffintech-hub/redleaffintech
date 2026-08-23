@@ -7,11 +7,7 @@ import { Button, Card, CardHeader, Field, inputClass } from "@/components/ui";
 import type { CurrencyOption } from "@/lib/currency";
 import { PROVINCES } from "@/lib/enums";
 import { saveCompanyProfileAction, saveNumberingAction } from "./actions";
-
-const MONTHS = Array.from({ length: 12 }, (_, index) => ({
-  value: index + 1,
-  label: new Intl.DateTimeFormat("en-CA", { month: "long", timeZone: "UTC" }).format(new Date(Date.UTC(2000, index, 1))),
-}));
+import { FiscalYearField } from "./fiscal-year-field";
 
 interface CompanyProfile {
   name: string;
@@ -37,12 +33,10 @@ interface CompanyProfile {
 export function CompanyProfileForm({
   company,
   currencies,
-  fiscalYearLocked,
   postedEntries,
 }: {
   company: CompanyProfile;
   currencies: CurrencyOption[];
-  fiscalYearLocked: boolean;
   postedEntries: number;
 }) {
   const router = useRouter();
@@ -125,6 +119,10 @@ export function CompanyProfileForm({
           </Field>
         </div>
 
+        {/* The month is owned by FiscalYearField; the profile action ignores
+            it but still validates its presence. */}
+        <input type="hidden" name="fiscalYearStartMonth" value={company.fiscalYearStartMonth} />
+
         <div className="grid gap-3 border-t border-paper-200 pt-4 sm:grid-cols-3">
           <Field
             label="Base currency"
@@ -143,27 +141,14 @@ export function CompanyProfileForm({
             </select>
           </Field>
 
-          <Field
-            label="Fiscal year starts"
-            hint={
-              fiscalYearLocked
-                ? `Locked — ${postedEntries.toLocaleString("en-CA")} entries are already posted against these periods.`
-                : "Sets every period boundary and the year-end date."
-            }
-          >
-            <select
-              name="fiscalYearStartMonth"
-              defaultValue={String(company.fiscalYearStartMonth)}
-              disabled={fiscalYearLocked}
-              className={clsx(inputClass, "pr-8", fiscalYearLocked && "cursor-not-allowed bg-paper-100 text-muted-ink")}
-            >
-              {MONTHS.map((month) => (
-                <option key={month.value} value={month.value}>{month.label}</option>
-              ))}
-            </select>
-          </Field>
-          {/* A disabled select submits nothing; keep the value in the payload. */}
-          {fiscalYearLocked && <input type="hidden" name="fiscalYearStartMonth" value={company.fiscalYearStartMonth} />}
+          {/* Editable, but through its own confirmed workflow rather than as a
+              field on this form — moving it rewrites period boundaries, so it
+              must not ride along with a name or address edit. */}
+          <FiscalYearField
+            key={company.fiscalYearStartMonth}
+            currentMonth={company.fiscalYearStartMonth}
+            postedEntries={postedEntries}
+          />
 
           <Field label="Default payment terms" hint="Days until an invoice is due.">
             <input

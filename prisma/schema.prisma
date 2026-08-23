@@ -168,6 +168,7 @@ model Company {
   taxCodes         TaxCode[]
   taxPeriods       TaxPeriod[]
   fiscalPeriods    FiscalPeriod[]
+  fiscalCalendarChanges FiscalCalendarChange[]
   customers        Customer[]
   vendors          Vendor[]
   items            ServiceItem[]
@@ -447,6 +448,42 @@ model TaxEntry {
 // ─────────────────────────────────────────────────────────────────────────────
 // Fiscal periods & close (§14)
 // ─────────────────────────────────────────────────────────────────────────────
+
+/// An effective-dated change to the fiscal calendar (§14).
+///
+/// The company row carries only the CURRENT start month, which is all that new
+/// periods need. This table is what makes a change auditable and reversible in
+/// principle: it records what the calendar was, what it became, the fiscal year
+/// from which the new basis applies, and why.
+///
+/// It is deliberately append-only from the application's point of view — there
+/// is no edit or delete path in the UI — because a fiscal calendar that can be
+/// rewritten after the fact is not evidence of anything.
+model FiscalCalendarChange {
+  id                  String   @id @default(cuid())
+  companyId           String
+  previousStartMonth  Int
+  newStartMonth       Int
+  /// First fiscal year reported on the new basis.
+  effectiveFiscalYear Int
+  /// First calendar date on the new basis; everything before it keeps the old one.
+  effectiveDate       DateTime
+  /// Required once anything has been posted.
+  reason              String?
+  /// Journal entries posted at the time of the change, for context when reading back.
+  postedEntryCount    Int      @default(0)
+  /// Fiscal periods created by this change, transition months included.
+  periodsCreated      Int      @default(0)
+  /// Whether a short transition block was needed to bridge the two bases.
+  transitionStart     DateTime?
+  transitionEnd       DateTime?
+  changedById         String?
+  createdAt           DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, effectiveDate])
+}
 
 model FiscalPeriod {
   id           String    @id @default(cuid())

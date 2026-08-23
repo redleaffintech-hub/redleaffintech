@@ -1,7 +1,8 @@
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
 import { incomeStatement, type ReportPeriod } from "@/server/reports/financials";
-import { fiscalYearOf, fiscalYearRange, isoDate, today } from "@/lib/dates";
+import { fiscalYearOf, isoDate, today } from "@/lib/dates";
+import { resolveFiscalYearRange } from "@/server/accounting/fiscal-calendar";
 import { PageHeader } from "@/components/ui";
 import { PrintButton } from "@/components/filter-bar";
 import { ExportCsvButton } from "@/components/export-csv-button";
@@ -44,10 +45,16 @@ export default async function ProfitAndLossPage({
     : Math.min(MAX_PERIODS, 4);
 
   // Oldest first, so the columns read left to right like the printed statement.
+  //
+  // Boundaries come from the fiscal periods that actually exist for each year,
+  // falling back to the current setting only for years never generated. That is
+  // what keeps a historical column fixed when the company adopts a new fiscal
+  // year start for a future year — the old years were closed on the old
+  // calendar and must keep reporting on it.
   const periods: ReportPeriod[] = [];
   for (let offset = count - 1; offset >= 0; offset--) {
     const year = endYear - offset;
-    const range = fiscalYearRange(year, company.fiscalYearStartMonth);
+    const range = await resolveFiscalYearRange(company.id, year, company.fiscalYearStartMonth);
     // The current year is only complete up to today; a column running to a
     // future date would present an empty stub as a real period.
     const to = year === currentFy && range.end > today() ? today() : range.end;

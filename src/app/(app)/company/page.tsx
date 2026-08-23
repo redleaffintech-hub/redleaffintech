@@ -56,7 +56,6 @@ export default async function CompanyPage() {
                 invoiceFooter: record.invoiceFooter ?? "",
               }}
               currencies={currencyOptions(record.baseCurrency)}
-              fiscalYearLocked={postedEntries > 0}
               postedEntries={postedEntries}
             />
           ) : (
