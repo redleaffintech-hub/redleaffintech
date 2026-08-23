@@ -42,7 +42,10 @@ export async function adminLoginAction(formData: FormData): Promise<AdminLoginRe
   const parsed = schema.safeParse({
     email: formData.get("email"),
     password: formData.get("password"),
-    code: formData.get("code"),
+    // FormData.get() returns null for an absent field (the code box only
+    // renders after a first submit); z.string().optional() accepts undefined
+    // but not null, so an absent code otherwise poisons the whole parse.
+    code: formData.get("code") || undefined,
   });
   if (!parsed.success) return { error: parsed.error.issues[0].message };
 
