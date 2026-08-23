@@ -10,11 +10,11 @@ import type { Tx } from "@/lib/db";
 import { addDays, addMonths, fiscalYearRange, utcDate } from "@/lib/dates";
 import { CYCLE_MONTHS, DEFAULT_PLAN_CODE, isValidCycle, type BillingCycle } from "@/lib/plans";
 import { resolveAssignment } from "@/server/plans/catalogue";
+import { provincialTaxCodeTemplates } from "@/server/tax/regional-rates";
 import { DEFAULT_CURRENCY, normalizeCurrency } from "@/lib/currency";
 import {
+  BASE_TAX_CODES,
   CANADIAN_SERVICE_COA,
-  PROVINCIAL_TAX_CODES,
-  taxCodesForProvince,
   type TaxCodeTemplate,
 } from "./templates";
 
@@ -224,7 +224,11 @@ export async function createTaxCodeFromTemplate(
 
 export async function createTaxCodes(tx: Tx, companyId: string, province: string) {
   const byKey = await systemAccountIds(tx, companyId);
-  const templates = taxCodesForProvince(province);
+  // The provincial half comes from the platform's centrally-managed regional
+  // rates (falls back to the static table if none is configured yet); the base
+  // codes (GST-only, zero-rated, exempt, out of scope) are unchanged.
+  const provincial = await provincialTaxCodeTemplates(province);
+  const templates = [...provincial, ...BASE_TAX_CODES];
   const created = [];
   for (const [index, template] of templates.entries()) {
     // The company's own province leads the list, and is what a new document
@@ -243,7 +247,7 @@ export async function createTaxCodes(tx: Tx, companyId: string, province: string
  * so this is safe to call twice, and it never edits an existing rate (§7).
  */
 export async function createProvincialTaxCodes(tx: Tx, companyId: string, province: string) {
-  const templates = PROVINCIAL_TAX_CODES[province] ?? [];
+  const templates = await provincialTaxCodeTemplates(province);
   if (templates.length === 0) return [];
 
   const existing = await tx.taxCode.findMany({

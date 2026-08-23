@@ -494,6 +494,56 @@ model SubscriptionCompany {
   @@index([subscriptionId])
 }
 
+/// A platform-wide GST/HST/PST/QST/RST regime for one province or territory,
+/// effective-dated and managed only from /admin/regional-tax-rates.
+///
+/// This is a REFERENCE table, never posted to. A company's own TaxCode /
+/// TaxComponent rows (see prisma/schema.prisma above) remain the sole source of
+/// truth for what a specific document actually charged — those are created FROM
+/// the currently-effective row here at the moment of company provisioning or
+/// "add a provincial tax code", and from then on carry their own rateMicro
+/// forever, exactly like every other effective-dated rate already in this
+/// system. Publishing a new row here therefore changes what NEW tax codes get
+/// created; it can never rewrite an existing company's TaxCode/TaxComponent or
+/// a posted TaxEntry, both of which are untouched by every action in this model.
+///
+/// One row per province covers BOTH the federal and provincial component
+/// together, matching how a regime is actually described in practice ("as of
+/// April 2025, Nova Scotia is HST 14%") and making the overlap rule a single
+/// per-province timeline rather than two that would need reconciling.
+model RegionalTaxRate {
+  id String @id @default(cuid())
+
+  /// AB | BC | MB | NB | NL | NS | NT | NU | ON | PE | QC | SK | YT
+  province String
+
+  /// GST | HST — every region has exactly one federal component.
+  federalType      String
+  /// rate * 1_000_000, matching TaxComponent.rateMicro's convention exactly.
+  federalRateMicro Int
+
+  /// PST | QST | RST | NONE. NONE is a distinct state from a numeric 0%: it
+  /// means the province does not levy a separate provincial tax at all (every
+  /// HST province, plus AB/NT/NU/YT), not that today's rate happens to be zero.
+  provincialType      String
+  provincialRateMicro Int @default(0)
+
+  effectiveFrom DateTime
+  effectiveTo   DateTime?
+  isActive      Boolean   @default(true)
+
+  /// Informational only — no FK relation, so this table never gains a
+  /// dependency on the User model. The authoritative "who changed what and
+  /// why" record is the PlatformAuditLog entry every mutation also writes.
+  createdById String?
+  reason      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  @@index([province, effectiveFrom])
+}
+
 model FiscalCalendarChange {
   id                  String   @id @default(cuid())
   companyId           String

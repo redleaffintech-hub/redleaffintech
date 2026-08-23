@@ -33,6 +33,11 @@ export const ADMIN_NAV: AdminNavItem[] = [
   { label: "Users", href: "/admin/users", description: "People, and the companies they belong to" },
   { label: "Subscriptions", href: "/admin/subscriptions", description: "Plans, trials, seats and billing state" },
   { label: "Plans & pricing", href: "/admin/plans", description: "The catalogue the public site sells" },
+  {
+    label: "Regional tax rates",
+    href: "/admin/regional-tax-rates",
+    description: "The central GST/HST/PST/QST/RST reference every company's tax setup draws from",
+  },
   { label: "Platform admins", href: "/admin/administrators", description: "Who can reach this console" },
   { label: "Admin audit log", href: "/admin/audit", description: "Every platform action, recorded" },
   { label: "Settings", href: "/admin/settings", description: "Your own account and security" },
