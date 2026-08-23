@@ -108,6 +108,12 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    label: "Payroll",
+    module: "PAYROLL",
+    icon: "wallet",
+    items: [{ label: "Pay runs", href: "/payroll/pay-runs", capability: CAPABILITIES.PAYROLL, exact: true }],
+  },
+  {
     label: "Company",
     icon: "building",
     items: [

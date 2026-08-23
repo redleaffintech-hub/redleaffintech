@@ -172,6 +172,10 @@ model Company {
   employeePrefix     String @default("EMP-")
   nextEmployeeNumber Int    @default(1001)
 
+  // Payroll module numbering (§ numbering.ts)
+  payRunPrefix     String @default("PR-")
+  nextPayRunNumber Int    @default(1001)
+
   firm Firm? @relation(fields: [firmId], references: [id])
 
   users            CompanyUser[]
@@ -210,6 +214,9 @@ model Company {
   leaveTypes           LeaveType[]
   leaveRequests        LeaveRequest[]
   leaveBalanceAdjustments LeaveBalanceAdjustment[]
+
+  payRuns     PayRun[]
+  payRunLines PayRunLine[]
 }
 
 /// Membership + role of a user within one company (§3, §34).
@@ -1178,6 +1185,7 @@ model JournalEntry {
   payment     Payment?
   creditNote  CreditNote?
   bankTx      BankTransaction?
+  payRun      PayRun?
 
   @@unique([companyId, entryNo])
   @@index([companyId, date])
@@ -1532,6 +1540,7 @@ model Employee {
 
   leaveRequests     LeaveRequest[]
   leaveAdjustments  LeaveBalanceAdjustment[]
+  payRunLines       PayRunLine[]
 
   @@unique([companyId, employeeNumber])
   @@index([companyId, employmentStatus])
@@ -1582,6 +1591,83 @@ model LeaveRequest {
 
   @@index([companyId, employeeId])
   @@index([companyId, status])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Payroll module (pay runs only — no statutory deduction calculation; CPP, EI
+// and federal/provincial tax are entered per line, computed by the bookkeeper
+// outside this app. See src/server/payroll/pay-runs.ts.)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model PayRun {
+  id             String    @id @default(cuid())
+  companyId      String
+  number         String
+  payPeriodStart DateTime
+  payPeriodEnd   DateTime
+  payDate        DateTime
+  status         String    @default("DRAFT") // DRAFT | POSTED | VOID
+
+  /// GL account net pay is funded from — bank or credit card. Not a Prisma
+  /// relation, matching Expense.paymentAccountId: validated by hand against
+  /// the company's own accounts at every write instead of via a back-relation
+  /// array on the already-large Account model.
+  bankAccountId String
+
+  memo           String?
+  journalEntryId String?   @unique
+  createdById    String?
+  postedById     String?
+  postedAt       DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  company      Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  journalEntry JournalEntry? @relation(fields: [journalEntryId], references: [id])
+  lines        PayRunLine[]
+
+  @@unique([companyId, number])
+  @@index([companyId, status])
+  @@index([companyId, payDate])
+}
+
+/// One employee's pay stub within a PayRun. CPP/EI/federal/provincial tax are
+/// entered by the bookkeeper (from CRA's PDOC tool, a payroll service, or their
+/// accountant) — this app calculates net pay from what is entered, it does not
+/// calculate the statutory deductions themselves.
+model PayRunLine {
+  id            String @id @default(cuid())
+  payRunId      String
+  companyId     String
+  employeeId    String
+  regularHours  Float?
+  overtimeHours Float?
+  grossPayCents Int
+
+  cppCents             Int     @default(0)
+  eiCents              Int     @default(0)
+  federalTaxCents      Int     @default(0)
+  provincialTaxCents   Int     @default(0)
+  otherDeductionsCents Int     @default(0)
+  otherDeductionsNote  String?
+
+  /// Employer-side CPP/EI contributions — not deducted from the employee, but
+  /// owed to CRA alongside the withheld amounts, so they post to the same
+  /// payroll liability account as an employer expense.
+  employerCppCents Int @default(0)
+  employerEiCents  Int @default(0)
+
+  /// grossPayCents minus every *Cents deduction above. Always recomputed
+  /// server-side on save — never trusted from the client.
+  netPayCents Int     @default(0)
+  notes       String?
+
+  payRun   PayRun   @relation(fields: [payRunId], references: [id], onDelete: Cascade)
+  company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee Employee @relation(fields: [employeeId], references: [id])
+
+  @@unique([payRunId, employeeId])
+  @@index([companyId, employeeId])
 }
 
 /// A signed entry in an employee's leave ledger: a positive grant/carryover or a

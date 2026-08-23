@@ -25,6 +25,7 @@ export const CAPABILITIES = {
   AUDIT: "audit",
   SUBSCRIPTION: "subscription",
   HR: "hr.employees",
+  PAYROLL: "payroll.runs",
 } as const;
 
 export type Capability = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];
@@ -43,28 +44,28 @@ const MATRIX: Record<CompanyRole, Record<Capability, AccessLevel>> = {
     "sales.invoices": "FULL", "purchases.bills": "FULL", expenses: "FULL",
     payments: "FULL", "accounting.journals": "FULL", "accounting.period_close": "FULL",
     "tax.settings": "FULL", "tax.filing": "FULL", banking: "FULL",
-    reports: "FULL", audit: "FULL", subscription: "FULL", "hr.employees": "FULL",
+    reports: "FULL", audit: "FULL", subscription: "FULL", "hr.employees": "FULL", "payroll.runs": "FULL",
   },
   SECONDARY: {
     "company.settings": "VIEW", "company.users": "NONE", "accounting.coa": "VIEW",
     "sales.invoices": "FULL", "purchases.bills": "FULL", expenses: "FULL",
     payments: "FULL", "accounting.journals": "VIEW", "accounting.period_close": "NONE",
     "tax.settings": "VIEW", "tax.filing": "VIEW", banking: "FULL",
-    reports: "FULL", audit: "VIEW", subscription: "NONE", "hr.employees": "FULL",
+    reports: "FULL", audit: "VIEW", subscription: "NONE", "hr.employees": "FULL", "payroll.runs": "NONE",
   },
   REVIEWER: {
     "company.settings": "VIEW", "company.users": "NONE", "accounting.coa": "VIEW",
     "sales.invoices": "REVIEW", "purchases.bills": "REVIEW", expenses: "REVIEW",
     payments: "REVIEW", "accounting.journals": "REVIEW", "accounting.period_close": "REVIEW",
     "tax.settings": "VIEW", "tax.filing": "VIEW", banking: "VIEW",
-    reports: "FULL", audit: "VIEW", subscription: "NONE", "hr.employees": "VIEW",
+    reports: "FULL", audit: "VIEW", subscription: "NONE", "hr.employees": "VIEW", "payroll.runs": "VIEW",
   },
   ACCOUNTANT: {
     "company.settings": "VIEW", "company.users": "NONE", "accounting.coa": "FULL",
     "sales.invoices": "FULL", "purchases.bills": "FULL", expenses: "FULL",
     payments: "FULL", "accounting.journals": "FULL", "accounting.period_close": "FULL",
     "tax.settings": "FULL", "tax.filing": "FULL", banking: "FULL",
-    reports: "FULL", audit: "FULL", subscription: "NONE", "hr.employees": "VIEW",
+    reports: "FULL", audit: "FULL", subscription: "NONE", "hr.employees": "VIEW", "payroll.runs": "FULL",
   },
 };
 

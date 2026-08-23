@@ -1,6 +1,6 @@
 import type { Tx } from "@/lib/db";
 
-type Sequence = "invoice" | "estimate" | "bill" | "credit" | "payment" | "expense" | "employee";
+type Sequence = "invoice" | "estimate" | "bill" | "credit" | "payment" | "expense" | "employee" | "payrun";
 
 const FIELDS: Record<Sequence, { prefix: keyof PrefixShape; next: keyof NextShape }> = {
   invoice: { prefix: "invoicePrefix", next: "nextInvoiceNumber" },
@@ -10,15 +10,18 @@ const FIELDS: Record<Sequence, { prefix: keyof PrefixShape; next: keyof NextShap
   payment: { prefix: "paymentPrefix", next: "nextPaymentNumber" },
   expense: { prefix: "expensePrefix", next: "nextExpenseNumber" },
   employee: { prefix: "employeePrefix", next: "nextEmployeeNumber" },
+  payrun: { prefix: "payRunPrefix", next: "nextPayRunNumber" },
 };
 
 interface PrefixShape {
   invoicePrefix: string; estimatePrefix: string; billPrefix: string;
   creditPrefix: string; paymentPrefix: string; expensePrefix: string; employeePrefix: string;
+  payRunPrefix: string;
 }
 interface NextShape {
   nextInvoiceNumber: number; nextEstimateNumber: number; nextBillNumber: number;
   nextCreditNumber: number; nextPaymentNumber: number; nextExpenseNumber: number; nextEmployeeNumber: number;
+  nextPayRunNumber: number;
 }
 
 /**

@@ -70,9 +70,9 @@ export const MODULE_CATALOG: ModuleInfo[] = [
   {
     id: "PAYROLL",
     name: "Red Leaf Payroll",
-    blurb: "Pay runs, source deductions, T4s and ROEs, posting straight to the ledger.",
+    blurb: "Pay runs posting straight to the ledger. CPP, EI and tax withholding are entered per run, not calculated — T4s and ROEs are not yet supported.",
     icon: "wallet",
-    available: false,
+    available: true,
   },
   {
     id: "HR",
