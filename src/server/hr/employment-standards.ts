@@ -85,25 +85,28 @@ export function completedYears(from: Date, to: Date): number {
 interface VacationTier {
   minYears: number;
   weeks: number;
-  /** rate * 1_000_000, matching this app's rateMicro convention everywhere else. */
+  /**
+   * percent * 10_000, matching this app's rateMicro convention everywhere
+   * else (e.g. RegionalTaxRate.federalRateMicro: 5% -> 50_000).
+   */
   percentMicro: number;
 }
 
 /** Tiers listed ascending by minYears; the highest tier the employee has reached applies. */
 const VACATION_TIERS: Record<string, VacationTier[]> = {
-  AB: [{ minYears: 0, weeks: 2, percentMicro: 4_000_000 }, { minYears: 5, weeks: 3, percentMicro: 6_000_000 }],
-  BC: [{ minYears: 0, weeks: 2, percentMicro: 4_000_000 }, { minYears: 5, weeks: 3, percentMicro: 6_000_000 }],
-  MB: [{ minYears: 0, weeks: 2, percentMicro: 4_000_000 }, { minYears: 5, weeks: 3, percentMicro: 6_000_000 }],
-  NB: [{ minYears: 0, weeks: 2, percentMicro: 4_000_000 }, { minYears: 8, weeks: 3, percentMicro: 6_000_000 }],
-  NL: [{ minYears: 0, weeks: 2, percentMicro: 4_000_000 }, { minYears: 15, weeks: 3, percentMicro: 6_000_000 }],
-  NS: [{ minYears: 0, weeks: 2, percentMicro: 4_000_000 }, { minYears: 8, weeks: 3, percentMicro: 6_000_000 }],
-  NT: [{ minYears: 0, weeks: 2, percentMicro: 4_000_000 }, { minYears: 5, weeks: 3, percentMicro: 6_000_000 }],
-  NU: [{ minYears: 0, weeks: 2, percentMicro: 4_000_000 }, { minYears: 5, weeks: 3, percentMicro: 6_000_000 }],
-  ON: [{ minYears: 0, weeks: 2, percentMicro: 4_000_000 }, { minYears: 5, weeks: 3, percentMicro: 6_000_000 }],
-  PE: [{ minYears: 0, weeks: 2, percentMicro: 4_000_000 }, { minYears: 8, weeks: 3, percentMicro: 6_000_000 }],
-  QC: [{ minYears: 0, weeks: 2, percentMicro: 4_000_000 }, { minYears: 3, weeks: 3, percentMicro: 6_000_000 }],
-  SK: [{ minYears: 0, weeks: 3, percentMicro: 6_000_000 }, { minYears: 10, weeks: 4, percentMicro: 8_000_000 }],
-  YT: [{ minYears: 0, weeks: 2, percentMicro: 4_000_000 }],
+  AB: [{ minYears: 0, weeks: 2, percentMicro: 40_000 }, { minYears: 5, weeks: 3, percentMicro: 60_000 }],
+  BC: [{ minYears: 0, weeks: 2, percentMicro: 40_000 }, { minYears: 5, weeks: 3, percentMicro: 60_000 }],
+  MB: [{ minYears: 0, weeks: 2, percentMicro: 40_000 }, { minYears: 5, weeks: 3, percentMicro: 60_000 }],
+  NB: [{ minYears: 0, weeks: 2, percentMicro: 40_000 }, { minYears: 8, weeks: 3, percentMicro: 60_000 }],
+  NL: [{ minYears: 0, weeks: 2, percentMicro: 40_000 }, { minYears: 15, weeks: 3, percentMicro: 60_000 }],
+  NS: [{ minYears: 0, weeks: 2, percentMicro: 40_000 }, { minYears: 8, weeks: 3, percentMicro: 60_000 }],
+  NT: [{ minYears: 0, weeks: 2, percentMicro: 40_000 }, { minYears: 5, weeks: 3, percentMicro: 60_000 }],
+  NU: [{ minYears: 0, weeks: 2, percentMicro: 40_000 }, { minYears: 5, weeks: 3, percentMicro: 60_000 }],
+  ON: [{ minYears: 0, weeks: 2, percentMicro: 40_000 }, { minYears: 5, weeks: 3, percentMicro: 60_000 }],
+  PE: [{ minYears: 0, weeks: 2, percentMicro: 40_000 }, { minYears: 8, weeks: 3, percentMicro: 60_000 }],
+  QC: [{ minYears: 0, weeks: 2, percentMicro: 40_000 }, { minYears: 3, weeks: 3, percentMicro: 60_000 }],
+  SK: [{ minYears: 0, weeks: 3, percentMicro: 60_000 }, { minYears: 10, weeks: 4, percentMicro: 80_000 }],
+  YT: [{ minYears: 0, weeks: 2, percentMicro: 40_000 }],
 };
 
 export interface VacationEntitlement {
