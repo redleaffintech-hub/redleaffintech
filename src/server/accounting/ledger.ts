@@ -28,6 +28,7 @@ export class PostingError extends Error {
       | "PERIOD_CLOSED"
       | "NO_PERIOD"
       | "IMMUTABLE"
+      | "READ_ONLY"
       | "ALREADY_REVERSED",
   ) {
     super(message);
@@ -122,6 +123,23 @@ async function nextEntryNo(tx: Tx, companyId: string): Promise<string> {
  */
 export async function postJournal(tx: Tx, input: PostJournalInput) {
   const { companyId, date, lines } = input;
+
+  // A read-only company file accepts no new postings. This is the chokepoint
+  // every financial mutation passes through — invoices, bills, expenses,
+  // payments, journals and reversals all end up here — so enforcing it once is
+  // what makes a suspended, cancelled or lapsed subscription actually mean
+  // something. Reading, reporting and exporting are untouched: the books stay
+  // the customer's, whatever the state of their account.
+  const owner = await tx.company.findUnique({
+    where: { id: companyId },
+    select: { isReadOnly: true },
+  });
+  if (owner?.isReadOnly) {
+    throw new PostingError(
+      "This company file is read-only. Its books remain readable and exportable, but no new entries can be posted.",
+      "READ_ONLY",
+    );
+  }
 
   if (!lines || lines.length < 2) {
     throw new PostingError("A journal entry needs at least two lines.", "NO_LINES");

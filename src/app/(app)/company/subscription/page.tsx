@@ -3,28 +3,27 @@ import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
 import { daysBetween, formatDate, today } from "@/lib/dates";
 import { Badge, Callout, Card, CardHeader, PageHeader, StatusBadge } from "@/components/ui";
-import { PLANS } from "@/lib/plans";
+import { CYCLE_BILLED_AS, monthlyEquivalentCents, type BillingCycle } from "@/lib/plans";
+import { formatMoney } from "@/lib/money";
+import { sellablePlans } from "@/server/plans/catalogue";
+import { SUBSCRIPTION_STATUS_LABELS } from "@/lib/subscriptions";
 import { PlanPicker } from "./plan-picker";
 
 export const metadata = { title: "Subscription" };
 
 
-const STATUS_LABELS: Record<string, string> = {
-  TRIALING: "Trialing",
-  ACTIVE: "Active",
-  PAST_DUE: "Past due",
-  SUSPENDED: "Suspended",
-};
-
 export default async function SubscriptionPage() {
   const { company } = await requireCapability(CAPABILITIES.SUBSCRIPTION);
 
-  const [subscription, seatsUsed] = await Promise.all([
+  // The same published catalogue the marketing site quotes from, so a customer
+  // is never offered a plan or a price the public page does not show.
+  const [subscription, seatsUsed, plans] = await Promise.all([
     db.subscription.findUnique({ where: { companyId: company.id } }),
     db.companyUser.count({ where: { companyId: company.id, status: { in: ["ACTIVE", "INVITED"] } } }),
+    sellablePlans(),
   ]);
 
-  const current = PLANS.find((plan) => plan.id === subscription?.plan);
+  const current = plans.find((plan) => plan.code === subscription?.plan);
   const trialDaysLeft = subscription?.trialEndsAt ? daysBetween(today(), subscription.trialEndsAt) : null;
 
   return (
@@ -52,21 +51,21 @@ export default async function SubscriptionPage() {
         <Card className="p-5">
           <CardHeader title="Plans" subtitle="Change takes effect immediately; billing is not wired up in this build" />
           <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            {PLANS.map((plan) => (
+            {plans.map((plan) => (
               <div
                 key={plan.id}
                 className={
-                  plan.id === subscription?.plan
+                  plan.code === subscription?.plan
                     ? "rounded-lg border-2 border-brand-500 bg-brand-soft p-4"
                     : "rounded-lg border border-paper-300 p-4"
                 }
               >
                 <div className="flex items-baseline justify-between gap-2">
                   <h3 className="text-[0.9375rem] font-semibold text-ink-900">{plan.name}</h3>
-                  {plan.id === subscription?.plan && <Badge tone="accent">current</Badge>}
+                  {plan.code === subscription?.plan && <Badge tone="accent">current</Badge>}
                 </div>
                 <p className="tnum mt-1 text-[1.25rem] font-semibold text-ink-950">
-                  ${(plan.monthlyEquivalentCents.MONTHLY / 100).toFixed(0)}
+                  ${(monthlyEquivalentCents(plan, "MONTHLY") / 100).toFixed(0)}
                   <span className="text-[0.75rem] font-normal text-muted-ink"> /month</span>
                 </p>
                 <p className="mt-1 text-[0.75rem] leading-5 text-muted-ink">{plan.forWhom}</p>
@@ -78,10 +77,10 @@ export default async function SubscriptionPage() {
                 </ul>
                 <div className="mt-3">
                   <PlanPicker
-                    plan={plan.id}
+                    plan={plan.code}
                     planName={plan.name}
                     seats={plan.seats}
-                    isCurrent={plan.id === subscription?.plan}
+                    isCurrent={plan.code === subscription?.plan}
                     seatsUsed={seatsUsed}
                   />
                 </div>
@@ -101,12 +100,22 @@ export default async function SubscriptionPage() {
             {subscription ? (
               <dl className="mt-3 space-y-2.5 text-[0.8125rem]">
                 <Row label="Plan" value={current?.name ?? subscription.plan} />
-                <Row label="Status" value={STATUS_LABELS[subscription.status] ?? subscription.status} />
+                <Row label="Status" value={SUBSCRIPTION_STATUS_LABELS[subscription.status as never] ?? subscription.status} />
                 <Row label="Seats" value={`${seatsUsed} of ${subscription.seats} used`} />
                 <Row label="Trial ends" value={subscription.trialEndsAt ? formatDate(subscription.trialEndsAt) : "—"} />
                 <Row
                   label="Period ends"
                   value={subscription.currentPeriodEnd ? formatDate(subscription.currentPeriodEnd) : "—"}
+                />
+                <Row
+                  label="Price"
+                  value={
+                    subscription.priceCents != null
+                      ? `${formatMoney(subscription.priceCents, { currency: subscription.currency })} ${
+                          CYCLE_BILLED_AS[subscription.billingCycle as BillingCycle] ?? ""
+                        }`
+                      : "—"
+                  }
                 />
                 <Row label="Started" value={formatDate(subscription.createdAt)} />
               </dl>

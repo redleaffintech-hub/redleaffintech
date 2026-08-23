@@ -1,18 +1,18 @@
 /**
- * The Red Leaf plan catalogue — one source of truth.
+ * The Red Leaf plan catalogue — shapes and constants only.
  *
- * The marketing pricing page, the in-app subscription screen, the server-side
- * seat check in `src/app/(app)/company/actions.ts` and company provisioning all
- * read from here, so a price or a seat count can never disagree between what a
- * visitor is quoted and what the product actually enforces.
+ * The plans themselves used to be a hard-coded `PLANS` array in this file. They
+ * now live in the database (models `Plan`, `PlanPrice`, `PlanFeature`,
+ * `PlanModule`, `PlanVersion`) and are edited in the platform-admin portal, so
+ * the price a visitor is quoted, the seat count the server enforces and the
+ * figure on a subscription can never drift apart.
  *
- * Prices are integer cents of CAD, per the money convention in `./money.ts`.
- * They are quoted PER MONTH for every billing cycle so the three cycles are
- * directly comparable; `cyclePriceCents` gives the amount actually charged.
+ * What is left here is everything that is genuinely static — the billing cycles
+ * and the product shelf — plus the `PublicPlan` shape that both the server
+ * (`src/server/plans/catalogue.ts`) and the client components consume. Nothing
+ * in this module knows a price.
  *
- * Modules name the Red Leaf products a plan unlocks. Only ACCOUNTING ships
- * today — the rest are declared so the entitlement layer has something to read
- * once those products exist.
+ * Prices are integer minor units of the plan's currency, per `./money.ts`.
  */
 
 export const BILLING_CYCLES = ["MONTHLY", "QUARTERLY", "ANNUAL"] as const;
@@ -29,6 +29,13 @@ export const CYCLE_MONTHS: Record<BillingCycle, number> = {
   MONTHLY: 1,
   QUARTERLY: 3,
   ANNUAL: 12,
+};
+
+/** "billed every 3 months" — the phrasing used wherever the real charge is shown. */
+export const CYCLE_BILLED_AS: Record<BillingCycle, string> = {
+  MONTHLY: "billed monthly",
+  QUARTERLY: "billed every 3 months",
+  ANNUAL: "billed annually",
 };
 
 export const MODULES = [
@@ -104,128 +111,103 @@ export const MODULE_CATALOG: ModuleInfo[] = [
   },
 ];
 
-export interface Plan {
-  id: string;
-  name: string;
-  /** Who the plan is for — one line, shown on the pricing card. */
-  forWhom: string;
-  /** Per-month price in cents for each billing cycle. */
-  monthlyEquivalentCents: Record<BillingCycle, number>;
-  seats: number;
-  companies: number;
-  storageGb: number;
-  modules: ModuleId[];
-  support: string;
-  includes: string[];
-  popular?: boolean;
-  /** Shown on the pricing page but not self-serve. */
-  contactOnly?: boolean;
+export const MODULE_NAMES: Record<string, string> = Object.fromEntries(
+  MODULE_CATALOG.map((module) => [module.id, module.name]),
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Plan lifecycle
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * DRAFT   — never been published; invisible everywhere but the admin portal.
+ * PUBLISHED — has a live snapshot. `isPublic` then decides whether the public
+ *             pricing page lists it; a private published plan can still be
+ *             assigned to a client by a platform administrator.
+ * ARCHIVED — withdrawn from sale. Existing subscriptions keep working, which is
+ *            why a referenced plan is archived rather than deleted.
+ */
+export const PLAN_STATUSES = ["DRAFT", "PUBLISHED", "ARCHIVED"] as const;
+export type PlanStatus = (typeof PLAN_STATUSES)[number];
+
+export const PLAN_STATUS_LABELS: Record<PlanStatus, string> = {
+  DRAFT: "Draft",
+  PUBLISHED: "Published",
+  ARCHIVED: "Archived",
+};
+
+/**
+ * The plan code a company gets when nothing else is specified. It is an
+ * identifier, not a definition — the seats and the price behind it come from
+ * the database like every other plan's.
+ */
+export const DEFAULT_PLAN_CODE = "PROFESSIONAL";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The shape everything reads
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface PlanPriceView {
+  /** What one invoice for this cycle actually charges. */
+  cycleAmountCents: number;
+  /** The comparable per-month figure the pricing page leads with. Display only. */
+  monthlyEquivalentCents: number;
 }
 
 /**
- * Prices are placeholders pending the client's numbers. Quarterly is ~8% off
- * the monthly rate and annual ~17% (two months free), which is the shape the
- * pricing toggle is meant to demonstrate.
+ * A plan as the marketing site, the in-app subscription screen and the admin
+ * assignment forms all see it. Built either from a published `PlanVersion`
+ * snapshot or, in the admin preview, from the unsaved working copy — which is
+ * exactly why the preview can be trusted to look like the real thing.
  */
-export const PLANS: Plan[] = [
-  {
-    id: "STARTER",
-    name: "Starter",
-    forWhom: "A sole proprietor or small business doing their own books.",
-    monthlyEquivalentCents: { MONTHLY: 1900, QUARTERLY: 1750, ANNUAL: 1583 },
-    seats: 2,
-    companies: 1,
-    storageGb: 5,
-    modules: ["ACCOUNTING"],
-    support: "Email support",
-    includes: [
-      "Invoicing, sales quotes and expenses",
-      "Bank import, rules and reconciliation",
-      "GST/HST return working paper",
-      "Balance sheet, P&L and cash flow",
-    ],
-  },
-  {
-    id: "PROFESSIONAL",
-    name: "Professional",
-    forWhom: "A growing incorporated business with a bookkeeper.",
-    monthlyEquivalentCents: { MONTHLY: 4900, QUARTERLY: 4500, ANNUAL: 4083 },
-    seats: 5,
-    companies: 2,
-    storageGb: 25,
-    modules: ["ACCOUNTING"],
-    support: "Email and chat support",
-    includes: [
-      "Everything in Starter",
-      "Bill approvals and period close",
-      "Budgets and the full report pack",
-      "Projects, recurring documents and credit notes",
-      "Role-based access for your team",
-    ],
-    popular: true,
-  },
-  {
-    id: "BUSINESS",
-    name: "Business",
-    forWhom: "A larger organisation running several entities.",
-    monthlyEquivalentCents: { MONTHLY: 9900, QUARTERLY: 9100, ANNUAL: 8250 },
-    seats: 15,
-    companies: 10,
-    storageGb: 100,
-    modules: ["ACCOUNTING"],
-    support: "Priority support",
-    includes: [
-      "Everything in Professional",
-      "Up to 10 companies on one subscription",
-      "Consolidated multi-entity switching",
-      "Full audit trail and export",
-      "Onboarding assistance",
-    ],
-  },
-  {
-    id: "FIRM",
-    name: "Firm",
-    forWhom: "An accounting practice carrying a portfolio of client files.",
-    monthlyEquivalentCents: { MONTHLY: 14900, QUARTERLY: 13700, ANNUAL: 12417 },
-    seats: 25,
-    companies: 50,
-    storageGb: 250,
-    modules: ["ACCOUNTING"],
-    support: "Priority support and a named contact",
-    includes: [
-      "Everything in Business",
-      "Firm workspace across every client",
-      "Close checklist and review queue",
-      "Client health dashboard",
-      "Add clients without a second login",
-    ],
-  },
-];
-
-export const DEFAULT_PLAN_ID = "PROFESSIONAL";
-
-export function planById(id: string): Plan | undefined {
-  return PLANS.find((plan) => plan.id === id);
+export interface PublicPlan {
+  /** Plan row id. Stable, but `code` is what subscriptions key off. */
+  id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  forWhom: string | null;
+  currency: string;
+  seats: number;
+  companies: number;
+  storageGb: number;
+  support: string;
+  modules: ModuleId[];
+  /** The bullet list on the card, in order. */
+  includes: string[];
+  popular: boolean;
+  contactOnly: boolean;
+  sortOrder: number;
+  prices: Record<BillingCycle, PlanPriceView>;
+  /** Which published version this shape came from. Null for an admin preview. */
+  versionId: string | null;
+  version: number | null;
 }
 
-/** Seat allowance keyed by plan id — the server-side authority. */
-export const PLAN_SEATS: Record<string, number> = Object.fromEntries(
-  PLANS.map((plan) => [plan.id, plan.seats]),
-);
-
 /** What one invoice costs for a plan on a given cycle. */
-export function cyclePriceCents(plan: Plan, cycle: BillingCycle): number {
-  return plan.monthlyEquivalentCents[cycle] * CYCLE_MONTHS[cycle];
+export function cyclePriceCents(plan: PublicPlan, cycle: BillingCycle): number {
+  return plan.prices[cycle]?.cycleAmountCents ?? 0;
+}
+
+/** The per-month figure to display for a cycle. */
+export function monthlyEquivalentCents(plan: PublicPlan, cycle: BillingCycle): number {
+  return plan.prices[cycle]?.monthlyEquivalentCents ?? 0;
 }
 
 /** Whole-percent saving against paying monthly. 0 when there is none. */
-export function cycleSavingPercent(plan: Plan, cycle: BillingCycle): number {
-  const monthly = plan.monthlyEquivalentCents.MONTHLY;
-  if (!monthly) return 0;
-  const saving = 1 - plan.monthlyEquivalentCents[cycle] / monthly;
-  return Math.round(saving * 100);
+export function cycleSavingPercent(plan: PublicPlan, cycle: BillingCycle): number {
+  const monthly = plan.prices.MONTHLY?.monthlyEquivalentCents ?? 0;
+  const target = plan.prices[cycle]?.monthlyEquivalentCents ?? 0;
+  if (!monthly || !target) return 0;
+  return Math.round((1 - target / monthly) * 100);
 }
 
 export function isValidCycle(value: string | null | undefined): value is BillingCycle {
   return !!value && (BILLING_CYCLES as readonly string[]).includes(value);
+}
+
+export function planByCode(plans: PublicPlan[], code: string | null | undefined): PublicPlan | undefined {
+  if (!code) return undefined;
+  const wanted = code.toUpperCase();
+  return plans.find((plan) => plan.code === wanted);
 }

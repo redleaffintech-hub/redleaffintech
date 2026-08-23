@@ -9,6 +9,8 @@
     "start": "next start",
     "lint": "eslint",
     "seed": "tsx prisma/seed.ts",
+    "plans:seed": "node --conditions=react-server --import tsx scripts/seed-plans.ts",
+    "admin:create": "node --conditions=react-server --import tsx scripts/create-platform-admin.ts",
     "verify": "node --conditions=react-server --import tsx scripts/verify.ts"
   },
   "dependencies": {

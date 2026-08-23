@@ -8,7 +8,8 @@
 
 import type { Tx } from "@/lib/db";
 import { addDays, addMonths, fiscalYearRange, utcDate } from "@/lib/dates";
-import { DEFAULT_PLAN_ID, PLAN_SEATS } from "@/lib/plans";
+import { CYCLE_MONTHS, DEFAULT_PLAN_CODE, isValidCycle, type BillingCycle } from "@/lib/plans";
+import { resolveAssignment } from "@/server/plans/catalogue";
 import { DEFAULT_CURRENCY, normalizeCurrency } from "@/lib/currency";
 import {
   CANADIAN_SERVICE_COA,
@@ -38,13 +39,26 @@ export interface ProvisionCompanyInput {
   /** Fiscal years to open up front. */
   fiscalYears?: number[];
   taxFilingFrequency?: "MONTHLY" | "QUARTERLY" | "ANNUAL";
-  /** Plan id from `src/lib/plans.ts`; defaults to the standard trial plan. */
+  /** Plan code from the database catalogue; defaults to the standard trial plan. */
   plan?: string;
+  /** Billing cycle to sell the plan on. Monthly unless stated. */
+  billingCycle?: string;
+  country?: string;
+  addressLine2?: string;
+  website?: string;
+  /** Days of trial. 30 unless stated; 0 means the subscription starts active. */
+  trialDays?: number;
 }
 
 export async function provisionCompany(tx: Tx, input: ProvisionCompanyInput) {
   const fiscalYearStartMonth = input.fiscalYearStartMonth ?? 1;
-  const plan = input.plan && PLAN_SEATS[input.plan] ? input.plan : DEFAULT_PLAN_ID;
+  const cycle: BillingCycle = isValidCycle(input.billingCycle) ? input.billingCycle : "MONTHLY";
+
+  // The plan, its seat allowance and its price all come from the published
+  // catalogue — the same snapshot a self-serve customer would have been quoted.
+  // A database with no published plans yet still provisions: the company is
+  // created without a subscription rather than on invented terms.
+  const assignment = await resolveAssignment(tx, input.plan ?? DEFAULT_PLAN_CODE, cycle);
 
   const company = await tx.company.create({
     data: {
@@ -62,8 +76,11 @@ export async function provisionCompany(tx: Tx, input: ProvisionCompanyInput) {
       email: input.email,
       phone: input.phone,
       addressLine1: input.addressLine1,
+      addressLine2: input.addressLine2,
       city: input.city,
       postalCode: input.postalCode,
+      website: input.website,
+      country: input.country ?? "CA",
       industry: input.industry,
       firmId: input.firmId,
     },
@@ -79,15 +96,33 @@ export async function provisionCompany(tx: Tx, input: ProvisionCompanyInput) {
   }
   await createTaxPeriods(tx, company.id, years, input.taxFilingFrequency ?? "QUARTERLY");
 
-  await tx.subscription.create({
-    data: {
-      companyId: company.id,
-      plan,
-      status: "TRIALING",
-      seats: PLAN_SEATS[plan] ?? 5,
-      trialEndsAt: addDays(new Date(), 30),
-    },
-  });
+  if (assignment) {
+    const now = new Date();
+    const trialDays = input.trialDays ?? 30;
+    const trialing = trialDays > 0;
+
+    await tx.subscription.create({
+      data: {
+        companyId: company.id,
+        plan: assignment.planCode,
+        planId: assignment.planId,
+        // The price is frozen onto the row at the moment of sale. Editing the
+        // plan's public price later must not rewrite what this client agreed to.
+        planVersionId: assignment.planVersionId,
+        billingCycle: assignment.billingCycle,
+        currency: assignment.currency,
+        priceCents: assignment.priceCents,
+        monthlyEquivalentCents: assignment.monthlyEquivalentCents,
+        seats: assignment.seats,
+        status: trialing ? "TRIALING" : "ACTIVE",
+        trialStartsAt: trialing ? now : null,
+        trialEndsAt: trialing ? addDays(now, trialDays) : null,
+        startedAt: trialing ? null : now,
+        currentPeriodStart: trialing ? null : now,
+        currentPeriodEnd: trialing ? null : addMonths(now, CYCLE_MONTHS[assignment.billingCycle]),
+      },
+    });
+  }
 
   return company;
 }

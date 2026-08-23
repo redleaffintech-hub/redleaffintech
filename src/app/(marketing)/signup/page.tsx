@@ -5,11 +5,13 @@ import {
   CYCLE_LABELS,
   CYCLE_MONTHS,
   cyclePriceCents,
+  monthlyEquivalentCents,
+  planByCode,
   isValidCycle,
-  planById,
   type BillingCycle,
 } from "@/lib/plans";
 import { Container, Cta, Eyebrow, Section } from "@/components/marketing/ui";
+import { publicPlans } from "@/server/plans/catalogue";
 
 export const metadata = {
   title: "Subscribe",
@@ -24,7 +26,7 @@ export default async function SignupPage({ searchParams }: PageProps<"/signup">)
   const params = await searchParams;
   const first = (value: string | string[] | undefined) => (Array.isArray(value) ? value[0] : value);
 
-  const plan = planById((first(params.plan) ?? "").toUpperCase());
+  const plan = planByCode(await publicPlans(), first(params.plan));
   const rawCycle = (first(params.cycle) ?? "").toUpperCase();
   const cycle: BillingCycle = isValidCycle(rawCycle) ? rawCycle : "MONTHLY";
 
@@ -63,14 +65,14 @@ export default async function SignupPage({ searchParams }: PageProps<"/signup">)
                   <Row label="Billing" value={CYCLE_LABELS[cycle]} />
                   <Row
                     label="Price"
-                    value={`${formatMoney(plan.monthlyEquivalentCents[cycle]).replace(/\.00$/, "")} / month`}
+                    value={`${formatMoney(monthlyEquivalentCents(plan, cycle), { currency: plan.currency }).replace(/\.00$/, "")} / month`}
                   />
                   <Row
                     label="Charged"
                     value={
                       CYCLE_MONTHS[cycle] === 1
                         ? "monthly"
-                        : `${formatMoney(cyclePriceCents(plan, cycle)).replace(/\.00$/, "")} every ${CYCLE_MONTHS[cycle]} months`
+                        : `${formatMoney(cyclePriceCents(plan, cycle), { currency: plan.currency }).replace(/\.00$/, "")} every ${CYCLE_MONTHS[cycle]} months`
                     }
                   />
                   <Row label="Users included" value={String(plan.seats)} />

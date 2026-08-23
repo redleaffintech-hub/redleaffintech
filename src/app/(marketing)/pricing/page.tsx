@@ -1,6 +1,15 @@
 import { PricingTable } from "@/components/marketing/pricing-table";
 import { Container, CtaBand, Eyebrow, Section, SectionHeading } from "@/components/marketing/ui";
 import { isValidCycle, type BillingCycle } from "@/lib/plans";
+import { publicPlans } from "@/server/plans/catalogue";
+
+/**
+ * Plans come from the published catalogue, so this page is cached rather than
+ * queried per visitor. Publishing a plan calls `revalidatePath("/pricing")`,
+ * which is what makes a price change appear immediately instead of after the
+ * window elapses.
+ */
+export const revalidate = 300;
 
 export const metadata = {
   title: "Pricing",
@@ -39,6 +48,7 @@ export default async function PricingPage({ searchParams }: PageProps<"/pricing"
   const params = await searchParams;
   const raw = Array.isArray(params.cycle) ? params.cycle[0] : params.cycle;
   const initialCycle: BillingCycle = isValidCycle(raw?.toUpperCase()) ? (raw!.toUpperCase() as BillingCycle) : "MONTHLY";
+  const plans = await publicPlans();
 
   return (
     <>
@@ -56,7 +66,7 @@ export default async function PricingPage({ searchParams }: PageProps<"/pricing"
       </div>
 
       <Section tone="canvas">
-        <PricingTable initialCycle={initialCycle} />
+        <PricingTable plans={plans} initialCycle={initialCycle} />
       </Section>
 
       <Section tone="white">

@@ -9,32 +9,69 @@ import {
   BILLING_CYCLES,
   CYCLE_LABELS,
   CYCLE_MONTHS,
-  PLANS,
   cyclePriceCents,
   cycleSavingPercent,
+  monthlyEquivalentCents,
   type BillingCycle,
-  type Plan,
+  type PublicPlan,
 } from "@/lib/plans";
 
-export function PricingTable({ initialCycle = "MONTHLY" }: { initialCycle?: BillingCycle }) {
+/**
+ * The plans arrive as a prop rather than being imported: they are read from the
+ * published catalogue by the server component that renders this, so what a
+ * visitor sees is whatever an administrator last published — never a figure
+ * compiled into the bundle.
+ */
+export function PricingTable({
+  plans,
+  initialCycle = "MONTHLY",
+}: {
+  plans: PublicPlan[];
+  initialCycle?: BillingCycle;
+}) {
   const [cycle, setCycle] = useState<BillingCycle>(initialCycle);
+
+  if (plans.length === 0) {
+    return (
+      <p className="mx-auto max-w-lg rounded-(--radius-card) border border-paper-300 bg-white p-6 text-center text-[0.875rem] text-muted-ink">
+        Our plans are being updated. Please{" "}
+        <Link href="/contact" className="font-medium text-brand-700 hover:underline">
+          get in touch
+        </Link>{" "}
+        and we will quote you directly.
+      </p>
+    );
+  }
 
   return (
     <>
-      <CycleToggle cycle={cycle} onChange={setCycle} />
+      <CycleToggle plans={plans} cycle={cycle} onChange={setCycle} />
 
-      <div className="mt-10 grid gap-5 md:grid-cols-2 xl:grid-cols-4">
-        {PLANS.map((plan) => (
+      <div
+        className={clsx(
+          "mt-10 grid gap-5 md:grid-cols-2",
+          plans.length >= 4 ? "xl:grid-cols-4" : "xl:grid-cols-3",
+        )}
+      >
+        {plans.map((plan) => (
           <PlanCard key={plan.id} plan={plan} cycle={cycle} />
         ))}
       </div>
 
-      <ComparisonTable cycle={cycle} />
+      <ComparisonTable plans={plans} cycle={cycle} />
     </>
   );
 }
 
-function CycleToggle({ cycle, onChange }: { cycle: BillingCycle; onChange: (next: BillingCycle) => void }) {
+function CycleToggle({
+  plans,
+  cycle,
+  onChange,
+}: {
+  plans: PublicPlan[];
+  cycle: BillingCycle;
+  onChange: (next: BillingCycle) => void;
+}) {
   return (
     <div className="flex flex-col items-center gap-3">
       <div
@@ -44,7 +81,7 @@ function CycleToggle({ cycle, onChange }: { cycle: BillingCycle; onChange: (next
       >
         {BILLING_CYCLES.map((option) => {
           const active = option === cycle;
-          const saving = cycleSavingPercent(PLANS[0], option);
+          const saving = cycleSavingPercent(plans[0], option);
           return (
             <button
               key={option}
@@ -79,8 +116,8 @@ function CycleToggle({ cycle, onChange }: { cycle: BillingCycle; onChange: (next
   );
 }
 
-function PlanCard({ plan, cycle }: { plan: Plan; cycle: BillingCycle }) {
-  const perMonth = plan.monthlyEquivalentCents[cycle];
+function PlanCard({ plan, cycle }: { plan: PublicPlan; cycle: BillingCycle }) {
+  const perMonth = monthlyEquivalentCents(plan, cycle);
   const billed = cyclePriceCents(plan, cycle);
   const months = CYCLE_MONTHS[cycle];
 
@@ -102,17 +139,27 @@ function PlanCard({ plan, cycle }: { plan: Plan; cycle: BillingCycle }) {
       <h3 className="font-display text-[1.125rem] font-semibold text-ink-950">{plan.name}</h3>
       <p className="mt-2 min-h-[3rem] text-[0.8125rem] leading-6 text-muted-ink">{plan.forWhom}</p>
 
-      <p className="mt-4 flex items-baseline gap-1.5">
-        <span className="tnum font-display text-[2rem] font-semibold leading-none tracking-[-0.02em] text-ink-950">
-          {formatMoney(perMonth, { showCurrency: true }).replace(/\.00$/, "")}
-        </span>
-        <span className="text-[0.8125rem] text-muted-ink">/ month</span>
-      </p>
-      <p className="tnum mt-1.5 text-[0.75rem] text-muted-ink">
-        {months === 1
-          ? "billed monthly"
-          : `${formatMoney(billed).replace(/\.00$/, "")} billed every ${months} months`}
-      </p>
+      {plan.contactOnly && billed === 0 ? (
+        <p className="mt-4 flex items-baseline gap-1.5">
+          <span className="font-display text-[1.5rem] font-semibold leading-none tracking-[-0.02em] text-ink-950">
+            Let&rsquo;s talk
+          </span>
+        </p>
+      ) : (
+        <>
+          <p className="mt-4 flex items-baseline gap-1.5">
+            <span className="tnum font-display text-[2rem] font-semibold leading-none tracking-[-0.02em] text-ink-950">
+              {formatMoney(perMonth, { showCurrency: true, currency: plan.currency }).replace(/\.00$/, "")}
+            </span>
+            <span className="text-[0.8125rem] text-muted-ink">/ month</span>
+          </p>
+          <p className="tnum mt-1.5 text-[0.75rem] text-muted-ink">
+            {months === 1
+              ? "billed monthly"
+              : `${formatMoney(billed, { currency: plan.currency }).replace(/\.00$/, "")} billed every ${months} months`}
+          </p>
+        </>
+      )}
 
       <dl className="mt-5 grid gap-1.5 border-y border-paper-300 py-4 text-[0.8125rem]">
         <Line label="Users" value={`${plan.seats} included`} />
@@ -131,7 +178,7 @@ function PlanCard({ plan, cycle }: { plan: Plan; cycle: BillingCycle }) {
       </ul>
 
       <Link
-        href={`/signup?plan=${plan.id}&cycle=${cycle}`}
+        href={`/signup?plan=${plan.code}&cycle=${cycle}`}
         className={clsx(
           "mt-6 inline-flex items-center justify-center rounded-lg px-4 py-2.5 text-[0.875rem] font-medium transition-colors",
           plan.popular
@@ -155,7 +202,7 @@ function Line({ label, value }: { label: string; value: string }) {
 }
 
 /** `true`/`false` render as a tick or a dash; a string renders verbatim. */
-const COMPARISON_ROWS: { label: string; value: (plan: Plan) => string | boolean }[] = [
+const COMPARISON_ROWS: { label: string; value: (plan: PublicPlan) => string | boolean }[] = [
   { label: "Users included", value: (p) => String(p.seats) },
   { label: "Companies / entities", value: (p) => String(p.companies) },
   { label: "Document storage", value: (p) => `${p.storageGb} GB` },
@@ -163,15 +210,15 @@ const COMPARISON_ROWS: { label: string; value: (plan: Plan) => string | boolean 
   { label: "GST/HST, PST, QST engine", value: () => true },
   { label: "Bank import & reconciliation", value: () => true },
   { label: "Financial statement pack", value: () => true },
-  { label: "Bill approvals & period close", value: (p) => p.id !== "STARTER" },
-  { label: "Budgets & budget vs actual", value: (p) => p.id !== "STARTER" },
+  { label: "Bill approvals & period close", value: (p) => p.code !== "STARTER" },
+  { label: "Budgets & budget vs actual", value: (p) => p.code !== "STARTER" },
   { label: "Multi-company switching", value: (p) => p.companies > 1 },
-  { label: "Firm workspace & review queue", value: (p) => p.id === "FIRM" },
+  { label: "Firm workspace & review queue", value: (p) => p.code === "FIRM" },
   { label: "Audit trail", value: () => true },
   { label: "Support", value: (p) => p.support },
 ];
 
-function ComparisonTable({ cycle }: { cycle: BillingCycle }) {
+function ComparisonTable({ plans, cycle }: { plans: PublicPlan[]; cycle: BillingCycle }) {
   return (
     <div className="mt-16 overflow-x-auto rounded-(--radius-card) border border-paper-300 bg-white">
       <table className="w-full min-w-[46rem] border-collapse text-[0.8125rem]">
@@ -181,11 +228,11 @@ function ComparisonTable({ cycle }: { cycle: BillingCycle }) {
             <th scope="col" className="px-4 py-3 text-left font-semibold text-ink-900">
               Compare plans
             </th>
-            {PLANS.map((plan) => (
+            {plans.map((plan) => (
               <th key={plan.id} scope="col" className="px-4 py-3 text-center font-semibold text-ink-900">
                 {plan.name}
                 <span className="tnum mt-0.5 block text-[0.75rem] font-normal text-muted-ink">
-                  {formatMoney(plan.monthlyEquivalentCents[cycle]).replace(/\.00$/, "")}/mo
+                  {formatMoney(monthlyEquivalentCents(plan, cycle), { currency: plan.currency }).replace(/\.00$/, "")}/mo
                 </span>
               </th>
             ))}
@@ -197,7 +244,7 @@ function ComparisonTable({ cycle }: { cycle: BillingCycle }) {
               <th scope="row" className="px-4 py-2.5 text-left font-normal text-ink-700">
                 {row.label}
               </th>
-              {PLANS.map((plan) => {
+              {plans.map((plan) => {
                 const value = row.value(plan);
                 return (
                   <td key={plan.id} className="px-4 py-2.5 text-center text-ink-900">

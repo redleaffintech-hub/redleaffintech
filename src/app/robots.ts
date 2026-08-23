@@ -9,7 +9,7 @@ export default function robots(): MetadataRoute.Robots {
         userAgent: "*",
         allow: "/",
         // The application itself is authenticated; keep it out of the index.
-        disallow: ["/dashboard", "/sales", "/purchases", "/expenses", "/banking", "/accounting", "/tax", "/reports", "/company", "/firm", "/api", "/login", "/signup"],
+        disallow: ["/dashboard", "/sales", "/purchases", "/expenses", "/banking", "/accounting", "/tax", "/reports", "/company", "/firm", "/api", "/login", "/signup", "/admin"],
       },
     ],
     sitemap: `${BASE}/sitemap.xml`,
