@@ -8,14 +8,7 @@
  */
 
 import { db } from "@/lib/db";
-import {
-  DEPRECIATION_AMORTIZATION_SUBTYPES,
-  EBITDA_OPERATING_EXPENSE_SUBTYPES,
-  INCOME_TAX_SUBTYPES,
-  INTEREST_EXPENSE_SUBTYPES,
-  NORMAL_BALANCE,
-  type AccountType,
-} from "@/lib/enums";
+import { INCOME_STATEMENT_SUBTYPES, NORMAL_BALANCE, type AccountType } from "@/lib/enums";
 import { fiscalYearRange, fiscalYearOf, monthsBetween, endOfMonth } from "@/lib/dates";
 
 export interface DateRange {
@@ -130,157 +123,238 @@ export async function trialBalance(companyId: string, range: DateRange) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * The statement in presentation order, built so EBITDA is a visible subtotal
- * rather than something the reader has to reconstruct.
+ * The income statement, in presentation order.
  *
- * Depreciation and amortization are pulled OUT of operating expenses, and
- * interest and income tax get their own sections, because EBITDA is by
- * definition earnings before exactly those four. Every membership decision is
- * by durable subtype (src/lib/enums.ts) — never by account name or code range.
+ *   net sales - material expenses = gross profit
+ *   gross profit - SG&A           = EBITDA
+ *   EBITDA - depreciation & amortization = EBIT
+ *   EBIT - interest expense + interest income
+ *        + other non-operating income - other non-operating expense = EBT
+ *   EBT - taxes = net income
+ *
+ * Every membership decision is by durable account subtype (src/lib/enums.ts),
+ * never by account name or code range at report runtime. An account called
+ * "Interest received" must not fall below EBITDA because of its label, and a
+ * chart that gets renamed must not silently change the shape of the statement.
+ *
+ * The four things EBITDA is "before" — interest, tax, depreciation,
+ * amortization — therefore each need a subtype of their own. So does interest
+ * income, which is revenue but belongs below EBIT, not inside it.
  */
 const PL_SECTIONS = [
-  { key: "REVENUE", label: "Revenue", subtypes: ["OPERATING_REVENUE"] },
-  { key: "COST_OF_SALES", label: "Cost of sales", subtypes: ["COST_OF_SALES"] },
-  {
-    key: "OPERATING_EXPENSE",
-    label: "Operating expenses",
-    subtypes: [...EBITDA_OPERATING_EXPENSE_SUBTYPES],
-  },
-  {
-    key: "DEPRECIATION_AMORTIZATION",
-    label: "Depreciation & amortization",
-    subtypes: [...DEPRECIATION_AMORTIZATION_SUBTYPES],
-  },
-  { key: "OTHER_INCOME", label: "Other income", subtypes: ["OTHER_INCOME"] },
-  { key: "OTHER_EXPENSE", label: "Other expenses", subtypes: ["OTHER_EXPENSE"] },
-  { key: "INTEREST_EXPENSE", label: "Interest expense", subtypes: [...INTEREST_EXPENSE_SUBTYPES] },
-  { key: "INCOME_TAX_EXPENSE", label: "Income tax expense", subtypes: [...INCOME_TAX_SUBTYPES] },
+  { key: "NET_SALES", label: "Net sales", subtypes: [...INCOME_STATEMENT_SUBTYPES.NET_SALES], negate: false },
+  { key: "MATERIAL_EXPENSE", label: "Material expenses", subtypes: [...INCOME_STATEMENT_SUBTYPES.MATERIAL_EXPENSE], negate: true },
+  { key: "SGA", label: "Selling, general and administrative expense", subtypes: [...INCOME_STATEMENT_SUBTYPES.SGA], negate: true },
+  { key: "DEPRECIATION_AMORTIZATION", label: "Depreciation & amortization", subtypes: [...INCOME_STATEMENT_SUBTYPES.DEPRECIATION_AMORTIZATION], negate: true },
+  { key: "INTEREST_EXPENSE", label: "Interest expense", subtypes: [...INCOME_STATEMENT_SUBTYPES.INTEREST_EXPENSE], negate: true },
+  { key: "INTEREST_INCOME", label: "Interest income", subtypes: [...INCOME_STATEMENT_SUBTYPES.INTEREST_INCOME], negate: false },
+  { key: "OTHER_INCOME", label: "Other non-operating income", subtypes: [...INCOME_STATEMENT_SUBTYPES.OTHER_INCOME], negate: false },
+  { key: "OTHER_EXPENSE", label: "Other non-operating expense", subtypes: [...INCOME_STATEMENT_SUBTYPES.OTHER_EXPENSE], negate: true },
+  { key: "TAXES", label: "Taxes", subtypes: [...INCOME_STATEMENT_SUBTYPES.TAXES], negate: true },
 ] as const;
 
-export interface ComparedAccountBalance extends AccountBalance {
-  comparisonCents?: number;
+export type PlSectionKey = (typeof PL_SECTIONS)[number]["key"];
+
+/** One reporting period, with the label its column carries. */
+export interface ReportPeriod {
+  label: string;
+  from: Date;
+  to: Date;
+}
+
+export interface StatementAccountRow {
+  accountId: string;
+  code: string;
+  name: string;
+  subtype: string;
+  /**
+   * One figure per period, in the same order as `periods`, already signed the
+   * way the statement presents it: expenses are negative so a column can be
+   * summed straight down.
+   */
+  amounts: number[];
 }
 
 export interface StatementSection {
   key: string;
   label: string;
-  rows: ComparedAccountBalance[];
-  totalCents: number;
-  comparisonTotalCents?: number;
+  rows: StatementAccountRow[];
+  /** Section total per period, signed as presented. */
+  totals: number[];
 }
 
+/** A calculated line — gross profit, EBITDA, EBIT, EBT, net income. */
+export interface StatementSubtotal {
+  key: string;
+  label: string;
+  amounts: number[];
+}
+
+export interface IncomeStatement {
+  periods: ReportPeriod[];
+  currency: string;
+  sections: StatementSection[];
+  subtotals: Record<"GROSS_PROFIT" | "EBITDA" | "EBIT" | "EBT" | "NET_INCOME", StatementSubtotal>;
+  /** Percentages per period; null where net sales is zero. */
+  margins: Record<"GROSS" | "EBITDA" | "EBIT" | "NET", (number | null)[]>;
+}
+
+/**
+ * The income statement across one or more periods.
+ *
+ * Each period is aggregated independently through the SAME classification, so a
+ * comparison column can never be built on different rules from the column it is
+ * compared against.
+ */
+export async function incomeStatement(
+  companyId: string,
+  periods: ReportPeriod[],
+  currency = "CAD",
+): Promise<IncomeStatement> {
+  const perPeriod = await Promise.all(
+    periods.map((period) =>
+      balancesFor(companyId, {
+        date: { gte: period.from, lte: period.to },
+        accountType: { in: ["REVENUE", "EXPENSE"] },
+      }),
+    ),
+  );
+
+  // accountId -> balance, one map per period.
+  const byPeriod = perPeriod.map((balances) => new Map(balances.map((b) => [b.accountId, b])));
+  // Every account that moved in ANY period, so a column is never missing a row
+  // its neighbour has.
+  const seen = new Map<string, AccountBalance>();
+  for (const balances of perPeriod) {
+    for (const b of balances) if (!seen.has(b.accountId)) seen.set(b.accountId, b);
+  }
+
+  const sections: StatementSection[] = [];
+  for (const section of PL_SECTIONS) {
+    const members = [...seen.values()].filter((a) => (section.subtypes as readonly string[]).includes(a.subtype));
+
+    const rows: StatementAccountRow[] = members
+      .map((account) => ({
+        accountId: account.accountId,
+        code: account.code,
+        name: account.name,
+        subtype: account.subtype,
+        // `balanceCents` is positive in the account's natural direction, so an
+        // expense of 550 arrives as +550. The statement shows costs as
+        // negative, hence the flip.
+        amounts: byPeriod.map((map) => {
+          const value = map.get(account.accountId)?.balanceCents ?? 0;
+          return section.negate ? -value : value;
+        }),
+      }))
+      .filter((row) => row.amounts.some((v) => v !== 0))
+      .sort((a, b) => a.code.localeCompare(b.code));
+
+    sections.push({
+      key: section.key,
+      label: section.label,
+      rows,
+      totals: periods.map((_, i) => rows.reduce((sum, row) => sum + row.amounts[i], 0)),
+    });
+  }
+
+  const total = (key: string) => sections.find((s) => s.key === key)!.totals;
+  const netSales = total("NET_SALES");
+  const material = total("MATERIAL_EXPENSE");
+  const sga = total("SGA");
+  const da = total("DEPRECIATION_AMORTIZATION");
+  const interestExpense = total("INTEREST_EXPENSE");
+  const interestIncome = total("INTEREST_INCOME");
+  const otherIncome = total("OTHER_INCOME");
+  const otherExpense = total("OTHER_EXPENSE");
+  const taxes = total("TAXES");
+
+  // Every cost section is already negative, so each step is an addition. That
+  // keeps the arithmetic identical to reading the printed column downwards.
+  const each = <T,>(fn: (i: number) => T) => periods.map((_, i) => fn(i));
+  const grossProfit = each((i) => netSales[i] + material[i]);
+  const ebitda = each((i) => grossProfit[i] + sga[i]);
+  const ebit = each((i) => ebitda[i] + da[i]);
+  const ebt = each((i) => ebit[i] + interestExpense[i] + interestIncome[i] + otherIncome[i] + otherExpense[i]);
+  const netIncome = each((i) => ebt[i] + taxes[i]);
+
+  const margin = (values: number[]) =>
+    each((i) => (netSales[i] === 0 ? null : (values[i] / netSales[i]) * 100));
+
+  return {
+    periods,
+    currency,
+    sections,
+    subtotals: {
+      GROSS_PROFIT: { key: "GROSS_PROFIT", label: "Gross profit", amounts: grossProfit },
+      EBITDA: { key: "EBITDA", label: "EBITDA", amounts: ebitda },
+      EBIT: { key: "EBIT", label: "EBIT", amounts: ebit },
+      EBT: { key: "EBT", label: "EBT", amounts: ebt },
+      NET_INCOME: { key: "NET_INCOME", label: "Net income", amounts: netIncome },
+    },
+    margins: {
+      GROSS: margin(grossProfit),
+      EBITDA: margin(ebitda),
+      EBIT: margin(ebit),
+      NET: margin(netIncome),
+    },
+  };
+}
+
+/**
+ * Single-period figures in the shape the dashboard and cash-flow statement
+ * expect.
+ *
+ * Kept as a thin wrapper over `incomeStatement` so there is exactly one
+ * classification and one net-income calculation in the codebase — a second
+ * implementation is how a dashboard and a statement start disagreeing.
+ */
 export async function profitAndLoss(
   companyId: string,
   range: DateRange,
   comparison?: DateRange,
 ) {
-  const [current, prior] = await Promise.all([
-    balancesFor(companyId, { date: { gte: range.from, lte: range.to }, accountType: { in: ["REVENUE", "EXPENSE"] } }),
-    comparison
-      ? balancesFor(companyId, { date: { gte: comparison.from, lte: comparison.to }, accountType: { in: ["REVENUE", "EXPENSE"] } })
-      : Promise.resolve([] as AccountBalance[]),
-  ]);
+  const periods: ReportPeriod[] = [{ label: "Current", ...range }];
+  if (comparison) periods.push({ label: "Prior", ...comparison });
 
-  const priorById = new Map(prior.map((p) => [p.accountId, p.balanceCents]));
-  const sections: StatementSection[] = [];
+  const statement = await incomeStatement(companyId, periods);
+  const now = (values: number[]) => values[0];
+  const was = (values: number[]) => (comparison ? values[1] : 0);
+  const section = (key: string) => statement.sections.find((s) => s.key === key)!;
 
-  for (const section of PL_SECTIONS) {
-    const rows = current
-      .filter((a) => section.subtypes.includes(a.subtype as never))
-      .map((a) => ({ ...a, comparisonCents: priorById.get(a.accountId) ?? 0 }))
-      .filter((a) => a.balanceCents !== 0 || (a.comparisonCents ?? 0) !== 0);
-    sections.push({
-      key: section.key,
-      label: section.label,
-      rows,
-      totalCents: rows.reduce((s, r) => s + r.balanceCents, 0),
-      comparisonTotalCents: rows.reduce((s, r) => s + (r.comparisonCents ?? 0), 0),
-    });
-  }
-
-  const find = (key: string) => sections.find((s) => s.key === key)!;
-  const now = (key: string) => find(key).totalCents;
-  const was = (key: string) => find(key).comparisonTotalCents ?? 0;
-
-  /**
-   * Both periods run through the same ladder, so a comparison column can never
-   * drift from the figure it is compared against.
-   *
-   * Net income is deliberately the same arithmetic as before this report was
-   * restructured. Depreciation simply moved out of `OPERATING_EXPENSE` into its
-   * own section, and interest and tax are new sections that are empty for any
-   * company that has not classified an account into them — so every existing
-   * file reports exactly the net income it did before, and continues to tie to
-   * the balance sheet and the cash flow statement.
-   */
-  const ladder = (total: (key: string) => number) => {
-    const revenue = total("REVENUE");
-    const costOfSales = total("COST_OF_SALES");
-    const operatingExpenses = total("OPERATING_EXPENSE");
-    const depreciationAmortization = total("DEPRECIATION_AMORTIZATION");
-    const otherIncome = total("OTHER_INCOME");
-    const otherExpense = total("OTHER_EXPENSE");
-    const interest = total("INTEREST_EXPENSE");
-    const incomeTax = total("INCOME_TAX_EXPENSE");
-
-    const grossProfit = revenue - costOfSales;
-    const ebitda = grossProfit - operatingExpenses;
-    const ebit = ebitda - depreciationAmortization;
-    const incomeBeforeTax = ebit + otherIncome - otherExpense - interest;
-
-    return {
-      revenue,
-      costOfSales,
-      operatingExpenses,
-      depreciationAmortization,
-      otherIncome,
-      otherExpense,
-      interest,
-      incomeTax,
-      grossProfit,
-      ebitda,
-      ebit,
-      incomeBeforeTax,
-      netIncome: incomeBeforeTax - incomeTax,
-      totalExpense: costOfSales + operatingExpenses + depreciationAmortization + otherExpense + interest + incomeTax,
-    };
-  };
-
-  const current_ = ladder(now);
-  const prior_ = ladder(was);
-
-  /** EBITDA / revenue. Null rather than 0 when there is no revenue to divide by. */
-  const margin = (numerator: number, revenue: number) =>
-    revenue > 0 ? (numerator / revenue) * 100 : null;
+  // Costs are negative inside the statement; the legacy shape reports them as
+  // positive magnitudes, which is what existing callers expect.
+  const expenseTotal = (key: string) => -now(section(key).totals);
 
   return {
     range,
     comparison,
-    sections,
-
-    // Subtotals, each with its prior-period counterpart.
-    grossProfitCents: current_.grossProfit,
-    comparisonGrossProfitCents: prior_.grossProfit,
-    ebitdaCents: current_.ebitda,
-    comparisonEbitdaCents: prior_.ebitda,
-    ebitCents: current_.ebit,
-    comparisonEbitCents: prior_.ebit,
-    incomeBeforeTaxCents: current_.incomeBeforeTax,
-    comparisonIncomeBeforeTaxCents: prior_.incomeBeforeTax,
-    netIncomeCents: current_.netIncome,
-    comparisonNetIncomeCents: prior_.netIncome,
-
+    statement,
+    sections: statement.sections,
+    grossProfitCents: now(statement.subtotals.GROSS_PROFIT.amounts),
+    comparisonGrossProfitCents: was(statement.subtotals.GROSS_PROFIT.amounts),
+    ebitdaCents: now(statement.subtotals.EBITDA.amounts),
+    comparisonEbitdaCents: was(statement.subtotals.EBITDA.amounts),
+    ebitCents: now(statement.subtotals.EBIT.amounts),
+    comparisonEbitCents: was(statement.subtotals.EBIT.amounts),
+    incomeBeforeTaxCents: now(statement.subtotals.EBT.amounts),
+    comparisonIncomeBeforeTaxCents: was(statement.subtotals.EBT.amounts),
+    netIncomeCents: now(statement.subtotals.NET_INCOME.amounts),
+    comparisonNetIncomeCents: was(statement.subtotals.NET_INCOME.amounts),
     /** EBIT. Kept under its previous name for callers that read operating income. */
-    operatingIncomeCents: current_.ebit,
-
-    revenueCents: current_.revenue,
-    comparisonRevenueCents: prior_.revenue,
-    totalExpenseCents: current_.totalExpense,
-
-    // Margins, null when revenue is zero so callers cannot divide by it.
-    grossMarginPercent: margin(current_.grossProfit, current_.revenue),
-    ebitdaMarginPercent: margin(current_.ebitda, current_.revenue),
-    netMarginPercent: margin(current_.netIncome, current_.revenue),
+    operatingIncomeCents: now(statement.subtotals.EBIT.amounts),
+    revenueCents: now(section("NET_SALES").totals),
+    comparisonRevenueCents: was(section("NET_SALES").totals),
+    totalExpenseCents:
+      expenseTotal("MATERIAL_EXPENSE") +
+      expenseTotal("SGA") +
+      expenseTotal("DEPRECIATION_AMORTIZATION") +
+      expenseTotal("INTEREST_EXPENSE") +
+      expenseTotal("OTHER_EXPENSE") +
+      expenseTotal("TAXES"),
+    grossMarginPercent: statement.margins.GROSS[0],
+    ebitdaMarginPercent: statement.margins.EBITDA[0],
+    netMarginPercent: statement.margins.NET[0],
   };
 }
 

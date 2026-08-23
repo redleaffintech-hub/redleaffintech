@@ -218,10 +218,17 @@ export async function invoiceFormOptions() {
       orderBy: { code: "asc" },
       include: { components: true },
     }),
+    // Active items only: an archived item must not be selectable on a new
+    // document, though documents that already reference one still display it.
     db.serviceItem.findMany({
       where: { companyId: company.id, isActive: true },
-      orderBy: { name: "asc" },
-      select: { id: true, name: true, unitPriceCents: true, incomeAccountId: true, taxCodeId: true, unit: true },
+      orderBy: [{ code: "asc" }],
+      select: {
+        id: true, code: true, name: true, description: true, unit: true,
+        unitPriceCents: true, discountPercentMicro: true,
+        incomeAccountId: true, expenseAccountId: true,
+        taxCodeId: true, purchaseTaxCodeId: true,
+      },
     }),
     db.company.findUniqueOrThrow({
       where: { id: company.id },

@@ -61,10 +61,12 @@ export async function createCreditNote(input: CreditNoteInput) {
         lines: {
           create: doc.lines.map((l) => ({
             lineNo: l.lineNo,
+            itemId: l.itemId ?? null,
             accountId: l.accountId,
             description: l.description,
             quantityMilli: l.quantityMilli,
             unitPriceCents: l.unitPriceCents,
+            discountPercentMicro: l.discountPercentMicro,
             netCents: l.netCents,
             taxCodeId: l.taxCodeId ?? null,
             taxCents: l.taxCents,

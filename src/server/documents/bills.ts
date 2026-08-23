@@ -89,10 +89,16 @@ export async function createBillInTx(tx: Tx, input: BillInput) {
       lines: {
         create: doc.lines.map((l) => ({
           lineNo: l.lineNo,
+          // The catalogue item this line came from, if any. A snapshot of the
+          // link, not a live lookup: the price, description and discount below
+          // are what was actually charged, and editing the item later must not
+          // change them.
+          itemId: l.itemId ?? null,
           accountId: l.accountId,
           description: l.description,
           quantityMilli: l.quantityMilli,
           unitPriceCents: l.unitPriceCents,
+          discountPercentMicro: l.discountPercentMicro,
           netCents: l.netCents,
           taxCodeId: l.taxCodeId ?? null,
           taxCents: l.taxCents,

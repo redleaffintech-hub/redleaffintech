@@ -39,7 +39,7 @@ export const ACCOUNT_SUBTYPES: Record<AccountType, string[]> = {
     "LONG_TERM_LIABILITY",
   ],
   EQUITY: ["SHARE_CAPITAL", "OWNER_EQUITY", "RETAINED_EARNINGS", "DRAWINGS"],
-  REVENUE: ["OPERATING_REVENUE", "OTHER_INCOME"],
+  REVENUE: ["OPERATING_REVENUE", "OTHER_INCOME", "INTEREST_INCOME"],
   EXPENSE: [
     "OPERATING_EXPENSE",
     "COST_OF_SALES",
@@ -74,6 +74,7 @@ export const SUBTYPE_LABELS: Record<string, string> = {
   DRAWINGS: "Drawings",
   OPERATING_REVENUE: "Operating revenue",
   OTHER_INCOME: "Other income",
+  INTEREST_INCOME: "Interest income",
   OPERATING_EXPENSE: "Operating expense",
   COST_OF_SALES: "Cost of sales",
   PAYROLL_EXPENSE: "Payroll expense",
@@ -105,6 +106,28 @@ export const DEPRECIATION_AMORTIZATION_SUBTYPES = ["DEPRECIATION", "AMORTIZATION
 export const EBITDA_OPERATING_EXPENSE_SUBTYPES = ["OPERATING_EXPENSE", "PAYROLL_EXPENSE"] as const;
 export const INTEREST_EXPENSE_SUBTYPES = ["INTEREST_EXPENSE"] as const;
 export const INCOME_TAX_SUBTYPES = ["INCOME_TAX_EXPENSE"] as const;
+export const INTEREST_INCOME_SUBTYPES = ["INTEREST_INCOME"] as const;
+
+/**
+ * Where each subtype lands on the income statement.
+ *
+ * The statement reads: net sales, material expenses, gross profit, SG&A,
+ * EBITDA, D&A, EBIT, interest, other non-operating, EBT, taxes, net income.
+ * Anything below EBITDA is by definition excluded from it, which is the whole
+ * reason interest, tax, depreciation and amortization each need their own
+ * durable subtype rather than being inferred from an account name.
+ */
+export const INCOME_STATEMENT_SUBTYPES = {
+  NET_SALES: ["OPERATING_REVENUE"],
+  MATERIAL_EXPENSE: ["COST_OF_SALES"],
+  SGA: [...EBITDA_OPERATING_EXPENSE_SUBTYPES],
+  DEPRECIATION_AMORTIZATION: [...DEPRECIATION_AMORTIZATION_SUBTYPES],
+  INTEREST_EXPENSE: [...INTEREST_EXPENSE_SUBTYPES],
+  INTEREST_INCOME: [...INTEREST_INCOME_SUBTYPES],
+  OTHER_INCOME: ["OTHER_INCOME"],
+  OTHER_EXPENSE: ["OTHER_EXPENSE"],
+  TAXES: [...INCOME_TAX_SUBTYPES],
+} as const;
 
 /**
  * Control accounts the posting engine must be able to resolve by handle.
@@ -202,6 +225,47 @@ export const PROVINCES = [
   { code: "SK", name: "Saskatchewan" },
   { code: "YT", name: "Yukon" },
 ] as const;
+
+/**
+ * Products & services catalogue (the ServiceItem model).
+ *
+ * A PRODUCT here is a line-item classification, not an inventory record: there
+ * is no quantity on hand, no stock valuation and no cost-of-goods posting.
+ */
+export const ITEM_TYPES = ["SERVICE", "PRODUCT"] as const;
+export type ItemType = (typeof ITEM_TYPES)[number];
+
+export const ITEM_TYPE_LABELS: Record<ItemType, string> = {
+  SERVICE: "Service",
+  PRODUCT: "Product",
+};
+
+/** Units of measure offered on a catalogue item. "custom" lets any text through. */
+export const ITEM_UNITS = [
+  "each",
+  "hour",
+  "day",
+  "project",
+  "month",
+  "licence",
+  "kilogram",
+  "custom",
+] as const;
+
+export const ITEM_UNIT_LABELS: Record<string, string> = {
+  each: "Each",
+  hour: "Hour",
+  day: "Day",
+  project: "Project",
+  month: "Month",
+  licence: "Licence",
+  kilogram: "Kilogram",
+  custom: "Custom",
+};
+
+export function itemUnitLabel(unit: string): string {
+  return ITEM_UNIT_LABELS[unit] ?? unit;
+}
 
 export const PERIOD_STATUSES = ["OPEN", "CLOSED", "LOCKED"] as const;
 export const TAX_PERIOD_STATUSES = ["OPEN", "REVIEW", "FILED", "CLOSED"] as const;

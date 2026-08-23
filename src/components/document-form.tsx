@@ -168,12 +168,25 @@ export interface AccountOption {
   type: string;
 }
 
+/**
+ * A catalogue item as offered in the line editor.
+ *
+ * Both account sides travel with the item because the same catalogue serves
+ * sales and purchase documents: an invoice must seed the income account and a
+ * bill the expense account. Sending only one would mean a bill quietly posting
+ * a cost into revenue.
+ */
 export interface ItemOption {
   id: string;
+  code: string;
   name: string;
+  description: string | null;
   unitPriceCents: number;
+  discountPercentMicro: number;
   incomeAccountId: string | null;
+  expenseAccountId: string | null;
   taxCodeId: string | null;
+  purchaseTaxCodeId: string | null;
   unit: string;
 }
 
@@ -425,18 +438,44 @@ export function DocumentForm({
     setLines((current) => current.map((line) => (line.key === key ? { ...line, ...patch } : line)));
   }
 
+  /**
+   * Seed a line from a catalogue item.
+   *
+   * Every field is replaced, not merged: selecting a different item must not
+   * leave the previous item's price or account behind on the line. Choosing the
+   * blank option clears the link and leaves the typed values alone, which is
+   * the "custom line" case.
+   *
+   * Which side of the catalogue is used depends on the document. A purchase
+   * document takes the expense account and purchase tax code; a sales document
+   * takes the income account and sales tax code.
+   */
   function applyItem(key: string, itemId: string) {
     const item = items.find((i) => i.id === itemId);
     if (!item) return updateLine(key, { itemId: "" });
+
+    const isPurchase = config.accountSide === "EXPENSE";
+    const account = isPurchase
+      ? (item.expenseAccountId ?? defaultAccount)
+      : (item.incomeAccountId ?? defaultAccount);
+    // A purchase falls back to the sales code when no purchase code is set,
+    // which is the common case for a company with one tax profile.
+    const preferredTax = isPurchase
+      ? (item.purchaseTaxCodeId ?? item.taxCodeId)
+      : item.taxCodeId;
+
     updateLine(key, {
       itemId,
-      description: item.name,
+      description: item.description?.trim() ? item.description : item.name,
+      quantity: "1",
       unitPrice: (item.unitPriceCents / 100).toFixed(2),
-      accountId: item.incomeAccountId ?? defaultAccount,
-      // The item's own code only wins if it is valid where the supply lands.
+      discount: item.discountPercentMicro ? String(item.discountPercentMicro / 1_000_000) : "",
+      accountId: account,
+      // The item's own code only wins if it is valid where the supply lands:
+      // place-of-supply rules outrank a catalogue default.
       taxCodeId:
-        item.taxCodeId && offeredCodes.some((code) => code.id === item.taxCodeId)
-          ? item.taxCodeId
+        preferredTax && offeredCodes.some((code) => code.id === preferredTax)
+          ? preferredTax
           : defaultTax,
     });
   }
@@ -717,10 +756,10 @@ export function DocumentForm({
                             onChange={(event) => applyItem(line.key, event.target.value)}
                             className={clsx(inputClass, "pr-7 text-[0.75rem]")}
                           >
-                            <option value="">Custom</option>
+                            <option value="">Custom line</option>
                             {items.map((item) => (
                               <option key={item.id} value={item.id}>
-                                {item.name}
+                                {item.code} · {item.name}
                               </option>
                             ))}
                           </select>

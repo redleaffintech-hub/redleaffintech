@@ -13,8 +13,15 @@ import {
 } from "@/lib/csv";
 import { NORMAL_BALANCE, type AccountType } from "@/lib/enums";
 import { CAPABILITIES, type Capability } from "@/lib/permissions";
-import { isoDate, toUtcDay, today, fiscalYearOf, fiscalYearRange, addMonths } from "@/lib/dates";
-import { balanceSheet, cashFlow, generalLedger, profitAndLoss, trialBalance } from "./financials";
+import { isoDate, toUtcDay, today, fiscalYearOf, fiscalYearRange } from "@/lib/dates";
+import {
+  balanceSheet,
+  cashFlow,
+  generalLedger,
+  incomeStatement,
+  trialBalance,
+  type ReportPeriod,
+} from "./financials";
 import { apAging, arAging, partyStatement } from "./aging";
 import { taxDetail, taxSummary } from "./tax";
 
@@ -74,6 +81,38 @@ function asOfFrom(ctx: ExportContext) {
 /** `Debit (CAD)` etc. */
 const money = (label: string, ctx: ExportContext) => moneyHeader(label, ctx.currency);
 
+
+/**
+ * The fiscal periods an income-statement export covers.
+ *
+ * Mirrors the page: `end` is the fiscal year of the rightmost column and
+ * `periods` how many columns back from it, defaulting to the current year and
+ * three before it. Clamped to four, which is what fits a printed page.
+ */
+function incomeStatementPeriods(ctx: ExportContext) {
+  const currentFy = fiscalYearOf(today(), ctx.fiscalYearStartMonth);
+  const requestedEnd = Number(ctx.params.get("end") ?? "");
+  const endYear =
+    Number.isInteger(requestedEnd) && requestedEnd > 1900 && requestedEnd < 2200 ? requestedEnd : currentFy;
+
+  const requestedCount = Number(ctx.params.get("periods") ?? "");
+  const count = Number.isInteger(requestedCount) && requestedCount >= 1 && requestedCount <= 4 ? requestedCount : 4;
+
+  const periods: ReportPeriod[] = [];
+  for (let offset = count - 1; offset >= 0; offset--) {
+    const year = endYear - offset;
+    const range = fiscalYearRange(year, ctx.fiscalYearStartMonth);
+    const to = year === currentFy && range.end > today() ? today() : range.end;
+    const month = new Intl.DateTimeFormat("en-CA", { month: "short", timeZone: "UTC" }).format(range.end);
+    periods.push({
+      label: `${month}-${String(range.end.getUTCFullYear()).slice(2)}`,
+      from: range.start,
+      to,
+    });
+  }
+  return { periods, endYear, count };
+}
+
 // ── Financial statements ────────────────────────────────────────────────────
 
 const trialBalanceExport: ExportDefinition = {
@@ -121,80 +160,88 @@ const trialBalanceExport: ExportDefinition = {
   },
 };
 
-const profitAndLossExport: ExportDefinition = {
+const incomeStatementExport: ExportDefinition = {
   capability: CAPABILITIES.REPORTS,
   build: async (ctx) => {
-    const range = rangeFrom(ctx);
-    const comparison = { from: addMonths(range.from, -12), to: addMonths(range.to, -12) };
-    const report = await profitAndLoss(ctx.companyId, range, comparison);
+    const { periods, endYear, count } = incomeStatementPeriods(ctx);
+    const statement = await incomeStatement(ctx.companyId, periods, ctx.currency);
 
     /**
-     * The statement as it reads on screen: account rows within their section,
-     * and every subtotal of the EBITDA ladder in presentation order. A reader
-     * opening this in a spreadsheet gets the same document, not a pile of
-     * accounts they have to re-total themselves.
+     * The rows in exactly the order the report shows them, so a reader can put
+     * the file beside the screen and follow it line for line. Detail rows carry
+     * their account code and name; calculated rows are marked as subtotals.
+     *
+     * Amounts are plain decimals with a leading minus — never accounting
+     * parentheses, which a spreadsheet reads as text rather than as a number.
      */
     interface Line {
-      section: string;
+      row: string;
+      kind: "Category" | "Account" | "Subtotal";
       code: string;
-      label: string;
-      current: number;
-      prior: number;
-      kind: "Account" | "Subtotal";
+      account: string;
+      amounts: number[];
     }
 
-    const section = (key: string) => report.sections.find((s) => s.key === key)!;
+    const find = (key: string) => statement.sections.find((s) => s.key === key)!;
     const lines: Line[] = [];
 
-    const push = (key: string, negate = false) => {
-      const found = section(key);
-      for (const row of found.rows) {
-        lines.push({
-          section: found.label,
-          code: row.code,
-          label: row.name,
-          current: negate ? -row.balanceCents : row.balanceCents,
-          prior: negate ? -(row.comparisonCents ?? 0) : (row.comparisonCents ?? 0),
-          kind: "Account",
-        });
+    const category = (key: string) => {
+      const section = find(key);
+      if (section.rows.length === 0) return;
+      lines.push({ row: section.label, kind: "Category", code: "", account: "", amounts: section.totals });
+      // Detail beneath the category, matching an expanded report.
+      if (section.rows.length > 1) {
+        for (const account of section.rows) {
+          lines.push({
+            row: section.label,
+            kind: "Account",
+            code: account.code,
+            account: account.name,
+            amounts: account.amounts,
+          });
+        }
+      } else {
+        const only = section.rows[0];
+        lines.push({ row: section.label, kind: "Account", code: only.code, account: only.name, amounts: only.amounts });
       }
-      lines.push({
-        section: found.label,
-        code: "",
-        label: `Total ${found.label.toLowerCase()}`,
-        current: negate ? -found.totalCents : found.totalCents,
-        prior: negate ? -(found.comparisonTotalCents ?? 0) : (found.comparisonTotalCents ?? 0),
-        kind: "Subtotal",
-      });
     };
-    const subtotal = (label: string, current: number, prior: number) =>
-      lines.push({ section: "", code: "", label, current, prior, kind: "Subtotal" });
+    const subtotal = (key: keyof typeof statement.subtotals) => {
+      const s = statement.subtotals[key];
+      lines.push({ row: s.label, kind: "Subtotal", code: "", account: "", amounts: s.amounts });
+    };
 
-    push("REVENUE");
-    push("COST_OF_SALES");
-    subtotal("Gross profit", report.grossProfitCents, report.comparisonGrossProfitCents);
-    push("OPERATING_EXPENSE");
-    subtotal("EBITDA", report.ebitdaCents, report.comparisonEbitdaCents);
-    push("DEPRECIATION_AMORTIZATION");
-    subtotal("EBIT — operating income", report.ebitCents, report.comparisonEbitCents);
-    push("OTHER_INCOME");
-    push("OTHER_EXPENSE", true);
-    push("INTEREST_EXPENSE", true);
-    subtotal("Income before tax", report.incomeBeforeTaxCents, report.comparisonIncomeBeforeTaxCents);
-    push("INCOME_TAX_EXPENSE", true);
-    subtotal("Net income", report.netIncomeCents, report.comparisonNetIncomeCents);
+    category("NET_SALES");
+    category("MATERIAL_EXPENSE");
+    subtotal("GROSS_PROFIT");
+    category("SGA");
+    subtotal("EBITDA");
+    category("DEPRECIATION_AMORTIZATION");
+    subtotal("EBIT");
+    category("INTEREST_EXPENSE");
+    category("INTEREST_INCOME");
+    category("OTHER_INCOME");
+    category("OTHER_EXPENSE");
+    subtotal("EBT");
+    category("TAXES");
+    subtotal("NET_INCOME");
 
     const columns: CsvColumn<Line>[] = [
-      { header: "Section", value: (l) => l.section },
+      { header: "Row", value: (l) => l.row },
       { header: "Line type", value: (l) => l.kind },
       { header: "Account code", value: (l) => l.code },
-      { header: "Line", value: (l) => l.label },
-      { header: money("This period", ctx), value: (l) => csvMoney(l.current), numeric: true },
-      { header: money("Prior year", ctx), value: (l) => csvMoney(l.prior), numeric: true },
+      { header: "Account name", value: (l) => l.account },
+      { header: "Currency", value: () => ctx.currency },
+      ...statement.periods.map((period, i) => ({
+        header: moneyHeader(period.label, ctx.currency),
+        value: (l: Line) => csvMoney(l.amounts[i] ?? 0),
+        numeric: true,
+      })),
     ];
 
+    // income-statement-FY2023-to-FY2026.csv
+    const firstYear = endYear - count + 1;
     return {
-      filename: rangeFilename("profit-and-loss", range.from, range.to),
+      filename: `income-statement-FY${firstYear}-to-FY${endYear}.csv`,
       body: csvFile(lines, columns),
     };
   },
@@ -778,6 +825,38 @@ const chartOfAccountsExport: ExportDefinition = {
   },
 };
 
+const productsServicesExport: ExportDefinition = {
+  capability: CAPABILITIES.COMPANY_SETTINGS,
+  build: async (ctx) => {
+    const items = await db.serviceItem.findMany({
+      where: { companyId: ctx.companyId },
+      orderBy: [{ isActive: "desc" }, { code: "asc" }],
+      include: {
+        incomeAccount: { select: { code: true, name: true } },
+        expenseAccount: { select: { code: true, name: true } },
+        taxCode: { select: { code: true } },
+        purchaseTaxCode: { select: { code: true } },
+      },
+    });
+    type Row = (typeof items)[number];
+    const columns: CsvColumn<Row>[] = [
+      { header: "Code", value: (r) => r.code },
+      { header: "Name", value: (r) => r.name },
+      { header: "Type", value: (r) => r.type },
+      { header: "Description", value: (r) => r.description },
+      { header: "Unit", value: (r) => r.unit },
+      { header: money("List price", ctx), value: (r) => csvMoney(r.unitPriceCents), numeric: true },
+      { header: "Default discount (%)", value: (r) => csvRate(r.discountPercentMicro * 100), numeric: true },
+      { header: "Sales account", value: (r) => (r.incomeAccount ? `${r.incomeAccount.code} ${r.incomeAccount.name}` : "") },
+      { header: "Purchase account", value: (r) => (r.expenseAccount ? `${r.expenseAccount.code} ${r.expenseAccount.name}` : "") },
+      { header: "Sales tax code", value: (r) => r.taxCode?.code ?? "" },
+      { header: "Purchase tax code", value: (r) => r.purchaseTaxCode?.code ?? "" },
+      { header: "Active", value: (r) => (r.isActive ? "Yes" : "No") },
+    ];
+    return { filename: asOfFilename("products-and-services", today()), body: csvFile(items, columns) };
+  },
+};
+
 // ── Registry ────────────────────────────────────────────────────────────────
 
 /** Raised by a definition to return a specific HTTP status. */
@@ -789,7 +868,8 @@ export class ExportError extends Error {
 
 export const EXPORTS: Record<string, ExportDefinition> = {
   "trial-balance": trialBalanceExport,
-  "profit-and-loss": profitAndLossExport,
+  "income-statement": incomeStatementExport,
+  "profit-and-loss": incomeStatementExport,
   "balance-sheet": balanceSheetExport,
   "cash-flow": cashFlowExport,
   "general-ledger": generalLedgerExport,
@@ -804,4 +884,5 @@ export const EXPORTS: Record<string, ExportDefinition> = {
   invoices: documentListExport("invoice"),
   bills: documentListExport("bill"),
   "chart-of-accounts": chartOfAccountsExport,
+  "products-services": productsServicesExport,
 };

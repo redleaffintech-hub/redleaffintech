@@ -38,18 +38,46 @@ model User {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
+  /// Platform administration. `isPlatformAdmin` alone is NOT authorisation: a
+  /// suspended administrator keeps the flag but loses the portal, so every guard
+  /// reads both columns. See src/server/admin/guard.ts.
+  platformAdminSince       DateTime?
+  platformAdminSuspendedAt DateTime?
+
+  /// Set when an administrator issues a temporary password. The login flow
+  /// refuses to go anywhere but the change-password screen while it is true.
+  mustChangePassword Boolean   @default(false)
+  passwordChangedAt  DateTime?
+
+  /// AES-256-GCM ciphertext of the TOTP shared secret, never the raw secret,
+  /// and never returned to the UI once enrolment is confirmed.
+  mfaSecret     String?
+  mfaEnrolledAt DateTime?
+
   sessions     Session[]
   companyUsers CompanyUser[]
   firmUsers    FirmUser[]
   auditLogs    AuditLog[]
+
+  tokens         UserToken[]        @relation("UserTokenSubject")
+  issuedTokens   UserToken[]        @relation("UserTokenIssuer")
+  platformAudits PlatformAuditLog[] @relation("PlatformAuditActor")
 }
 
 model Session {
   id        String   @id @default(cuid())
   userId    String
   token     String   @unique
+  /// APP for the accounting product, ADMIN for the platform portal. The two ride
+  /// on different cookies and are never interchangeable: signing in to the app
+  /// must not silently grant the admin portal, and vice versa.
+  scope     String   @default("APP")
   userAgent String?
   ipAddress String?
+  /// When step-up MFA was last satisfied on this session. High-risk admin
+  /// actions require it to be recent, not merely present.
+  mfaVerifiedAt DateTime?
+  lastSeenAt    DateTime?
   expiresAt DateTime
   revokedAt DateTime?
   createdAt DateTime @default(now())
@@ -57,6 +85,7 @@ model Session {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+  @@index([userId, scope])
 }
 
 model Firm {
@@ -184,16 +213,69 @@ model CompanyUser {
 }
 
 model Subscription {
-  id               String    @id @default(cuid())
-  companyId        String    @unique
-  plan             String    @default("PROFESSIONAL")
-  status           String    @default("TRIALING") // TRIALING | ACTIVE | PAST_DUE | SUSPENDED
-  seats            Int       @default(3)
-  trialEndsAt      DateTime?
-  currentPeriodEnd DateTime?
-  createdAt        DateTime  @default(now())
+  id        String @id @default(cuid())
+  companyId String @unique
 
-  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  /// The stable plan code (STARTER | PROFESSIONAL | BUSINESS | FIRM). It is kept
+  /// alongside `planId` because it is the identifier entitlement checks and
+  /// external systems have always used; renaming a plan must not break them.
+  plan   String  @default("PROFESSIONAL")
+  planId String?
+
+  /// The exact published plan version this subscription was sold on. Agreed
+  /// pricing is read from the snapshot below, never from the plan's current
+  /// editable public price — editing a price must never rewrite history.
+  planVersionId String?
+
+  status       String @default("TRIALING") // TRIALING | ACTIVE | PAST_DUE | SUSPENDED | CANCELLED
+  billingCycle String @default("MONTHLY") // MONTHLY | QUARTERLY | ANNUAL
+  currency     String @default("CAD")
+
+  /// Agreed price in integer minor units. `priceCents` is what one billing cycle
+  /// actually charges; `monthlyEquivalentCents` exists only to be displayed.
+  priceCents             Int?
+  monthlyEquivalentCents Int?
+
+  seats Int @default(3)
+  /// True when the seat allowance was set by a platform administrator rather
+  /// than inherited from the plan. Overrides are shown as such in both portals.
+  seatsOverridden    Boolean   @default(false)
+  seatOverrideReason String?
+  seatOverrideAt     DateTime?
+  seatOverrideById   String?
+
+  trialStartsAt      DateTime?
+  trialEndsAt        DateTime?
+  startedAt          DateTime?
+  currentPeriodStart DateTime?
+  currentPeriodEnd   DateTime?
+
+  pastDueSince  DateTime?
+  suspendedAt   DateTime?
+  suspendReason String?
+  /// A scheduled cancellation (`cancelAt`, effective at period end) is not the
+  /// same as one that has taken effect (`cancelledAt`).
+  cancelAt     DateTime?
+  cancelledAt  DateTime?
+  cancelReason String?
+
+  /// Opaque subscription reference from a payment processor, when one is
+  /// connected. No card data is ever stored in this application.
+  providerRef String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  company     Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  planRecord  Plan?               @relation(fields: [planId], references: [id])
+  planVersion PlanVersion?        @relation(fields: [planVersionId], references: [id])
+  events      SubscriptionEvent[]
+  notes       SubscriptionNote[]
+
+  @@index([status])
+  @@index([planId])
+  @@index([trialEndsAt])
+  @@index([currentPeriodEnd])
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -268,7 +350,8 @@ model TaxCode {
 
   customers       Customer[]
   vendors         Vendor[]
-  items           ServiceItem[]
+  items           ServiceItem[] @relation("ItemSalesTaxCode")
+  purchaseItems   ServiceItem[] @relation("ItemPurchaseTaxCode")
   invoiceLines    InvoiceLine[]
   estimateLines   EstimateLine[]
   creditNoteLines CreditNoteLine[]
@@ -485,29 +568,52 @@ model Contact {
 }
 
 /// Services sold (§4 — service businesses first, inventory deferred to Phase 3).
+/// A reusable line-item definition — the "Products & services" catalogue.
+///
+/// The model keeps its original name so existing rows and relations survive; the
+/// product speaks of products, services and catalogue items. It is NOT an
+/// inventory record: there is no quantity on hand, no stock valuation and no
+/// cost-of-goods posting. A PRODUCT here is a line-item classification.
+///
+/// Every field is a DEFAULT. Selecting an item seeds a document line and the
+/// user may then change anything on it, and editing an item later must never
+/// reach back into a document that has already been written.
 model ServiceItem {
   id              String   @id @default(cuid())
   companyId       String
+  /// PRODUCT | SERVICE. Existing rows default to SERVICE, which is what they were.
+  type            String   @default("SERVICE")
   code            String
   name            String
   description     String?
+  /// Default list price, integer minor units of the company's base currency.
   unitPriceCents  Int      @default(0)
   unit            String   @default("hour")
+  /// Default discount, percent x 1e6 — the project's precise percentage convention.
+  discountPercentMicro Int @default(0)
   incomeAccountId String?
   expenseAccountId String?
+  /// Default tax code on SALES documents.
   taxCodeId       String?
+  /// Default tax code on PURCHASE documents; falls back to taxCodeId when unset.
+  purchaseTaxCodeId String?
   isActive        Boolean  @default(true)
   createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt @default(now())
 
   company        Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   incomeAccount  Account? @relation("ItemIncomeAccount", fields: [incomeAccountId], references: [id])
   expenseAccount Account? @relation("ItemExpenseAccount", fields: [expenseAccountId], references: [id])
-  taxCode        TaxCode? @relation(fields: [taxCodeId], references: [id])
+  taxCode        TaxCode? @relation("ItemSalesTaxCode", fields: [taxCodeId], references: [id])
+  purchaseTaxCode TaxCode? @relation("ItemPurchaseTaxCode", fields: [purchaseTaxCodeId], references: [id])
 
-  invoiceLines  InvoiceLine[]
-  estimateLines EstimateLine[]
+  invoiceLines    InvoiceLine[]
+  estimateLines   EstimateLine[]
+  billLines       BillLine[]
+  creditNoteLines CreditNoteLine[]
 
   @@unique([companyId, code])
+  @@index([companyId, isActive])
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -689,18 +795,21 @@ model CreditNoteLine {
   id             String  @id @default(cuid())
   creditNoteId   String
   lineNo         Int
+  itemId         String?
   accountId      String
   description    String
   quantityMilli  Int     @default(1000)
   unitPriceCents Int     @default(0)
+  discountPercentMicro Int @default(0)
   netCents       Int     @default(0)
   taxCodeId      String?
   taxCents       Int     @default(0)
   totalCents     Int     @default(0)
 
-  creditNote CreditNote @relation(fields: [creditNoteId], references: [id], onDelete: Cascade)
-  account    Account    @relation(fields: [accountId], references: [id])
-  taxCode    TaxCode?   @relation(fields: [taxCodeId], references: [id])
+  creditNote CreditNote   @relation(fields: [creditNoteId], references: [id], onDelete: Cascade)
+  account    Account      @relation(fields: [accountId], references: [id])
+  item       ServiceItem? @relation(fields: [itemId], references: [id])
+  taxCode    TaxCode?     @relation(fields: [taxCodeId], references: [id])
 
   @@index([creditNoteId])
 }
@@ -754,10 +863,12 @@ model BillLine {
   id             String  @id @default(cuid())
   billId         String
   lineNo         Int
+  itemId         String?
   accountId      String
   description    String
   quantityMilli  Int     @default(1000)
   unitPriceCents Int     @default(0)
+  discountPercentMicro Int @default(0)
   netCents       Int     @default(0)
   taxCodeId      String?
   taxCents       Int     @default(0)
@@ -766,9 +877,10 @@ model BillLine {
   customerId     String?
   projectId      String?
 
-  bill    Bill     @relation(fields: [billId], references: [id], onDelete: Cascade)
-  account Account  @relation(fields: [accountId], references: [id])
-  taxCode TaxCode? @relation(fields: [taxCodeId], references: [id])
+  bill    Bill         @relation(fields: [billId], references: [id], onDelete: Cascade)
+  account Account      @relation(fields: [accountId], references: [id])
+  item    ServiceItem? @relation(fields: [itemId], references: [id])
+  taxCode TaxCode?     @relation(fields: [taxCodeId], references: [id])
 
   @@index([billId])
 }
@@ -1219,4 +1331,247 @@ model Notification {
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   @@index([companyId, isRead])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Platform administration — the SaaS layer above the tenants
+//
+// Everything below this line belongs to Red Leaf the *business*, not to any one
+// client company: the plan catalogue that is sold, the subscriptions that were
+// sold, and the trail of who changed what. None of it carries a companyId as an
+// authorisation boundary, because none of it is tenant-owned — the boundary is
+// `isPlatformAdmin`, enforced in src/server/admin/guard.ts.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A sellable plan. The rows here are the *editable working copy*; what the
+/// public site renders is the most recent PlanVersion snapshot. That split is
+/// what lets an administrator revise a price over several saves without the
+/// half-finished figure ever reaching a visitor.
+model Plan {
+  id String @id @default(cuid())
+  /// Stable internal identifier, never reused, never renamed. Subscriptions and
+  /// entitlement checks key off this rather than the display name.
+  code        String  @unique
+  name        String
+  description String?
+  /// One line answering "who is this for", shown on the pricing card.
+  forWhom String?
+
+  /// ISO 4217. Prices below are integer minor units of this currency.
+  currency String @default("CAD")
+
+  seats     Int @default(1)
+  companies Int @default(1)
+  storageGb Int @default(1)
+
+  support String @default("Email support")
+
+  sortOrder Int     @default(0)
+  isPopular Boolean @default(false)
+  /// Quoted rather than self-serve: the card shows "Contact sales", not a price.
+  contactOnly Boolean @default(false)
+  /// Whether the plan is offered on the public pricing page at all. A private
+  /// plan can still be assigned to a client by a platform administrator.
+  isPublic Boolean @default(true)
+
+  /// DRAFT | PUBLISHED | ARCHIVED. Only PUBLISHED plans have a live snapshot.
+  status String @default("DRAFT")
+  /// True when the working copy has been edited since the last publish. This is
+  /// the flag the admin UI turns into an "unpublished changes" badge.
+  hasDraftChanges Boolean @default(false)
+
+  publishedAt        DateTime?
+  publishedVersionId String?
+  archivedAt         DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  prices        PlanPrice[]
+  features      PlanFeature[]
+  modules       PlanModule[]
+  versions      PlanVersion[]
+  subscriptions Subscription[]
+
+  @@index([status, isPublic, sortOrder])
+}
+
+/// One price per billing cycle. Both figures are stored rather than derived: the
+/// amount actually billed for a cycle is a commercial decision, not necessarily
+/// the monthly rate times the number of months in it.
+model PlanPrice {
+  id     String @id @default(cuid())
+  planId String
+  cycle  String // MONTHLY | QUARTERLY | ANNUAL
+
+  /// What one invoice for this cycle charges, in integer minor units.
+  cycleAmountCents Int
+  /// The comparable per-month figure the pricing page leads with. Display only.
+  monthlyEquivalentCents Int
+
+  plan Plan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@unique([planId, cycle])
+}
+
+/// A bullet on the plan card. Ordered, free text, no semantics.
+model PlanFeature {
+  id        String @id @default(cuid())
+  planId    String
+  label     String
+  sortOrder Int    @default(0)
+
+  plan Plan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@index([planId, sortOrder])
+}
+
+/// A Red Leaf product the plan unlocks (see MODULES in src/lib/plans.ts). This is
+/// the entitlement record — the thing a future module gate will read.
+model PlanModule {
+  id       String @id @default(cuid())
+  planId   String
+  moduleId String
+
+  plan Plan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@unique([planId, moduleId])
+}
+
+/// An immutable snapshot of a plan at the moment it was published.
+///
+/// Two jobs, and they are why this is a table rather than a boolean on Plan: the
+/// public site reads snapshots (so drafts stay private), and every subscription
+/// points at the exact version it was sold on (so editing today's price cannot
+/// rewrite a customer's agreed price).
+model PlanVersion {
+  id      String @id @default(cuid())
+  planId  String
+  version Int
+  /// The full public plan shape, JSON-encoded. Self-contained on purpose: a
+  /// snapshot must stay readable after the working copy has moved on.
+  snapshot String
+
+  publishedAt   DateTime @default(now())
+  publishedById String?
+
+  plan          Plan           @relation(fields: [planId], references: [id], onDelete: Cascade)
+  subscriptions Subscription[]
+
+  @@unique([planId, version])
+  @@index([planId, publishedAt])
+}
+
+/// Typed history for one subscription — the timeline the detail page renders. The
+/// platform audit log records the same change for compliance; this exists so the
+/// change is queryable per subscription without parsing audit JSON.
+model SubscriptionEvent {
+  id             String @id @default(cuid())
+  subscriptionId String
+  /// CREATED | PLAN_CHANGED | CYCLE_CHANGED | STATUS_CHANGED | TRIAL_EXTENDED |
+  /// SEATS_OVERRIDDEN | PERIOD_CHANGED | CANCEL_SCHEDULED | NOTE_ADDED
+  type       String
+  summary    String
+  reason     String?
+  beforeJson String?
+  afterJson  String?
+
+  actorUserId String?
+  actorEmail  String?
+  createdAt   DateTime @default(now())
+
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([subscriptionId, createdAt])
+}
+
+/// A platform administrator's internal note. Never shown to the client.
+model SubscriptionNote {
+  id             String   @id @default(cuid())
+  subscriptionId String
+  body           String
+  authorUserId   String?
+  authorEmail    String?
+  createdAt      DateTime @default(now())
+
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([subscriptionId, createdAt])
+}
+
+/// The platform-admin audit trail. Deliberately separate from AuditLog, which is
+/// tenant-scoped and visible to clients: these entries cross tenants and record
+/// who at Red Leaf did it.
+///
+/// Append-only by construction — the admin UI offers no update or delete path —
+/// and `actorEmail` is denormalised so an entry stays readable after the acting
+/// account is gone.
+model PlatformAuditLog {
+  id          String  @id @default(cuid())
+  actorUserId String?
+  actorEmail  String
+  action      String
+  entityType  String
+  entityId    String?
+  summary     String
+  /// Required for suspension, cancellation and entitlement overrides.
+  reason String?
+  /// Redacted JSON. Never contains password hashes, tokens or secrets — see
+  /// `redact()` in src/server/admin/audit.ts.
+  beforeJson String?
+  afterJson  String?
+
+  ipAddress String?
+  userAgent String?
+  requestId String?
+
+  createdAt DateTime @default(now())
+
+  actor User? @relation("PlatformAuditActor", fields: [actorUserId], references: [id])
+
+  @@index([createdAt])
+  @@index([entityType, entityId])
+  @@index([actorUserId, createdAt])
+  @@index([action, createdAt])
+}
+
+/// Every authentication attempt, successful or not. This is both the rate-limit
+/// substrate and the credential-stuffing signal: counting by email catches a
+/// targeted attack, counting by IP catches a spray across many accounts.
+model AuthAttempt {
+  id    String @id @default(cuid())
+  email String
+  /// APP | ADMIN — the portal that was attempted.
+  scope   String  @default("APP")
+  success Boolean @default(false)
+  /// LOCKED_OUT | BAD_PASSWORD | UNKNOWN_USER | NOT_ADMIN | MFA_FAILED | OK
+  outcome   String?
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([email, scope, createdAt])
+  @@index([ipAddress, createdAt])
+}
+
+/// A short-lived, single-use token: an invitation, a password reset, or an admin
+/// invitation. Only the SHA-256 hash is stored, so a database read cannot be
+/// replayed as a link, and nothing here is ever rendered in the UI.
+model UserToken {
+  id     String @id @default(cuid())
+  userId String
+  /// INVITE | PASSWORD_RESET | ADMIN_INVITE
+  purpose   String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  createdById String?
+
+  user    User  @relation("UserTokenSubject", fields: [userId], references: [id], onDelete: Cascade)
+  creator User? @relation("UserTokenIssuer", fields: [createdById], references: [id])
+
+  @@index([userId, purpose])
+  @@index([expiresAt])
 }

@@ -47,6 +47,7 @@ export interface CompanyContext {
     legalName: string | null;
     province: string;
     baseCurrency: string;
+    locale: string;
     fiscalYearStartMonth: number;
     gstNumber: string | null;
     qstNumber: string | null;
@@ -83,7 +84,7 @@ export const requireCompany = cache(async (companyId?: string): Promise<CompanyC
   const company = await db.company.findUniqueOrThrow({
     where: { id: membership.companyId },
     select: {
-      id: true, name: true, legalName: true, province: true, baseCurrency: true,
+      id: true, name: true, legalName: true, province: true, baseCurrency: true, locale: true,
       fiscalYearStartMonth: true, gstNumber: true, qstNumber: true, pstNumber: true,
       businessNumber: true, isReadOnly: true,
       defaultTaxInclusive: true, defaultPaymentTermsDays: true,

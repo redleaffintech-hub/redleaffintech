@@ -53,7 +53,10 @@ export async function createBillAction(payload: string) {
         description: line.description,
         quantityMilli: Math.round(line.quantity * 1000),
         unitPriceCents: toCents(line.unitPrice),
+        // Percent x 1e6, the same convention the sales side uses.
+        discountPercentMicro: Math.round(line.discountPercent * 1_000_000),
         taxCodeId: line.taxCodeId,
+        itemId: line.itemId,
       })),
     });
     revalidatePath("/purchases/bills");
@@ -136,7 +139,7 @@ export async function payBillAction(formData: FormData) {
 
 export async function billFormOptions() {
   const { company } = await requireCompany();
-  const [vendors, accounts, taxCodes] = await Promise.all([
+  const [vendors, accounts, taxCodes, items] = await Promise.all([
     db.vendor.findMany({
       where: { companyId: company.id, isActive: true },
       orderBy: { name: "asc" },
@@ -152,6 +155,18 @@ export async function billFormOptions() {
       orderBy: { code: "asc" },
       include: { components: true },
     }),
+    // The same catalogue serves purchases. A bill seeds the item's EXPENSE
+    // account and purchase tax code — never the income account.
+    db.serviceItem.findMany({
+      where: { companyId: company.id, isActive: true },
+      orderBy: [{ code: "asc" }],
+      select: {
+        id: true, code: true, name: true, description: true, unit: true,
+        unitPriceCents: true, discountPercentMicro: true,
+        incomeAccountId: true, expenseAccountId: true,
+        taxCodeId: true, purchaseTaxCodeId: true,
+      },
+    }),
   ]);
-  return { vendors, accounts, taxCodes, company };
+  return { vendors, accounts, taxCodes, items, company };
 }

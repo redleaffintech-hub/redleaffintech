@@ -14,7 +14,7 @@ import { calculateTax } from "../src/server/tax/engine";
 import { csvDate, csvFile, csvMoney, toCsv, asOfFilename, rangeFilename, type CsvColumn } from "../src/lib/csv";
 import { EXPORTS } from "../src/server/reports/exports";
 import { can } from "../src/lib/permissions";
-import { DEPRECIATION_AMORTIZATION_SUBTYPES } from "../src/lib/enums";
+import { DEPRECIATION_AMORTIZATION_SUBTYPES, ITEM_TYPES } from "../src/lib/enums";
 import { formatMoney } from "../src/lib/money";
 import { DEFAULT_CURRENCY, normalizeCurrency } from "../src/lib/currency";
 import { taxRegistrationLines } from "../src/lib/tax-registration";
@@ -125,6 +125,7 @@ async function main() {
   await companySettingsChecks();
   await csvExportChecks();
   await profitAndLossChecks();
+  await catalogueChecks();
 }
 
 /**
@@ -275,9 +276,11 @@ async function companySettingsChecks() {
   );
 }
 
+let aborted: unknown = null;
+
 main()
   .catch((error) => {
-    console.error(error);
+    aborted = error;
     process.exitCode = 1;
   })
   .then(async () => {
@@ -287,9 +290,17 @@ main()
       console.log(`  ${r.pass ? "PASS" : "FAIL"}  ${r.name.padEnd(width)}   ${r.detail}`);
     }
     const failed = results.filter((r) => !r.pass);
-    console.log(`\n  ${results.length - failed.length}/${results.length} checks passed.\n`);
+    console.log(`\n  ${results.length - failed.length}/${results.length} checks passed.`);
+    if (aborted) {
+      // Say so loudly. Checks that never ran are not passes, and a summary
+      // reading "N/N passed" after a thrown error is worse than a red run.
+      console.log("\n  RUN ABORTED before all checks completed — the count above is incomplete.\n");
+      console.error(aborted);
+    } else {
+      console.log("");
+    }
     await db.$disconnect();
-    if (failed.length) process.exitCode = 1;
+    if (failed.length || aborted) process.exitCode = 1;
   });
 
 /**
@@ -445,31 +456,38 @@ async function profitAndLossChecks() {
   for (const company of companies) {
     const tag = company.name.split(" ")[0];
     const pl = await profitAndLoss(company.id, range);
+    // Section totals are per-period arrays now, and costs are already negative
+    // so each step of the ladder is an addition.
     const sec = (key: string) => pl.sections.find((s) => s.key === key)!;
+    const total = (key: string) => sec(key).totals[0];
 
     check(
-      `${tag}: EBITDA = gross profit less operating expenses`,
-      pl.ebitdaCents === pl.grossProfitCents - sec("OPERATING_EXPENSE").totalCents,
+      `${tag}: EBITDA = gross profit less SG&A`,
+      pl.ebitdaCents === pl.grossProfitCents + total("SGA"),
       `EBITDA ${money(pl.ebitdaCents)}`,
     );
     check(
       `${tag}: EBIT = EBITDA less depreciation & amortization`,
-      pl.ebitCents === pl.ebitdaCents - sec("DEPRECIATION_AMORTIZATION").totalCents,
-      `EBIT ${money(pl.ebitCents)}, D&A ${money(sec("DEPRECIATION_AMORTIZATION").totalCents)}`,
+      pl.ebitCents === pl.ebitdaCents + total("DEPRECIATION_AMORTIZATION"),
+      `EBIT ${money(pl.ebitCents)}, D&A ${money(total("DEPRECIATION_AMORTIZATION"))}`,
     );
     check(
-      `${tag}: income before tax = EBIT + other income - other expense - interest`,
+      `${tag}: EBT = EBIT + interest and other non-operating items`,
       pl.incomeBeforeTaxCents ===
-        pl.ebitCents + sec("OTHER_INCOME").totalCents - sec("OTHER_EXPENSE").totalCents - sec("INTEREST_EXPENSE").totalCents,
-      `income before tax ${money(pl.incomeBeforeTaxCents)}`,
+        pl.ebitCents +
+          total("INTEREST_EXPENSE") +
+          total("INTEREST_INCOME") +
+          total("OTHER_INCOME") +
+          total("OTHER_EXPENSE"),
+      `EBT ${money(pl.incomeBeforeTaxCents)}`,
     );
     check(
-      `${tag}: net income = income before tax less income tax`,
-      pl.netIncomeCents === pl.incomeBeforeTaxCents - sec("INCOME_TAX_EXPENSE").totalCents,
+      `${tag}: net income = EBT less taxes`,
+      pl.netIncomeCents === pl.incomeBeforeTaxCents + total("TAXES"),
       `net income ${money(pl.netIncomeCents)}`,
     );
 
-    const strayDA = sec("OPERATING_EXPENSE").rows.filter((r) =>
+    const strayDA = sec("SGA").rows.filter((r) =>
       (DEPRECIATION_AMORTIZATION_SUBTYPES as readonly string[]).includes(r.subtype),
     );
     check(
@@ -479,7 +497,7 @@ async function profitAndLossChecks() {
     );
 
     // Classification is by subtype, never by account name.
-    const namedInterest = sec("OPERATING_EXPENSE").rows.filter((r) => /interest/i.test(r.name));
+    const namedInterest = sec("SGA").rows.filter((r) => /interest/i.test(r.name));
     check(
       `${tag}: accounts are placed by subtype, not by name`,
       namedInterest.every((r) => r.subtype === "OPERATING_EXPENSE"),
@@ -513,5 +531,196 @@ async function profitAndLossChecks() {
       emptyPl.grossMarginPercent === null &&
       emptyPl.netMarginPercent === null,
     "no revenue, all three margins null",
+  );
+}
+
+/**
+ * Products & services catalogue.
+ *
+ * The database work runs inside a transaction that is rolled back, so real
+ * constraints (company-scoped code uniqueness, foreign keys, defaults) are
+ * exercised without leaving anything behind.
+ */
+class Rollback2 extends Error {}
+
+async function catalogueChecks() {
+  const companies = await db.company.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } });
+  const company = companies[0];
+  const other = companies[1];
+
+  // Existing rows must have migrated to SERVICE rather than to nothing.
+  const untyped = await db.serviceItem.count({ where: { NOT: { type: { in: [...ITEM_TYPES] } } } });
+  check(
+    "Catalogue: every existing item has a valid type",
+    untyped === 0,
+    untyped === 0 ? "all rows are PRODUCT or SERVICE" : `${untyped} row(s) with an unknown type`,
+  );
+
+  const legacyDefaulted = await db.serviceItem.count({ where: { companyId: company.id, type: "SERVICE" } });
+  check(
+    "Catalogue: pre-existing items defaulted to SERVICE",
+    legacyDefaulted > 0,
+    `${legacyDefaulted} service item(s) in ${company.name.split(" ")[0]}`,
+  );
+
+  // Discounts use the project's percent x 1e6 convention, like document lines.
+  const discountCases: [number, number][] = [
+    [0, 0],
+    [10, 10_000_000],
+    [12.5, 12_500_000],
+    [100, 100_000_000],
+  ];
+  const badDiscount = discountCases.filter(([pct, micro]) => Math.round(pct * 1_000_000) !== micro);
+  check(
+    "Catalogue: discount percentages use the micro convention",
+    badDiscount.length === 0,
+    badDiscount.length ? "conversion mismatch" : `${discountCases.length} cases exact`,
+  );
+
+  try {
+    await db.$transaction(async (tx) => {
+      const revenue = await tx.account.findFirstOrThrow({
+        where: { companyId: company.id, type: "REVENUE" },
+        select: { id: true },
+      });
+      const expense = await tx.account.findFirstOrThrow({
+        where: { companyId: company.id, type: "EXPENSE" },
+        select: { id: true },
+      });
+
+      const product = await tx.serviceItem.create({
+        data: {
+          companyId: company.id,
+          type: "PRODUCT",
+          code: "ZZ-PROBE-1",
+          name: "Probe widget",
+          unit: "each",
+          unitPriceCents: 125_000,
+          discountPercentMicro: 12_500_000,
+          incomeAccountId: revenue.id,
+          expenseAccountId: expense.id,
+        },
+        select: { id: true, type: true, unitPriceCents: true, discountPercentMicro: true, isActive: true, incomeAccountId: true, expenseAccountId: true },
+      });
+      check(
+        "Catalogue: a PRODUCT saves with price, discount and both accounts",
+        product.type === "PRODUCT" &&
+          product.unitPriceCents === 125_000 &&
+          product.discountPercentMicro === 12_500_000 &&
+          product.isActive &&
+          product.incomeAccountId === revenue.id &&
+          product.expenseAccountId === expense.id,
+        `${money(product.unitPriceCents)} @ ${product.discountPercentMicro / 1_000_000}% off`,
+      );
+
+      const service = await tx.serviceItem.create({
+        data: { companyId: company.id, type: "SERVICE", code: "ZZ-PROBE-2", name: "Probe service", unit: "hour" },
+        select: { id: true, type: true, unit: true, discountPercentMicro: true },
+      });
+      check(
+        "Catalogue: a SERVICE saves and defaults its discount to zero",
+        service.type === "SERVICE" && service.discountPercentMicro === 0 && service.unit === "hour",
+        `unit ${service.unit}, discount ${service.discountPercentMicro}`,
+      );
+
+      if (other) {
+        const twin = await tx.serviceItem.create({
+          data: { companyId: other.id, type: "SERVICE", code: "ZZ-PROBE-1", name: "Same code, other company" },
+          select: { id: true, companyId: true },
+        });
+        check(
+          "Catalogue: the same code may exist in a different company",
+          twin.companyId === other.id,
+          "uniqueness is company-scoped, as tenancy requires",
+        );
+      }
+
+      // Archiving hides an item from new documents without touching history.
+      const archived = await tx.serviceItem.update({
+        where: { id: service.id },
+        data: { isActive: false },
+        select: { isActive: true },
+      });
+      const selectable = await tx.serviceItem.findMany({
+        where: { companyId: company.id, isActive: true, code: { startsWith: "ZZ-PROBE" } },
+        select: { code: true },
+      });
+      check(
+        "Catalogue: an archived item disappears from the selectable list",
+        !archived.isActive && selectable.every((i) => i.code !== "ZZ-PROBE-2"),
+        `selectable probes: ${selectable.map((i) => i.code).join(", ") || "none"}`,
+      );
+
+      const reactivated = await tx.serviceItem.update({
+        where: { id: service.id },
+        data: { isActive: true },
+        select: { isActive: true },
+      });
+      check("Catalogue: an archived item can be reactivated", reactivated.isActive, "isActive back to true");
+
+      throw new Rollback2();
+    });
+  } catch (error) {
+    if (!(error instanceof Rollback2)) throw error;
+  }
+
+  // Uniqueness gets its own transaction: the INSERT is meant to fail, and in
+  // Postgres a failed statement aborts the entire surrounding transaction, so
+  // running it beside the other probes would silently kill them.
+  let duplicateRejected = false;
+  try {
+    await db.$transaction(async (tx) => {
+      await tx.serviceItem.create({
+        data: { companyId: company.id, type: "SERVICE", code: "ZZ-DUP", name: "First" },
+      });
+      await tx.serviceItem.create({
+        data: { companyId: company.id, type: "SERVICE", code: "ZZ-DUP", name: "Second, same code" },
+      });
+      throw new Rollback2();
+    });
+  } catch (error) {
+    duplicateRejected = !(error instanceof Rollback2);
+  }
+  check(
+    "Catalogue: an item code is unique within a company",
+    duplicateRejected,
+    duplicateRejected ? "the second insert was rejected by the constraint" : "a duplicate code was ACCEPTED",
+  );
+
+  const leftovers = await db.serviceItem.count({ where: { code: { startsWith: "ZZ-" } } });
+  check("Catalogue: the probe transaction rolled back cleanly", leftovers === 0, `${leftovers} probe row(s) left behind`);
+
+  // Historical integrity: a saved line carries its own price and description,
+  // so editing the catalogue later cannot restate an issued document.
+  const linkedLine = await db.invoiceLine.findFirst({
+    where: { itemId: { not: null }, invoice: { companyId: company.id } },
+    select: { description: true, unitPriceCents: true, itemId: true, item: { select: { name: true, unitPriceCents: true } } },
+  });
+  check(
+    "Catalogue: a document line stores its own price, not a live lookup",
+    linkedLine === null || typeof linkedLine.unitPriceCents === "number",
+    linkedLine
+      ? `line "${linkedLine.description}" holds ${money(linkedLine.unitPriceCents)}; item currently lists ${money(linkedLine.item?.unitPriceCents ?? 0)}`
+      : "no item-linked invoice lines in this file yet",
+  );
+
+  // Sales and purchase documents must not share an account side.
+  const wrongSide = await db.serviceItem.findMany({
+    where: { companyId: company.id, incomeAccount: { is: { type: { not: "REVENUE" } } } },
+    select: { code: true },
+  });
+  check(
+    "Catalogue: income accounts are revenue accounts",
+    wrongSide.length === 0,
+    wrongSide.length ? `${wrongSide.map((i) => i.code).join(", ")}` : "no item points its sales side at a non-revenue account",
+  );
+
+  // The purchase-side line models can now carry an item and a discount.
+  const billLineFields = await db.billLine.findFirst({ select: { itemId: true, discountPercentMicro: true } });
+  const creditLineFields = await db.creditNoteLine.findFirst({ select: { itemId: true, discountPercentMicro: true } });
+  check(
+    "Catalogue: bill and credit-note lines carry an item link and a discount",
+    billLineFields !== undefined && creditLineFields !== undefined,
+    "columns present on both purchase and credit lines",
   );
 }

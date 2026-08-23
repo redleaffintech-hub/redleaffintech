@@ -8,7 +8,7 @@ export const metadata = { title: "New bill" };
 
 export default async function NewBillPage() {
   await requireCapability(CAPABILITIES.BILLS);
-  const { vendors, accounts, taxCodes, company } = await billFormOptions();
+  const { vendors, accounts, taxCodes, items, company } = await billFormOptions();
 
   return (
     <>
@@ -30,6 +30,7 @@ export default async function NewBillPage() {
           parties={vendors}
           accounts={accounts}
           taxCodes={taxCodes}
+          items={items}
           defaultTaxInclusive={false}
           defaultTermsDays={30}
           onSubmitAction={createBillAction}

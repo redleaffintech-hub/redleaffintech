@@ -128,6 +128,14 @@ export const CANADIAN_SERVICE_COA: AccountTemplate[] = [
     systemKey: SA.UNCATEGORIZED_INCOME,
   },
 
+  {
+    code: "4910",
+    name: "Interest Income",
+    type: "REVENUE",
+    subtype: "INTEREST_INCOME",
+    description: "Interest earned on balances. Non-operating — sits below EBIT, not in net sales.",
+  },
+
   // ── Expenses ──────────────────────────────────────────────────────────────
   { code: "5000", name: "Subcontractor Costs", type: "EXPENSE", subtype: "COST_OF_SALES" },
   { code: "5010", name: "Direct Project Costs", type: "EXPENSE", subtype: "COST_OF_SALES" },
