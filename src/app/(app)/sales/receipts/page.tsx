@@ -1,6 +1,7 @@
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
 import { PaymentListPage } from "@/components/payment-list";
+import { voidReceiptAction } from "./actions";
 
 export const metadata = { title: "Receipts" };
 
@@ -13,5 +14,6 @@ export default async function ReceiptsPage({ searchParams }: PageProps<"/sales/r
     currency: company.baseCurrency,
     type: "RECEIPT",
     searchParams: await searchParams,
+    voidAction: voidReceiptAction,
   });
 }

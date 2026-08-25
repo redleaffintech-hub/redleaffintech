@@ -1,6 +1,7 @@
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
 import { PaymentListPage } from "@/components/payment-list";
+import { voidPaymentAction } from "./actions";
 
 export const metadata = { title: "Payments" };
 
@@ -13,5 +14,6 @@ export default async function VendorPaymentsPage({ searchParams }: PageProps<"/p
     currency: company.baseCurrency,
     type: "PAYMENT",
     searchParams: await searchParams,
+    voidAction: voidPaymentAction,
   });
 }

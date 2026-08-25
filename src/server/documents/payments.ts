@@ -46,6 +46,22 @@ export async function recordPayment(input: PaymentInput) {
   return db.$transaction((tx) => recordPaymentInTx(tx, input));
 }
 
+/** A party's open (partially or fully unpaid) documents, oldest due date first, for allocating a payment across. */
+export async function openDocumentsForParty(companyId: string, type: "RECEIPT" | "PAYMENT", partyId: string) {
+  if (type === "RECEIPT") {
+    return db.invoice.findMany({
+      where: { companyId, customerId: partyId, balanceCents: { gt: 0 }, status: { notIn: ["DRAFT", "VOID"] } },
+      orderBy: { dueDate: "asc" },
+      select: { id: true, number: true, issueDate: true, dueDate: true, balanceCents: true },
+    });
+  }
+  return db.bill.findMany({
+    where: { companyId, vendorId: partyId, balanceCents: { gt: 0 }, status: { notIn: ["DRAFT", "VOID"] } },
+    orderBy: { dueDate: "asc" },
+    select: { id: true, number: true, issueDate: true, dueDate: true, balanceCents: true },
+  });
+}
+
 export async function recordPaymentInTx(tx: Tx, input: PaymentInput) {
   const date = toUtcDay(input.date);
   if (input.amountCents <= 0) throw new Error("Payment amount must be greater than zero.");
