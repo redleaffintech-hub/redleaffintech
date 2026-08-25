@@ -10,7 +10,7 @@ import {
   SubmitButton,
 } from "@/components/admin/forms";
 import { AdminCard } from "@/components/admin/ui";
-import { BILLING_CYCLES, CYCLE_LABELS, type PublicPlan } from "@/lib/plans";
+import { BILLING_CYCLES, CYCLE_LABELS, MODULE_CATALOG, type PublicPlan } from "@/lib/plans";
 import { createClientAction } from "../actions";
 
 const MONTHS = [
@@ -44,6 +44,16 @@ export function NewClientForm({
   const [overrideSeats, setOverrideSeats] = useState(false);
   const [trialDays, setTrialDays] = useState(30);
   const [done, setDone] = useState<string | null>(null);
+  const [modules, setModules] = useState(new Set(["ACCOUNTING"]));
+
+  function toggleModule(id: string) {
+    setModules((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   const selected = plans.find((plan) => plan.code === planCode);
 
@@ -275,6 +285,31 @@ export function NewClientForm({
               </AdminField>
             </div>
           )}
+        </div>
+      </AdminCard>
+
+      <AdminCard title="Modules" subtitle="What this client can use, independent of what their plan includes">
+        <div className="grid gap-2.5 sm:grid-cols-2">
+          {MODULE_CATALOG.map((module) => (
+            <label
+              key={module.id}
+              className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-paper-300 bg-white p-3 has-[:checked]:border-brand-300 has-[:checked]:bg-brand-soft"
+            >
+              <input
+                type="checkbox"
+                name="enabledModules"
+                value={module.id}
+                checked={module.id === "ACCOUNTING" || modules.has(module.id)}
+                onChange={() => toggleModule(module.id)}
+                disabled={module.id === "ACCOUNTING"}
+                className="mt-0.5 h-4 w-4 rounded border-paper-400"
+              />
+              <span className="text-[0.8125rem] leading-5 text-ink-800">
+                <span className="block font-medium text-ink-900">{module.name}</span>
+                <span className="mt-0.5 block text-[0.75rem] text-muted-ink">{module.blurb}</span>
+              </span>
+            </label>
+          ))}
         </div>
       </AdminCard>
 

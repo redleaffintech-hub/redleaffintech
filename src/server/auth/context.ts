@@ -57,6 +57,8 @@ export interface CompanyContext {
     defaultTaxInclusive: boolean;
     defaultPaymentTermsDays: number;
     logoUrl: string | null;
+    /** Never empty in practice — requireCompany() falls back to ["ACCOUNTING"] rather than trust an unset default. */
+    enabledModules: string[];
   };
   role: CompanyRole;
   /** Every company this user may switch to. */
@@ -82,15 +84,22 @@ export const requireCompany = cache(async (companyId?: string): Promise<CompanyC
   const membership =
     memberships.find((m) => m.companyId === targetId) ?? memberships[0];
 
-  const company = await db.company.findUniqueOrThrow({
+  const companyRecord = await db.company.findUniqueOrThrow({
     where: { id: membership.companyId },
     select: {
       id: true, name: true, legalName: true, province: true, baseCurrency: true, locale: true,
       fiscalYearStartMonth: true, gstNumber: true, qstNumber: true, pstNumber: true,
       businessNumber: true, isReadOnly: true,
-      defaultTaxInclusive: true, defaultPaymentTermsDays: true, logoUrl: true,
+      defaultTaxInclusive: true, defaultPaymentTermsDays: true, logoUrl: true, enabledModules: true,
     },
   });
+  // An unset module list is "not configured yet", not "nothing" — a company
+  // must never be locked out of its own books by an admin who never visited
+  // the modules panel.
+  const company = {
+    ...companyRecord,
+    enabledModules: companyRecord.enabledModules.length > 0 ? companyRecord.enabledModules : ["ACCOUNTING"],
+  };
 
   return {
     user,
@@ -103,6 +112,20 @@ export const requireCompany = cache(async (companyId?: string): Promise<CompanyC
     })),
   };
 });
+
+/**
+ * Guard an entire route group behind a product module — everything under
+ * `/hr`, `/payroll` and `/inventory` calls this from that segment's own
+ * `layout.tsx`, which is what makes it a hard block rather than a hidden nav
+ * link: hitting the URL directly still redirects. Modules without their own
+ * route prefix (Accounting, Payments — both live under existing Sales/
+ * Purchases/Accounting pages) have nothing to gate here.
+ */
+export async function requireModule(moduleId: string): Promise<CompanyContext> {
+  const context = await requireCompany();
+  if (!context.company.enabledModules.includes(moduleId)) redirect("/dashboard");
+  return context;
+}
 
 /** Guard a server action or page section behind a capability from §34. */
 export async function requireCapability(capability: Capability): Promise<CompanyContext> {

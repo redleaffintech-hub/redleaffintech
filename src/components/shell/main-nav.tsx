@@ -26,17 +26,21 @@ export function MainNav({
   access,
   counts,
   isAccountant,
+  enabledModules,
 }: {
   access: Record<string, AccessLevel>;
   counts: NavCounts;
   isAccountant: boolean;
+  /** Which products this company can use — a group tagged with a module that isn't in here is hidden entirely. */
+  enabledModules: string[];
 }) {
   const pathname = usePathname();
   // The firm workspace sits directly after Dashboard, where an accountant looks
   // for it first — the same position it held in the sidebar.
-  const groups: NavGroup[] = isAccountant
+  const allGroups: NavGroup[] = isAccountant
     ? [NAV_GROUPS[0], ACCOUNTANT_GROUP, ...NAV_GROUPS.slice(1)]
     : NAV_GROUPS;
+  const groups = allGroups.filter((group) => !group.module || enabledModules.includes(group.module));
 
   return (
     <nav aria-label="Modules" className="border-t border-paper-200">

@@ -251,6 +251,7 @@ export async function getClient(companyId: string) {
       industry: true,
       fiscalYearStartMonth: true,
       isReadOnly: true,
+      enabledModules: true,
       createdAt: true,
       updatedAt: true,
       firm: { select: { id: true, name: true } },
@@ -297,6 +298,8 @@ export interface CreateClientInput {
   trialDays?: number;
   seatOverride?: number | null;
   seatOverrideReason?: string | null;
+  /** ModuleId list from src/lib/plans.ts — independent of what the plan itself includes. */
+  enabledModules?: string[];
 }
 
 export interface CreateClientResult {
@@ -366,6 +369,7 @@ export async function createClient(actor: AdminActor, input: CreateClientInput):
         plan: input.planCode,
         billingCycle: input.billingCycle,
         trialDays: input.trialDays,
+        enabledModules: input.enabledModules,
       });
 
       const user =
@@ -557,5 +561,85 @@ export async function setReadOnly(
     reason,
     before: { isReadOnly: before.isReadOnly },
     after: { isReadOnly: input.isReadOnly },
+  });
+}
+
+/**
+ * Which products this company can use — independent of whatever the assigned
+ * Plan's own module list says. Enforced in the app itself: the sidebar hides
+ * a group tagged with a module that isn't here, and the HR/Payroll/Inventory
+ * route layouts redirect a direct hit on the URL too (requireModule in
+ * src/server/auth/context.ts).
+ */
+export async function setClientModules(
+  actor: AdminActor,
+  input: { companyId: string; enabledModules: string[] },
+) {
+  const before = await db.company.findUnique({
+    where: { id: input.companyId },
+    select: { name: true, enabledModules: true },
+  });
+  if (!before) throw new ClientError("That client no longer exists.");
+
+  // Accounting is what the dashboard, company settings and login itself sit
+  // under — turning it off would lock the client out of their own file.
+  const enabledModules = Array.from(new Set(["ACCOUNTING", ...input.enabledModules]));
+
+  await db.company.update({ where: { id: input.companyId }, data: { enabledModules } });
+
+  await recordPlatformAudit({
+    actorUserId: actor.id,
+    actorEmail: actor.email,
+    action: AUDIT_ACTIONS.CLIENT_MODULES_CHANGED,
+    entityType: "Company",
+    entityId: input.companyId,
+    summary: `${before.name} modules set to ${enabledModules.join(", ")}`,
+    before: { enabledModules: before.enabledModules },
+    after: { enabledModules },
+  });
+}
+
+/**
+ * Permanently delete a client company and everything in it.
+ *
+ * Every Company-scoped table in the schema is declared `onDelete: Cascade`
+ * back to Company (checked — there is no straggler that would half-fail this),
+ * so a single `company.delete` removes every invoice, journal entry,
+ * membership, bank account and audit-log row that belongs to it. What is NOT
+ * removed: the `User` rows of anyone who had access — a person's login is
+ * their own, and may belong to other companies too. Their membership in THIS
+ * company is gone with everything else.
+ *
+ * Requires the operator to type the company's exact current name, the same
+ * confirmation pattern used for a real financial write-off elsewhere in this
+ * app — there is no undo once this returns.
+ */
+export async function deleteClient(actor: AdminActor, input: { companyId: string; confirmName: string }) {
+  const company = await db.company.findUnique({
+    where: { id: input.companyId },
+    select: { id: true, name: true },
+  });
+  if (!company) throw new ClientError("That client no longer exists.");
+
+  if (input.confirmName.trim() !== company.name) {
+    throw new ClientError(`Type "${company.name}" exactly to confirm — deleting a client cannot be undone.`);
+  }
+
+  const [userCount, invoiceCount, journalCount] = await Promise.all([
+    db.companyUser.count({ where: { companyId: company.id } }),
+    db.invoice.count({ where: { companyId: company.id } }),
+    db.journalEntry.count({ where: { companyId: company.id } }),
+  ]);
+
+  await db.company.delete({ where: { id: company.id } });
+
+  await recordPlatformAudit({
+    actorUserId: actor.id,
+    actorEmail: actor.email,
+    action: AUDIT_ACTIONS.CLIENT_DELETED,
+    entityType: "Company",
+    entityId: company.id,
+    summary: `${company.name} permanently deleted (${userCount} membership(s), ${invoiceCount} invoice(s), ${journalCount} journal entr${journalCount === 1 ? "y" : "ies"})`,
+    before: { name: company.name, userCount, invoiceCount, journalCount },
   });
 }

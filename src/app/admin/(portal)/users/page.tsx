@@ -39,14 +39,25 @@ export default async function UsersPage({ searchParams }: { searchParams: AdminS
 
       <AdminCard className="mb-4">
         <form method="get" className="flex flex-wrap items-center gap-3">
-          <input
-            type="search"
-            name="q"
-            defaultValue={q}
-            placeholder="Name or email"
-            aria-label="Search users"
-            className={`${adminInputClass} max-w-sm flex-1`}
-          />
+          <div className="relative max-w-sm flex-1">
+            <svg
+              aria-hidden
+              viewBox="0 0 20 20"
+              fill="none"
+              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-500"
+            >
+              <circle cx="9" cy="9" r="6.5" stroke="currentColor" strokeWidth="1.5" />
+              <path d="M18 18L14 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+            <input
+              type="search"
+              name="q"
+              defaultValue={q}
+              placeholder="Name or email"
+              aria-label="Search users"
+              className={`${adminInputClass} pl-9`}
+            />
+          </div>
           <label className="flex items-center gap-2 text-[0.8125rem] text-ink-800">
             <input
               type="checkbox"

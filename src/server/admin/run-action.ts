@@ -111,6 +111,11 @@ export function int(formData: FormData, key: string, fallback: number | null = n
   return Number.isFinite(parsed) ? Math.trunc(parsed) : fallback;
 }
 
+/** Every value for a name shared by several checkboxes — e.g. a set of module toggles. */
+export function list(formData: FormData, key: string): string[] {
+  return formData.getAll(key).filter((v): v is string => typeof v === "string" && v.length > 0);
+}
+
 /**
  * A money field typed as dollars, stored as integer cents.
  *

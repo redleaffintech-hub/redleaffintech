@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
-import { createClient, normalizeEmail, setReadOnly, updateClient } from "@/server/admin/clients";
+import { createClient, deleteClient, normalizeEmail, setClientModules, setReadOnly, updateClient } from "@/server/admin/clients";
 import {
   changeMembershipRole,
   grantMembership,
@@ -11,7 +11,7 @@ import {
   setMembershipStatus,
 } from "@/server/admin/users";
 import { assignPlan } from "@/server/admin/subscriptions";
-import { bool, int, optionalStr, runAdminAction, str } from "@/server/admin/run-action";
+import { bool, int, list, optionalStr, runAdminAction, str } from "@/server/admin/run-action";
 
 /**
  * Client-company mutations.
@@ -46,6 +46,7 @@ export async function createClientAction(formData: FormData) {
       trialDays: int(data, "trialDays", 30) ?? 30,
       seatOverride: seatOverrideRaw && seatOverrideRaw > 0 ? seatOverrideRaw : null,
       seatOverrideReason: optionalStr(data, "seatOverrideReason") ?? null,
+      enabledModules: list(data, "enabledModules"),
     });
 
     revalidatePath("/admin/clients");
@@ -101,6 +102,33 @@ export async function setClientReadOnlyAction(formData: FormData) {
     });
     revalidatePath(`/admin/clients/${companyId}`);
     return { ok: true, message: "The company's read-only state has been changed." };
+  });
+}
+
+export async function updateClientModulesAction(formData: FormData) {
+  return runAdminAction(formData, async (actor, data) => {
+    const companyId = str(data, "companyId");
+    await setClientModules(actor, { companyId, enabledModules: list(data, "enabledModules") });
+    revalidatePath(`/admin/clients/${companyId}`);
+    revalidatePath("/", "layout");
+    return { ok: true, message: "Modules updated." };
+  });
+}
+
+/**
+ * Permanent, cascading delete — every invoice, journal entry, membership and
+ * everything else `onDelete: Cascade` reaches from Company goes with it. There
+ * is no undo; the confirmation dialog on the client screen requires typing the
+ * company's name before this ever fires.
+ */
+export async function deleteClientAction(formData: FormData) {
+  return runAdminAction(formData, async (actor, data) => {
+    const companyId = str(data, "companyId");
+    const confirmName = str(data, "confirmName");
+    await deleteClient(actor, { companyId, confirmName });
+    revalidatePath("/admin/clients");
+    revalidatePath("/admin");
+    redirect("/admin/clients");
   });
 }
 

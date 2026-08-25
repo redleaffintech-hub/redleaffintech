@@ -9,6 +9,7 @@ import { formatDate, formatDateTime, relativeTime } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
 import { CYCLE_BILLED_AS, CYCLE_LABELS, type BillingCycle } from "@/lib/plans";
 import { accessFor } from "@/lib/subscriptions";
+import { MODULE_CATALOG } from "@/lib/plans";
 import { Badge, Callout } from "@/components/ui";
 import {
   AdminCard,
@@ -21,6 +22,8 @@ import {
 import { AccessPanel, type MembershipView } from "./access-panel";
 import { ClientSubscriptionPanel } from "./subscription-panel";
 import { ReadOnlyPanel } from "./read-only-panel";
+import { ModulesPanel } from "./modules-panel";
+import { DeleteClientPanel } from "./delete-client-panel";
 import type { AdminParams } from "@/lib/admin-constants";
 
 export async function generateMetadata({ params }: { params: AdminParams<"companyId"> }) {
@@ -123,6 +126,13 @@ export default async function ClientDetailPage({ params }: { params: AdminParams
             seatOverrideReason={subscription?.seatOverrideReason ?? null}
           />
 
+          <ModulesPanel
+            csrfToken={actor.csrfToken}
+            companyId={companyId}
+            modules={MODULE_CATALOG}
+            enabledModules={company.enabledModules}
+          />
+
           <ClientSubscriptionPanel
             csrfToken={actor.csrfToken}
             companyId={companyId}
@@ -171,6 +181,8 @@ export default async function ClientDetailPage({ params }: { params: AdminParams
               lockedBySubscription={!access.writable && Boolean(subscription)}
             />
           </DangerZone>
+
+          <DeleteClientPanel csrfToken={actor.csrfToken} companyId={companyId} companyName={company.name} />
         </div>
 
         <div className="space-y-5">

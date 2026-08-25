@@ -60,6 +60,7 @@ export default async function AppLayout({ children }: LayoutProps<"/">) {
             access={access}
             counts={{ bankQueue, overdue, approvals }}
             isAccountant={role === "ACCOUNTANT"}
+            enabledModules={company.enabledModules}
           />
         </div>
 

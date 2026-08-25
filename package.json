@@ -12,7 +12,8 @@
     "plans:seed": "node --conditions=react-server --import tsx scripts/seed-plans.ts",
     "admin:create": "node --conditions=react-server --import tsx scripts/create-platform-admin.ts",
     "verify": "node --conditions=react-server --import tsx scripts/verify.ts",
-    "backfill:inventory-accounts": "node --conditions=react-server --import tsx scripts/backfill-inventory-accounts.ts"
+    "backfill:inventory-accounts": "node --conditions=react-server --import tsx scripts/backfill-inventory-accounts.ts",
+    "backfill:company-modules": "node --conditions=react-server --import tsx scripts/backfill-company-modules.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.9.1",

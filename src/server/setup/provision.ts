@@ -49,6 +49,8 @@ export interface ProvisionCompanyInput {
   website?: string;
   /** Days of trial. 30 unless stated; 0 means the subscription starts active. */
   trialDays?: number;
+  /** ModuleId list from src/lib/plans.ts. Defaults to Accounting only — an admin turns the rest on explicitly. */
+  enabledModules?: string[];
 }
 
 /**
@@ -84,6 +86,7 @@ async function createCompanyAndSetup(tx: Tx, input: ProvisionCompanyInput) {
       country: input.country ?? "CA",
       industry: input.industry,
       firmId: input.firmId,
+      enabledModules: input.enabledModules?.length ? input.enabledModules : ["ACCOUNTING"],
     },
   });
 

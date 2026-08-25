@@ -144,6 +144,12 @@ model Company {
   archivedAt           DateTime?
   archivedById         String?
   archiveReason        String?
+  /// Which Red Leaf products (ModuleId in src/lib/plans.ts) this company can
+  /// use — set by a platform administrator on the client screen, independent
+  /// of whatever the assigned Plan's own module list says. Empty means "none
+  /// configured yet"; requireCompany() treats that as ACCOUNTING-only so a
+  /// company can never be locked out of everything by an unset default.
+  enabledModules       String[] @default([])
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 

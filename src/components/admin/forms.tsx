@@ -143,11 +143,17 @@ export function AdminField({
   );
 }
 
+// A light fill (rather than relying on the border alone) is what keeps these
+// visible sitting on AdminCard's own white background — a white-on-white
+// input with only a thin border reads as no input at all until you're right
+// on top of it (reported against the Users search box, but every admin
+// text/select field shares this class, so the fix is here rather than
+// patched into one screen).
 export const adminInputClass =
-  "h-9 w-full rounded-lg border border-paper-400 bg-white px-3 text-[0.8125rem] text-ink-900 outline-none transition-colors placeholder:text-ink-400 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20";
+  "h-9 w-full rounded-lg border border-paper-400 bg-paper-100 px-3 text-[0.8125rem] text-ink-900 outline-none transition-colors placeholder:text-ink-500 hover:bg-white focus:border-brand-500 focus:bg-white focus:ring-2 focus:ring-brand-500/20";
 
 export const adminTextareaClass =
-  "w-full rounded-lg border border-paper-400 bg-white px-3 py-2 text-[0.8125rem] leading-6 text-ink-900 outline-none transition-colors placeholder:text-ink-400 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20";
+  "w-full rounded-lg border border-paper-400 bg-paper-100 px-3 py-2 text-[0.8125rem] leading-6 text-ink-900 outline-none transition-colors placeholder:text-ink-500 hover:bg-white focus:border-brand-500 focus:bg-white focus:ring-2 focus:ring-brand-500/20";
 
 /**
  * A single dangerous action behind an explicit confirmation.
