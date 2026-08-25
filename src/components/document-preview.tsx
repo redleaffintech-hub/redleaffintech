@@ -19,6 +19,7 @@ export interface PreviewCompany {
   qstNumber: string | null;
   pstNumber: string | null;
   invoiceFooter: string | null;
+  logoUrl?: string | null;
 }
 
 /**
@@ -65,21 +66,27 @@ export function DocumentPreview({
     <div className="print-full">
       {/* Letterhead */}
       <div className="flex flex-wrap items-start justify-between gap-6 border-b border-paper-200 pb-4">
-        <div>
-          <p className="text-[1.0625rem] font-semibold tracking-[-0.01em] text-ink-950">
-            {company.legalName ?? company.name}
-          </p>
-          <p className="mt-1 text-[0.8125rem] leading-6 text-muted-ink">
-            {company.addressLine1}
-            {company.addressLine1 && <br />}
-            {[company.city, company.province, company.postalCode].filter(Boolean).join(", ")}
-            {taxRegistrationLines(company).map((registration) => (
-              <span key={registration.label}>
-                <br />
-                {registration.label}: {registration.value}
-              </span>
-            ))}
-          </p>
+        <div className="flex items-start gap-3">
+          {company.logoUrl && (
+            // eslint-disable-next-line @next/next/no-img-element -- a data URL, not an optimizable remote asset
+            <img src={company.logoUrl} alt="" className="h-12 w-12 shrink-0 rounded object-contain" />
+          )}
+          <div>
+            <p className="text-[1.0625rem] font-semibold tracking-[-0.01em] text-ink-950">
+              {company.legalName ?? company.name}
+            </p>
+            <p className="mt-1 text-[0.8125rem] leading-6 text-muted-ink">
+              {company.addressLine1}
+              {company.addressLine1 && <br />}
+              {[company.city, company.province, company.postalCode].filter(Boolean).join(", ")}
+              {taxRegistrationLines(company).map((registration) => (
+                <span key={registration.label}>
+                  <br />
+                  {registration.label}: {registration.value}
+                </span>
+              ))}
+            </p>
+          </div>
         </div>
         <div className="text-right">
           <p className="text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-maple-600">{title}</p>

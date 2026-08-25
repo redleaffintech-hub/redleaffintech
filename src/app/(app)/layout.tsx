@@ -44,6 +44,7 @@ export default async function AppLayout({ children }: LayoutProps<"/">) {
           <Topbar
             user={{ name: user.name, email: user.email }}
             companyName={company.name}
+            companyLogoUrl={company.logoUrl}
             province={company.province}
             role={role}
             memberships={memberships}

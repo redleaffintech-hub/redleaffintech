@@ -54,7 +54,7 @@ export default async function InvoiceDetailPage({ params }: PageProps<"/sales/in
     }),
     db.company.findUniqueOrThrow({
       where: { id: company.id },
-      select: { name: true, legalName: true, addressLine1: true, city: true, province: true, postalCode: true, gstNumber: true, qstNumber: true, pstNumber: true, email: true, phone: true, invoiceFooter: true },
+      select: { name: true, legalName: true, addressLine1: true, city: true, province: true, postalCode: true, gstNumber: true, qstNumber: true, pstNumber: true, email: true, phone: true, invoiceFooter: true, logoUrl: true },
     }),
   ]);
 
@@ -122,19 +122,25 @@ export default async function InvoiceDetailPage({ params }: PageProps<"/sales/in
         {/* The document */}
         <Card className="print-full">
           <div className="flex flex-wrap items-start justify-between gap-6 border-b border-paper-200 pb-5">
-            <div>
-              <p className="text-[1.125rem] font-semibold tracking-[-0.01em] text-ink-950">{companyProfile.legalName ?? companyProfile.name}</p>
-              <p className="mt-1 text-[0.8125rem] leading-6 text-muted-ink">
-                {companyProfile.addressLine1}
-                {companyProfile.addressLine1 && <br />}
-                {[companyProfile.city, companyProfile.province, companyProfile.postalCode].filter(Boolean).join(", ")}
-                {taxRegistrationLines(companyProfile).map((registration) => (
-                  <span key={registration.label}>
-                    <br />
-                    {registration.label}: {registration.value}
-                  </span>
-                ))}
-              </p>
+            <div className="flex items-start gap-3">
+              {companyProfile.logoUrl && (
+                // eslint-disable-next-line @next/next/no-img-element -- a data URL, not an optimizable remote asset
+                <img src={companyProfile.logoUrl} alt="" className="h-12 w-12 shrink-0 rounded object-contain" />
+              )}
+              <div>
+                <p className="text-[1.125rem] font-semibold tracking-[-0.01em] text-ink-950">{companyProfile.legalName ?? companyProfile.name}</p>
+                <p className="mt-1 text-[0.8125rem] leading-6 text-muted-ink">
+                  {companyProfile.addressLine1}
+                  {companyProfile.addressLine1 && <br />}
+                  {[companyProfile.city, companyProfile.province, companyProfile.postalCode].filter(Boolean).join(", ")}
+                  {taxRegistrationLines(companyProfile).map((registration) => (
+                    <span key={registration.label}>
+                      <br />
+                      {registration.label}: {registration.value}
+                    </span>
+                  ))}
+                </p>
+              </div>
             </div>
             <div className="text-right">
               <p className="text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-maple-600">Invoice</p>

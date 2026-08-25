@@ -1,13 +1,18 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
 import clsx from "clsx";
 import { Icon } from "./icons";
 import { useOutsideClick } from "./use-outside-click";
 import { CommandPalette } from "./command-palette";
+import { Modal } from "@/components/modal";
+import { Button } from "@/components/ui";
 import { logoutAction, switchCompanyAction } from "@/app/actions/session";
+import { updateCompanyLogoAction } from "@/app/(app)/company/actions";
+import { fileToLogoDataUrl, MAX_LOGO_DATA_URL_LENGTH } from "@/lib/logo";
 import { ROLE_LABELS, type CompanyRole } from "@/lib/enums";
 
 export interface TopbarNotification {
@@ -21,6 +26,7 @@ export interface TopbarNotification {
 export function Topbar({
   user,
   companyName,
+  companyLogoUrl,
   province,
   role,
   memberships,
@@ -30,6 +36,7 @@ export function Topbar({
 }: {
   user: { name: string; email: string };
   companyName: string;
+  companyLogoUrl: string | null;
   province: string;
   role: CompanyRole;
   memberships: { companyId: string; companyName: string; role: CompanyRole }[];
@@ -62,7 +69,13 @@ export function Topbar({
 
         <span aria-hidden className="hidden h-6 w-px bg-paper-300 sm:block" />
 
-        <CompanySwitcher companyName={companyName} province={province} role={role} memberships={memberships} />
+        <CompanySwitcher
+          companyName={companyName}
+          companyLogoUrl={companyLogoUrl}
+          province={province}
+          role={role}
+          memberships={memberships}
+        />
 
         <button
           type="button"
@@ -99,7 +112,7 @@ export function Topbar({
           </span>
 
           <NotificationBell notifications={notifications} />
-          <UserMenu user={user} role={role} />
+          <UserMenu user={user} role={role} companyLogoUrl={companyLogoUrl} />
         </div>
       </div>
 
@@ -110,11 +123,13 @@ export function Topbar({
 
 function CompanySwitcher({
   companyName,
+  companyLogoUrl,
   province,
   role,
   memberships,
 }: {
   companyName: string;
+  companyLogoUrl: string | null;
   province: string;
   role: CompanyRole;
   memberships: { companyId: string; companyName: string; role: CompanyRole }[];
@@ -130,9 +145,14 @@ function CompanySwitcher({
         onClick={() => setOpen((v) => !v)}
         className="flex h-9 items-center gap-2 rounded-lg border border-paper-300 bg-white px-2.5 text-[0.8125rem] font-medium text-ink-900 transition-colors hover:border-ink-300"
       >
-        <span className="grid h-6 w-6 place-items-center rounded bg-ink-900 text-[0.6875rem] font-semibold text-white">
-          {companyName.slice(0, 2).toUpperCase()}
-        </span>
+        {companyLogoUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element -- a data URL, not an optimizable remote asset
+          <img src={companyLogoUrl} alt="" className="h-6 w-6 rounded object-contain" />
+        ) : (
+          <span className="grid h-6 w-6 place-items-center rounded bg-ink-900 text-[0.6875rem] font-semibold text-white">
+            {companyName.slice(0, 2).toUpperCase()}
+          </span>
+        )}
         <span className="hidden max-w-[13rem] truncate sm:inline">{companyName}</span>
         <span className="hidden text-[0.75rem] font-normal text-muted-ink lg:inline">· {province}</span>
         <Icon name="chevronDown" className="h-3.5 w-3.5 text-ink-400" />
@@ -234,8 +254,17 @@ function NotificationBell({ notifications }: { notifications: TopbarNotification
   );
 }
 
-function UserMenu({ user, role }: { user: { name: string; email: string }; role: CompanyRole }) {
+function UserMenu({
+  user,
+  role,
+  companyLogoUrl,
+}: {
+  user: { name: string; email: string };
+  role: CompanyRole;
+  companyLogoUrl: string | null;
+}) {
   const [open, setOpen] = useState(false);
+  const [logoModalOpen, setLogoModalOpen] = useState(false);
   const [pending, startTransition] = useTransition();
   const ref = useOutsideClick(() => setOpen(false));
   const initials = user.name.split(" ").map((p) => p[0]).slice(0, 2).join("");
@@ -263,6 +292,16 @@ function UserMenu({ user, role }: { user: { name: string; email: string }; role:
           <Link href="/company" onClick={() => setOpen(false)} className="block px-3 py-2 text-[0.8125rem] text-ink-800 hover:bg-paper-100">
             Company settings
           </Link>
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              setLogoModalOpen(true);
+            }}
+            className="block w-full px-3 py-2 text-left text-[0.8125rem] text-ink-800 hover:bg-paper-100"
+          >
+            Company logo
+          </button>
           <Link href="/company/audit" onClick={() => setOpen(false)} className="block px-3 py-2 text-[0.8125rem] text-ink-800 hover:bg-paper-100">
             Audit log
           </Link>
@@ -277,6 +316,97 @@ function UserMenu({ user, role }: { user: { name: string; email: string }; role:
           </button>
         </div>
       )}
+
+      {logoModalOpen && (
+        <CompanyLogoModal onClose={() => setLogoModalOpen(false)} currentLogoUrl={companyLogoUrl} />
+      )}
     </div>
+  );
+}
+
+/**
+ * Mounted only while open (the parent renders it conditionally rather than
+ * passing an `open` flag), so each open starts from a fresh `preview` state
+ * seeded from the current logo — no effect needed to resync it.
+ */
+function CompanyLogoModal({
+  onClose,
+  currentLogoUrl,
+}: {
+  onClose: () => void;
+  currentLogoUrl: string | null;
+}) {
+  const router = useRouter();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [preview, setPreview] = useState<string | null>(currentLogoUrl);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  async function handleFile(file: File | undefined) {
+    if (!file) return;
+    setError(null);
+    if (!file.type.startsWith("image/")) return setError("Choose an image file.");
+    try {
+      const dataUrl = await fileToLogoDataUrl(file);
+      if (dataUrl.length > MAX_LOGO_DATA_URL_LENGTH) {
+        return setError("That image is too large even after resizing. Try a simpler logo.");
+      }
+      setPreview(dataUrl);
+    } catch {
+      setError("Could not read that image.");
+    }
+  }
+
+  async function save(next: string | null) {
+    setSaving(true);
+    setError(null);
+    const result = await updateCompanyLogoAction(next);
+    setSaving(false);
+    if (result?.error) return setError(result.error);
+    router.refresh();
+    onClose();
+  }
+
+  return (
+    <Modal open onClose={onClose} title="Company logo" description="Resized to fit within 256×256, shown wherever the company appears.">
+      <div className="flex items-center gap-3">
+        {preview ? (
+          // eslint-disable-next-line @next/next/no-img-element -- a resized data URL, not an optimizable remote asset
+          <img src={preview} alt="Company logo" className="h-16 w-16 rounded-md border border-paper-300 bg-white object-contain p-1" />
+        ) : (
+          <div className="flex h-16 w-16 items-center justify-center rounded-md border border-dashed border-paper-400 text-[0.6875rem] text-muted-ink">
+            No logo
+          </div>
+        )}
+        <div className="flex flex-col gap-1.5">
+          <label className="inline-flex cursor-pointer items-center rounded-md border border-paper-400 bg-white px-3 py-1.5 text-[0.8125rem] font-medium text-ink-800 hover:bg-paper-100">
+            {preview ? "Replace logo" : "Upload logo"}
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(event) => handleFile(event.target.files?.[0])}
+            />
+          </label>
+          {preview && (
+            <button type="button" onClick={() => setPreview(null)} className="text-left text-[0.75rem] text-muted-ink hover:underline">
+              Remove logo
+            </button>
+          )}
+        </div>
+      </div>
+
+      {error && <p className="mt-3 rounded-md border border-[color:var(--color-negative)]/25 bg-negative-soft px-3 py-2 text-[0.8125rem] text-negative">{error}</p>}
+
+      <div className="mt-4 flex items-center gap-2">
+        <Button variant="primary" disabled={saving || preview === currentLogoUrl} onClick={() => save(preview)}>
+          {saving ? "Saving…" : "Save"}
+        </Button>
+        <Button onClick={onClose} disabled={saving}>
+          Cancel
+        </Button>
+      </div>
+    </Modal>
   );
 }

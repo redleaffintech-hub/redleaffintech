@@ -35,9 +35,6 @@ const profileSchema = z.object({
   defaultPaymentTermsDays: z.coerce.number().int().min(0).max(365),
   defaultTaxInclusive: z.string().optional(),
   invoiceFooter: z.string().trim().max(500).optional(),
-  // A resized data URL — see fileToLogoDataUrl in company-form.tsx. Empty
-  // string (the hidden field's value with no logo set) means "no logo".
-  logoUrl: z.string().max(300_000).optional(),
 });
 
 export async function saveCompanyProfileAction(formData: FormData) {
@@ -106,7 +103,6 @@ export async function saveCompanyProfileAction(formData: FormData) {
       defaultPaymentTermsDays: input.defaultPaymentTermsDays,
       defaultTaxInclusive: input.defaultTaxInclusive === "on",
       invoiceFooter: input.invoiceFooter || null,
-      logoUrl: input.logoUrl || null,
     },
   });
 
@@ -127,6 +123,39 @@ export async function saveCompanyProfileAction(formData: FormData) {
   revalidatePath("/company");
   revalidatePath("/", "layout");
   return { ok: true, fiscalYearStartIgnored: fiscalYearStartChanged };
+}
+
+/**
+ * Longest data URL the logo field accepts — keeps a Postgres text column and
+ * every page that loads it (topbar, document letterheads) small.
+ */
+const MAX_LOGO_DATA_URL_LENGTH = 300_000;
+
+/**
+ * Set or clear the company logo. Split out from `saveCompanyProfileAction` so
+ * it can be driven from the topbar's quick-change menu without round-tripping
+ * every other profile field.
+ */
+export async function updateCompanyLogoAction(dataUrl: string | null) {
+  const { company, user } = await requireCapability(CAPABILITIES.COMPANY_SETTINGS);
+
+  if (dataUrl && (!dataUrl.startsWith("data:image/") || dataUrl.length > MAX_LOGO_DATA_URL_LENGTH)) {
+    return { error: "That doesn't look like a valid image." };
+  }
+
+  await db.company.update({ where: { id: company.id }, data: { logoUrl: dataUrl } });
+
+  await recordAudit({
+    companyId: company.id,
+    userId: user.id,
+    action: "UPDATE",
+    entityType: "Company",
+    entityId: company.id,
+    summary: dataUrl ? "Company logo updated" : "Company logo removed",
+  });
+
+  revalidatePath("/", "layout");
+  return { ok: true as const };
 }
 
 // ── Fiscal calendar ─────────────────────────────────────────────────────────

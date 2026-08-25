@@ -5,7 +5,7 @@ import { CAPABILITIES } from "@/lib/permissions";
 import { generalLedger } from "@/server/reports/financials";
 import { SOURCE_LABELS } from "@/lib/enums";
 import { fiscalYearOf, fiscalYearRange, isoDate, toUtcDay, today, formatDate } from "@/lib/dates";
-import { Money, PageHeader, EmptyState } from "@/components/ui";
+import { LinkButton, Money, PageHeader, EmptyState } from "@/components/ui";
 import { RangePicker, PrintButton } from "@/components/filter-bar";
 import { ExportCsvButton } from "@/components/export-csv-button";
 import { AccountPicker } from "./account-picker";
@@ -43,6 +43,7 @@ export default async function GeneralLedgerPage({ searchParams }: PageProps<"/ac
         title="General ledger"
         breadcrumb={[{ label: "Accounting" }, { label: "General ledger" }]}
         description="Every posting against an account, in date order, with a running balance. Each row links to the document that created it."
+        actions={<LinkButton href="/accounting/chart-of-accounts/opening-balances">Opening balances</LinkButton>}
       />
 
       <ReportSheet

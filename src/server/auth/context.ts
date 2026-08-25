@@ -56,6 +56,7 @@ export interface CompanyContext {
     isReadOnly: boolean;
     defaultTaxInclusive: boolean;
     defaultPaymentTermsDays: number;
+    logoUrl: string | null;
   };
   role: CompanyRole;
   /** Every company this user may switch to. */
@@ -87,7 +88,7 @@ export const requireCompany = cache(async (companyId?: string): Promise<CompanyC
       id: true, name: true, legalName: true, province: true, baseCurrency: true, locale: true,
       fiscalYearStartMonth: true, gstNumber: true, qstNumber: true, pstNumber: true,
       businessNumber: true, isReadOnly: true,
-      defaultTaxInclusive: true, defaultPaymentTermsDays: true,
+      defaultTaxInclusive: true, defaultPaymentTermsDays: true, logoUrl: true,
     },
   });
 
