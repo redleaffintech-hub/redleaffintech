@@ -6,11 +6,13 @@ import { Cta, CtaBand, PageHero, Section, SectionHeading } from "@/components/ma
 export const metadata = {
   title: "Products",
   description:
-    "The Red Leaf Fintech product shelf: Red Leaf Accounting is available now, with Payroll, HR, Tax, Payments, Banking and Inventory to follow on the same platform.",
+    "The Red Leaf Fintech product shelf: Accounting, Payroll, HR, Payments and Inventory are available now, with Tax and Banking to follow on the same platform.",
 };
 
 export default function ProductsPage() {
-  const [live, ...upcoming] = MODULE_CATALOG;
+  const [live, ...rest] = MODULE_CATALOG;
+  const alsoAvailable = rest.filter((module) => module.available);
+  const upcoming = rest.filter((module) => !module.available);
 
   return (
     <>
@@ -81,41 +83,73 @@ export default function ProductsPage() {
         </div>
       </Section>
 
-      {/* Roadmap */}
-      <Section tone="white">
-        <SectionHeading
-          eyebrow="On the roadmap"
-          title="Six more products, already accounted for"
-          description="These are not vague ambitions — the user, company, role and subscription layers were built to carry them, so each arrives as a switch rather than a migration."
-        />
+      {/* Also shipped */}
+      {alsoAvailable.length > 0 && (
+        <Section tone="white">
+          <SectionHeading
+            eyebrow="Also available"
+            title="Already turned on for every plan that includes them"
+            description="Same login, same company, same workspace — these show up in the sidebar the moment a plan includes them."
+          />
 
-        <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {upcoming.map((module) => (
-            <div key={module.id} className="rounded-(--radius-card) border border-paper-300 bg-paper-100 p-6">
-              <div className="flex items-center gap-3">
-                <span className="grid h-10 w-10 place-items-center rounded-lg bg-paper-300 text-ink-500">
-                  <Icon name={module.icon} className="h-5 w-5" />
-                </span>
-                <div>
-                  <h3 className="text-[0.9375rem] font-semibold text-ink-800">{module.name}</h3>
-                  <p className="text-[0.6875rem] font-medium uppercase tracking-[0.08em] text-ink-500">
-                    Coming soon
-                  </p>
+          <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {alsoAvailable.map((module) => (
+              <div key={module.id} className="rounded-(--radius-card) border border-brand-200 bg-white p-6">
+                <div className="flex items-center gap-3">
+                  <span className="grid h-10 w-10 place-items-center rounded-lg bg-brand-soft text-brand-700">
+                    <Icon name={module.icon} className="h-5 w-5" />
+                  </span>
+                  <div>
+                    <h3 className="text-[0.9375rem] font-semibold text-ink-800">{module.name}</h3>
+                    <p className="text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-positive">
+                      Available now
+                    </p>
+                  </div>
                 </div>
+                <p className="mt-4 text-[0.875rem] leading-6 text-muted-ink">{module.blurb}</p>
               </div>
-              <p className="mt-4 text-[0.875rem] leading-6 text-muted-ink">{module.blurb}</p>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        </Section>
+      )}
 
-        <p className="mt-8 text-[0.875rem] text-muted-ink">
-          Want to be told when one of these ships?{" "}
-          <Link href="/contact?topic=roadmap" className="font-medium text-brand-700 hover:underline">
-            Let us know which module matters to you
-          </Link>
-          .
-        </p>
-      </Section>
+      {/* Roadmap */}
+      {upcoming.length > 0 && (
+        <Section tone="canvas">
+          <SectionHeading
+            eyebrow="On the roadmap"
+            title={`${upcoming.length} more product${upcoming.length === 1 ? "" : "s"}, already accounted for`}
+            description="These are not vague ambitions — the user, company, role and subscription layers were built to carry them, so each arrives as a switch rather than a migration."
+          />
+
+          <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {upcoming.map((module) => (
+              <div key={module.id} className="rounded-(--radius-card) border border-paper-300 bg-paper-100 p-6">
+                <div className="flex items-center gap-3">
+                  <span className="grid h-10 w-10 place-items-center rounded-lg bg-paper-300 text-ink-500">
+                    <Icon name={module.icon} className="h-5 w-5" />
+                  </span>
+                  <div>
+                    <h3 className="text-[0.9375rem] font-semibold text-ink-800">{module.name}</h3>
+                    <p className="text-[0.6875rem] font-medium uppercase tracking-[0.08em] text-ink-500">
+                      Coming soon
+                    </p>
+                  </div>
+                </div>
+                <p className="mt-4 text-[0.875rem] leading-6 text-muted-ink">{module.blurb}</p>
+              </div>
+            ))}
+          </div>
+
+          <p className="mt-8 text-[0.875rem] text-muted-ink">
+            Want to be told when one of these ships?{" "}
+            <Link href="/contact?topic=roadmap" className="font-medium text-brand-700 hover:underline">
+              Let us know which module matters to you
+            </Link>
+            .
+          </p>
+        </Section>
+      )}
 
       <CtaBand
         title="Start with the product that is ready today"

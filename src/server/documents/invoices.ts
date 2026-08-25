@@ -12,6 +12,7 @@ import { SYSTEM_ACCOUNTS } from "@/lib/enums";
 import { addDays, toUtcDay } from "@/lib/dates";
 import { getSystemAccount, postJournal, reverseJournal } from "@/server/accounting/ledger";
 import { loadTaxCodes, recordTaxEntries } from "@/server/tax/engine";
+import { consumeStock, reverseStockMovement } from "@/server/inventory/costing";
 import { computeDocument, netByAccount, type RawLine } from "./lines";
 import { nextNumber } from "./numbering";
 
@@ -213,6 +214,53 @@ export async function postInvoiceInTx(
 
   const ar = await getSystemAccount(tx, companyId, SYSTEM_ACCOUNTS.ACCOUNTS_RECEIVABLE);
 
+  // Selling a tracked-inventory item also moves its weighted-average cost out
+  // of Inventory Asset into COGS, on the same journal entry as the sale.
+  const itemIds = doc.lines.map((l) => l.itemId).filter((id): id is string => Boolean(id));
+  const trackedItems = itemIds.length
+    ? await tx.serviceItem.findMany({
+        where: { id: { in: itemIds }, companyId, trackInventory: true },
+        select: { id: true, expenseAccountId: true },
+      })
+    : [];
+  const trackedItemById = new Map(trackedItems.map((i) => [i.id, i]));
+
+  let cogsLines: { accountId: string; debitCents?: number; creditCents?: number; description: string; customerId: string }[] = [];
+  if (trackedItemById.size > 0) {
+    const inventoryAsset = await getSystemAccount(tx, companyId, SYSTEM_ACCOUNTS.INVENTORY_ASSET);
+    const systemCogs = await getSystemAccount(tx, companyId, SYSTEM_ACCOUNTS.COST_OF_GOODS_SOLD);
+    const cogsByAccount = new Map<string, number>();
+    let totalCogsCents = 0;
+
+    for (const line of doc.lines) {
+      const item = line.itemId ? trackedItemById.get(line.itemId) : undefined;
+      if (!item) continue;
+      const { totalCostCents } = await consumeStock(tx, {
+        companyId,
+        itemId: item.id,
+        date: invoice.issueDate,
+        quantityMilli: line.quantityMilli,
+        sourceType: "INVOICE",
+        sourceId: invoice.id,
+        sourceNumber: invoice.number,
+        userId,
+      });
+      const cogsAccountId = item.expenseAccountId ?? systemCogs.id;
+      cogsByAccount.set(cogsAccountId, (cogsByAccount.get(cogsAccountId) ?? 0) + totalCostCents);
+      totalCogsCents += totalCostCents;
+    }
+
+    cogsLines = [
+      ...[...cogsByAccount.entries()].map(([accountId, cents]) => ({
+        accountId,
+        debitCents: cents,
+        description: `Cost of goods sold — ${invoice.number}`,
+        customerId: invoice.customerId,
+      })),
+      { accountId: inventoryAsset.id, creditCents: totalCogsCents, description: `Stock sold — ${invoice.number}`, customerId: invoice.customerId },
+    ];
+  }
+
   const journalLines = [
     {
       accountId: ar.id,
@@ -241,6 +289,7 @@ export async function postInvoiceInTx(
           customerId: invoice.customerId,
         };
       }),
+    ...cogsLines,
   ];
 
   const entry = await postJournal(tx, {
@@ -253,6 +302,13 @@ export async function postInvoiceInTx(
     createdById: userId,
     lines: journalLines,
   });
+
+  if (trackedItemById.size > 0) {
+    await tx.inventoryMovement.updateMany({
+      where: { companyId, sourceType: "INVOICE", sourceId: invoice.id, journalEntryId: null },
+      data: { journalEntryId: entry.id },
+    });
+  }
 
   // One tax audit row per component per line (§7).
   for (const line of doc.lines) {
@@ -336,6 +392,10 @@ export async function voidInvoice(invoiceId: string, companyId: string, userId?:
           })),
         });
       }
+      const stockMovements = await tx.inventoryMovement.findMany({
+        where: { companyId, sourceType: "INVOICE", sourceId: invoice.id, type: "SALE" },
+      });
+      for (const movement of stockMovements) await reverseStockMovement(tx, movement.id, userId);
     }
 
     await tx.auditLog.create({

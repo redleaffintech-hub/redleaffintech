@@ -188,6 +188,7 @@ model Company {
   customers        Customer[]
   vendors          Vendor[]
   items            ServiceItem[]
+  inventoryMovements InventoryMovement[]
   invoices         Invoice[]
   estimates        Estimate[]
   creditNotes      CreditNote[]
@@ -737,6 +738,12 @@ model ServiceItem {
   /// Default tax code on PURCHASE documents; falls back to taxCodeId when unset.
   purchaseTaxCodeId String?
   isActive        Boolean  @default(true)
+  /// Weighted-average costing (§inventory). Only meaningful for type PRODUCT.
+  trackInventory  Boolean  @default(false)
+  /// Quantity on hand, in the project's milli-unit convention (quantity x 1000).
+  quantityOnHandMilli Int  @default(0)
+  /// System-maintained weighted-average cost per whole unit, integer cents. Never hand-edited.
+  averageCostCents Int     @default(0)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt @default(now())
 
@@ -750,9 +757,42 @@ model ServiceItem {
   estimateLines   EstimateLine[]
   billLines       BillLine[]
   creditNoteLines CreditNoteLine[]
+  inventoryMovements InventoryMovement[]
 
   @@unique([companyId, code])
   @@index([companyId, isActive])
+}
+
+/// Every quantity/cost change to a tracked inventory item (§inventory) — the
+/// audit trail a valuation report and its GL reconciliation both read.
+model InventoryMovement {
+  id             String   @id @default(cuid())
+  companyId      String
+  itemId         String
+  date           DateTime
+  /// PURCHASE | SALE | ADJUSTMENT
+  type           String
+  /// Signed, milli-unit convention: positive for stock in, negative for stock out.
+  quantityMilli  Int
+  unitCostCents  Int
+  /// Signed — matches the sign of quantityMilli.
+  totalCostCents Int
+  quantityOnHandAfterMilli Int
+  averageCostAfterCents    Int
+  sourceType     String
+  sourceId       String?
+  sourceNumber   String?
+  journalEntryId String?
+  memo           String?
+  createdById    String?
+  createdAt      DateTime @default(now())
+
+  company      Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  item         ServiceItem   @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  journalEntry JournalEntry? @relation(fields: [journalEntryId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, itemId, date])
+  @@index([companyId, sourceType, sourceId])
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1186,6 +1226,7 @@ model JournalEntry {
   creditNote  CreditNote?
   bankTx      BankTransaction?
   payRun      PayRun?
+  inventoryMovements InventoryMovement[]
 
   @@unique([companyId, entryNo])
   @@index([companyId, date])

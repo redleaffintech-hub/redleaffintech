@@ -48,6 +48,14 @@ export const CANADIAN_SERVICE_COA: AccountTemplate[] = [
     subtype: "TAX_RECOVERABLE",
     systemKey: SA.QST_RECOVERABLE,
   },
+  {
+    code: "1450",
+    name: "Inventory Asset",
+    type: "ASSET",
+    subtype: "INVENTORY",
+    systemKey: SA.INVENTORY_ASSET,
+    description: "Value of stock on hand, at weighted-average cost. Posted to by bills and invoices for tracked items only.",
+  },
   { code: "1500", name: "Computer Equipment", type: "ASSET", subtype: "FIXED_ASSET" },
   { code: "1510", name: "Office Furniture & Equipment", type: "ASSET", subtype: "FIXED_ASSET" },
   {
@@ -139,6 +147,14 @@ export const CANADIAN_SERVICE_COA: AccountTemplate[] = [
   // ── Expenses ──────────────────────────────────────────────────────────────
   { code: "5000", name: "Subcontractor Costs", type: "EXPENSE", subtype: "COST_OF_SALES" },
   { code: "5010", name: "Direct Project Costs", type: "EXPENSE", subtype: "COST_OF_SALES" },
+  {
+    code: "5900",
+    name: "Cost of Goods Sold",
+    type: "EXPENSE",
+    subtype: "COST_OF_SALES",
+    systemKey: SA.COST_OF_GOODS_SOLD,
+    description: "Weighted-average cost of tracked inventory items as they sell.",
+  },
   { code: "6000", name: "Advertising & Promotion", type: "EXPENSE", subtype: "OPERATING_EXPENSE" },
   {
     code: "6010",

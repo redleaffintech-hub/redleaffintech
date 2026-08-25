@@ -91,9 +91,9 @@ export const MODULE_CATALOG: ModuleInfo[] = [
   {
     id: "PAYMENTS",
     name: "Red Leaf Payments",
-    blurb: "Take card and bank payments on invoices, with settlement reconciled automatically.",
+    blurb: "Record customer receipts and vendor payments, applied across multiple invoices or bills at once.",
     icon: "card",
-    available: false,
+    available: true,
   },
   {
     id: "BANKING",
@@ -105,9 +105,9 @@ export const MODULE_CATALOG: ModuleInfo[] = [
   {
     id: "INVENTORY",
     name: "Red Leaf Inventory",
-    blurb: "Stock on hand, costing and cost of goods sold posted as it moves.",
+    blurb: "Stock on hand at weighted-average cost, with cost of goods sold posted automatically as it sells.",
     icon: "box",
-    available: false,
+    available: true,
   },
 ];
 

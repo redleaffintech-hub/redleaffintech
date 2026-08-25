@@ -12,6 +12,7 @@ import { SYSTEM_ACCOUNTS } from "@/lib/enums";
 import { addDays, toUtcDay } from "@/lib/dates";
 import { getSystemAccount, postJournal, reverseJournal } from "@/server/accounting/ledger";
 import { loadTaxCodes, recordTaxEntries } from "@/server/tax/engine";
+import { receiveStock, reverseStockMovement } from "@/server/inventory/costing";
 import { computeDocument, splitPurchaseDebits, type RawLine } from "./lines";
 import { nextNumber } from "./numbering";
 
@@ -154,6 +155,7 @@ export async function postBillInTx(tx: Tx, billId: string, companyId: string, us
       quantityMilli: l.quantityMilli,
       unitPriceCents: l.unitPriceCents,
       taxCodeId: l.taxCodeId,
+      itemId: l.itemId,
       customerId: l.customerId,
       projectId: l.projectId,
       isBillable: l.isBillable,
@@ -163,8 +165,31 @@ export async function postBillInTx(tx: Tx, billId: string, companyId: string, us
     bill.issueDate,
   );
 
+  // Lines that bought a tracked-inventory item post their cost to Inventory
+  // Asset instead of the line's own expense account, and add stock rather
+  // than expensing it — everything else posts exactly as before.
+  const itemIds = doc.lines.map((l) => l.itemId).filter((id): id is string => Boolean(id));
+  const trackedItemIds = itemIds.length
+    ? new Set(
+        (await tx.serviceItem.findMany({
+          where: { id: { in: itemIds }, companyId, trackInventory: true },
+          select: { id: true },
+        })).map((i) => i.id),
+      )
+    : new Set<string>();
+  const trackedLines = doc.lines.filter((l) => l.itemId && trackedItemIds.has(l.itemId));
+  const regularLines = doc.lines.filter((l) => !(l.itemId && trackedItemIds.has(l.itemId)));
+
   const ap = await getSystemAccount(tx, companyId, SYSTEM_ACCOUNTS.ACCOUNTS_PAYABLE);
-  const { expenseByAccount, recoverableByAccount } = splitPurchaseDebits(doc.lines);
+  const { expenseByAccount, recoverableByAccount } = splitPurchaseDebits(regularLines);
+  const trackedSplit = splitPurchaseDebits(trackedLines);
+  const inventoryCostCents = [...trackedSplit.expenseByAccount.values()].reduce((s, v) => s + v, 0);
+  for (const [accountId, cents] of trackedSplit.recoverableByAccount) {
+    recoverableByAccount.set(accountId, (recoverableByAccount.get(accountId) ?? 0) + cents);
+  }
+  const inventoryAsset = inventoryCostCents > 0
+    ? await getSystemAccount(tx, companyId, SYSTEM_ACCOUNTS.INVENTORY_ASSET)
+    : null;
 
   const entry = await postJournal(tx, {
     companyId,
@@ -182,6 +207,14 @@ export async function postBillInTx(tx: Tx, billId: string, companyId: string, us
         vendorId: bill.vendorId,
         projectId: bill.projectId,
       })),
+      ...(inventoryAsset
+        ? [{
+            accountId: inventoryAsset.id,
+            debitCents: inventoryCostCents,
+            description: `Stock received — ${bill.number}`,
+            vendorId: bill.vendorId,
+          }]
+        : []),
       ...[...recoverableByAccount.entries()].map(([accountId, cents]) => ({
         accountId,
         debitCents: cents,
@@ -196,6 +229,25 @@ export async function postBillInTx(tx: Tx, billId: string, companyId: string, us
       },
     ],
   });
+
+  for (const line of trackedLines) {
+    let lineCost = line.netCents;
+    for (const c of line.taxComponents) {
+      if (c.taxCents !== 0 && !c.isRecoverable) lineCost += c.taxCents;
+    }
+    await receiveStock(tx, {
+      companyId,
+      itemId: line.itemId!,
+      date: bill.issueDate,
+      quantityMilli: line.quantityMilli,
+      totalCostCents: lineCost,
+      sourceType: "BILL",
+      sourceId: bill.id,
+      sourceNumber: bill.number,
+      journalEntryId: entry.id,
+      userId,
+    });
+  }
 
   for (const line of doc.lines) {
     if (!line.taxCodeId || line.taxComponents.length === 0) continue;
@@ -256,6 +308,10 @@ export async function voidBill(billId: string, companyId: string, userId?: strin
           })),
         });
       }
+      const stockMovements = await tx.inventoryMovement.findMany({
+        where: { companyId, sourceType: "BILL", sourceId: bill.id, type: "PURCHASE" },
+      });
+      for (const movement of stockMovements) await reverseStockMovement(tx, movement.id, userId);
     }
     return tx.bill.update({
       where: { id: bill.id },

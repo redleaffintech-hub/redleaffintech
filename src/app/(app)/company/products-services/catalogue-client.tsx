@@ -8,6 +8,7 @@ import { Modal } from "@/components/modal";
 import { Icon } from "@/components/shell/icons";
 import { ITEM_TYPES, ITEM_TYPE_LABELS, itemUnitLabel, type ItemType } from "@/lib/enums";
 import { currencySymbol } from "@/lib/money";
+import { useMoney } from "@/components/currency-context";
 import { createItemAction, deleteItemAction, setItemActiveAction, updateItemAction } from "./actions";
 
 export interface CatalogueOptions {
@@ -32,6 +33,9 @@ export interface CatalogueItem {
   taxCodeId: string;
   purchaseTaxCodeId: string;
   isActive: boolean;
+  trackInventory: boolean;
+  quantityOnHandMilli: number;
+  averageCostCents: number;
 }
 
 const BLANK: CatalogueItem = {
@@ -48,6 +52,9 @@ const BLANK: CatalogueItem = {
   taxCodeId: "",
   purchaseTaxCodeId: "",
   isActive: true,
+  trackInventory: false,
+  quantityOnHandMilli: 0,
+  averageCostCents: 0,
 };
 
 export function NewItemButton({ options }: { options: CatalogueOptions }) {
@@ -143,6 +150,7 @@ function ItemDialog({
   onClose: () => void;
 }) {
   const router = useRouter();
+  const money = useMoney();
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [type, setType] = useState<string>(item.type);
@@ -262,6 +270,30 @@ function ItemDialog({
             </select>
           </Field>
         </div>
+
+        {type === "PRODUCT" && (
+          <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-paper-300 p-3">
+            <input
+              type="checkbox"
+              name="trackInventory"
+              defaultChecked={item.trackInventory}
+              className="mt-0.5 h-3.5 w-3.5 accent-[color:var(--color-brand-600)]"
+            />
+            <span className="text-[0.8125rem] leading-5 text-ink-800">
+              Track inventory
+              <span className="mt-0.5 block text-[0.75rem] text-muted-ink">
+                A bill for this item adds stock at weighted-average cost instead of expensing it; an invoice posts
+                cost of goods sold and reduces stock automatically. Credit notes do not yet adjust stock.
+                {item.trackInventory && (
+                  <span className="mt-1 block font-medium text-ink-700">
+                    On hand: {(item.quantityOnHandMilli / 1000).toLocaleString("en-CA")} {itemUnitLabel(item.unit)}
+                    {" · "}Avg cost: {money.format(item.averageCostCents)}
+                  </span>
+                )}
+              </span>
+            </span>
+          </label>
+        )}
 
         <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-paper-300 p-3">
           <input type="checkbox" name="isActive" defaultChecked={item.isActive} className="mt-0.5 h-3.5 w-3.5 accent-[color:var(--color-brand-600)]" />

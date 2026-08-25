@@ -38,6 +38,7 @@ const itemSchema = z.object({
   taxCodeId: z.string().trim().optional(),
   purchaseTaxCodeId: z.string().trim().optional(),
   isActive: z.string().optional(),
+  trackInventory: z.string().optional(),
 });
 
 type ItemInput = z.infer<typeof itemSchema>;
@@ -115,6 +116,8 @@ async function validate(
       taxCodeId: input.taxCodeId || null,
       purchaseTaxCodeId: input.purchaseTaxCodeId || null,
       isActive: input.isActive === "on",
+      // Only a PRODUCT can carry stock — a SERVICE has nothing to count.
+      trackInventory: input.type === "PRODUCT" && input.trackInventory === "on",
     },
   };
 }
@@ -212,13 +215,16 @@ export async function setItemActiveAction(itemId: string, isActive: boolean) {
  * counts server-side instead.
  */
 async function itemUsageCount(companyId: string, itemId: string): Promise<number> {
-  const [invoices, estimates, credits, bills] = await Promise.all([
+  const [invoices, estimates, credits, bills, movements] = await Promise.all([
     db.invoiceLine.count({ where: { itemId, invoice: { companyId } } }),
     db.estimateLine.count({ where: { itemId, estimate: { companyId } } }),
     db.creditNoteLine.count({ where: { itemId, creditNote: { companyId } } }),
     db.billLine.count({ where: { itemId, bill: { companyId } } }),
+    // A tracked item can carry inventory movements (e.g. a manual stock
+    // adjustment) with no document line at all — still not safe to delete.
+    db.inventoryMovement.count({ where: { itemId, companyId } }),
   ]);
-  return invoices + estimates + credits + bills;
+  return invoices + estimates + credits + bills + movements;
 }
 
 /**

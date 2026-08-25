@@ -140,6 +140,7 @@ export default async function ProductsServicesPage({
                 <Th width="5rem" align="right">Discount</Th>
                 <Th>Accounts</Th>
                 <Th width="5rem">Tax</Th>
+                <Th width="8rem" align="right">Stock</Th>
                 {manage && <Th width="3rem" align="right">{""}</Th>}
               </tr>
             </thead>
@@ -176,6 +177,16 @@ export default async function ProductsServicesPage({
                     {item.purchaseTaxCode && <span className="block">P: {item.purchaseTaxCode.code}</span>}
                     {!item.taxCode && !item.purchaseTaxCode && "—"}
                   </Td>
+                  <Td align="right" className="text-[0.75rem] text-muted-ink">
+                    {item.trackInventory ? (
+                      <>
+                        <span className="tnum block text-ink-800">{(item.quantityOnHandMilli / 1000).toLocaleString("en-CA")}</span>
+                        <Money cents={Math.round((item.quantityOnHandMilli * item.averageCostCents) / 1000)} currency={company.baseCurrency} className="block" />
+                      </>
+                    ) : (
+                      "—"
+                    )}
+                  </Td>
                   {manage && (
                     <Td align="right">
                       <CatalogueRowActions
@@ -193,6 +204,9 @@ export default async function ProductsServicesPage({
                           taxCodeId: item.taxCodeId ?? "",
                           purchaseTaxCodeId: item.purchaseTaxCodeId ?? "",
                           isActive: item.isActive,
+                          trackInventory: item.trackInventory,
+                          quantityOnHandMilli: item.quantityOnHandMilli,
+                          averageCostCents: item.averageCostCents,
                         }}
                         options={options}
                         usedOnDocuments={usedCount.get(item.id) ?? 0}
