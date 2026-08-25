@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
+import { createPortal } from "react-dom";
 import clsx from "clsx";
 import { Icon } from "@/components/shell/icons";
 
@@ -10,6 +11,13 @@ import { Icon } from "@/components/shell/icons";
  *
  * Deliberately not `<dialog>`: the invoice preview needs the page's print styles
  * to reach it, and a top-layer dialog is not part of the printed document.
+ *
+ * Rendered through a portal to `document.body`: `fixed inset-0` only covers the
+ * viewport if nothing between it and `<body>` creates a CSS containing block —
+ * a `filter`/`backdrop-filter`/`transform` on any ancestor traps it there
+ * instead. The topbar's `backdrop-blur-md` wrapper is exactly that trap, and
+ * without the portal a modal opened from the account menu renders squashed
+ * into the topbar's own height rather than over the page.
  */
 export function Modal({
   open,
@@ -29,6 +37,13 @@ export function Modal({
   children: React.ReactNode;
 }) {
   const panel = useRef<HTMLDivElement>(null);
+  // document.body does not exist during SSR; this is the no-effect way to
+  // know the client has taken over (the server snapshot is always false).
+  const mounted = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false,
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -48,9 +63,9 @@ export function Modal({
     };
   }, [open, onClose]);
 
-  if (!open) return null;
+  if (!open || !mounted) return null;
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 sm:p-6">
       <button
         type="button"
@@ -94,6 +109,7 @@ export function Modal({
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
