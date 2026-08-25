@@ -35,6 +35,9 @@ const profileSchema = z.object({
   defaultPaymentTermsDays: z.coerce.number().int().min(0).max(365),
   defaultTaxInclusive: z.string().optional(),
   invoiceFooter: z.string().trim().max(500).optional(),
+  // A resized data URL — see fileToLogoDataUrl in company-form.tsx. Empty
+  // string (the hidden field's value with no logo set) means "no logo".
+  logoUrl: z.string().max(300_000).optional(),
 });
 
 export async function saveCompanyProfileAction(formData: FormData) {
@@ -103,6 +106,7 @@ export async function saveCompanyProfileAction(formData: FormData) {
       defaultPaymentTermsDays: input.defaultPaymentTermsDays,
       defaultTaxInclusive: input.defaultTaxInclusive === "on",
       invoiceFooter: input.invoiceFooter || null,
+      logoUrl: input.logoUrl || null,
     },
   });
 

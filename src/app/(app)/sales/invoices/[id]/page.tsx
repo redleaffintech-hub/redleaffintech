@@ -159,14 +159,8 @@ export default async function InvoiceDetailPage({ params }: PageProps<"/sales/in
             </div>
             <div>
               <p className="text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-muted-ink">Ship to</p>
-              {shipTo ? (
-                <>
-                  <p className="mt-1 text-[0.9375rem] font-medium text-ink-900">{shipTo.name}</p>
-                  <p className="text-[0.8125rem] leading-6 text-muted-ink">{addressBody(shipTo)}</p>
-                </>
-              ) : (
-                <p className="mt-1 text-[0.8125rem] leading-6 text-muted-ink">Same as the billing address</p>
-              )}
+              <p className="mt-1 text-[0.9375rem] font-medium text-ink-900">{(shipTo ?? billTo).name}</p>
+              <p className="text-[0.8125rem] leading-6 text-muted-ink">{addressBody(shipTo ?? billTo)}</p>
               {placeOfSupply && (
                 <p className="mt-1.5 text-[0.75rem] text-muted-ink">
                   Place of supply: <span className="font-medium text-ink-800">{placeOfSupply}</span>

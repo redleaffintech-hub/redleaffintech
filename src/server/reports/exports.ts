@@ -14,7 +14,6 @@ import {
 import { NORMAL_BALANCE, type AccountType } from "@/lib/enums";
 import { CAPABILITIES, type Capability } from "@/lib/permissions";
 import { isoDate, toUtcDay, today, fiscalYearOf, fiscalYearRange } from "@/lib/dates";
-import { resolveFiscalYearRange } from "@/server/accounting/fiscal-calendar";
 import {
   balanceSheet,
   cashFlow,
@@ -82,39 +81,6 @@ function asOfFrom(ctx: ExportContext) {
 /** `Debit (CAD)` etc. */
 const money = (label: string, ctx: ExportContext) => moneyHeader(label, ctx.currency);
 
-
-/**
- * The fiscal periods an income-statement export covers.
- *
- * Mirrors the page: `end` is the fiscal year of the rightmost column and
- * `periods` how many columns back from it, defaulting to the current year and
- * three before it. Clamped to four, which is what fits a printed page.
- */
-async function incomeStatementPeriods(ctx: ExportContext) {
-  const currentFy = fiscalYearOf(today(), ctx.fiscalYearStartMonth);
-  const requestedEnd = Number(ctx.params.get("end") ?? "");
-  const endYear =
-    Number.isInteger(requestedEnd) && requestedEnd > 1900 && requestedEnd < 2200 ? requestedEnd : currentFy;
-
-  const requestedCount = Number(ctx.params.get("periods") ?? "");
-  const count = Number.isInteger(requestedCount) && requestedCount >= 1 && requestedCount <= 4 ? requestedCount : 4;
-
-  const periods: ReportPeriod[] = [];
-  for (let offset = count - 1; offset >= 0; offset--) {
-    const year = endYear - offset;
-    // Same source of truth as the screen: stored periods first.
-    const range = await resolveFiscalYearRange(ctx.companyId, year, ctx.fiscalYearStartMonth);
-    const to = year === currentFy && range.end > today() ? today() : range.end;
-    const month = new Intl.DateTimeFormat("en-CA", { month: "short", timeZone: "UTC" }).format(range.end);
-    periods.push({
-      label: `${month}-${String(range.end.getUTCFullYear()).slice(2)}`,
-      from: range.start,
-      to,
-    });
-  }
-  return { periods, endYear, count };
-}
-
 // ── Financial statements ────────────────────────────────────────────────────
 
 const trialBalanceExport: ExportDefinition = {
@@ -165,7 +131,8 @@ const trialBalanceExport: ExportDefinition = {
 const incomeStatementExport: ExportDefinition = {
   capability: CAPABILITIES.REPORTS,
   build: async (ctx) => {
-    const { periods, endYear, count } = await incomeStatementPeriods(ctx);
+    const range = rangeFrom(ctx);
+    const periods: ReportPeriod[] = [{ label: "Selected period", from: range.from, to: range.to }];
     const statement = await incomeStatement(ctx.companyId, periods, ctx.currency);
 
     /**
@@ -240,10 +207,8 @@ const incomeStatementExport: ExportDefinition = {
       })),
     ];
 
-    // income-statement-FY2023-to-FY2026.csv
-    const firstYear = endYear - count + 1;
     return {
-      filename: `income-statement-FY${firstYear}-to-FY${endYear}.csv`,
+      filename: rangeFilename("income-statement", range.from, range.to),
       body: csvFile(lines, columns),
     };
   },
@@ -827,6 +792,28 @@ const chartOfAccountsExport: ExportDefinition = {
   },
 };
 
+const glOpeningBalancesTemplateExport: ExportDefinition = {
+  capability: CAPABILITIES.COA,
+  build: async (ctx) => {
+    const accounts = await db.account.findMany({
+      where: { companyId: ctx.companyId, isActive: true },
+      orderBy: { code: "asc" },
+      select: { code: true, name: true, type: true },
+    });
+    type Row = (typeof accounts)[number];
+    const columns: CsvColumn<Row>[] = [
+      { header: "Account code", value: (r) => r.code },
+      { header: "Account name", value: (r) => r.name },
+      { header: "Type", value: (r) => r.type },
+      // Left blank for the client to fill in — imported back against
+      // "Account code", one of Debit or Credit per row.
+      { header: "Debit", value: () => "" },
+      { header: "Credit", value: () => "" },
+    ];
+    return { filename: asOfFilename("opening-balances-template", today()), body: csvFile(accounts, columns) };
+  },
+};
+
 const productsServicesExport: ExportDefinition = {
   capability: CAPABILITIES.COMPANY_SETTINGS,
   build: async (ctx) => {
@@ -886,5 +873,6 @@ export const EXPORTS: Record<string, ExportDefinition> = {
   invoices: documentListExport("invoice"),
   bills: documentListExport("bill"),
   "chart-of-accounts": chartOfAccountsExport,
+  "gl-opening-balances-template": glOpeningBalancesTemplateExport,
   "products-services": productsServicesExport,
 };

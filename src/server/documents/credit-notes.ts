@@ -80,8 +80,9 @@ export async function createCreditNote(input: CreditNoteInput) {
     const journalLines =
       input.type === "CUSTOMER"
         ? [
-            ...[...netByAccount(doc.lines).entries()].map(([accountId, net]) => ({
-              accountId, debitCents: net, description: `Credit ${number}`, customerId: input.customerId,
+            ...netByAccount(doc.lines).map((entry) => ({
+              accountId: entry.accountId, debitCents: entry.netCents, description: `Credit ${number}`,
+              customerId: input.customerId, taxCodeId: entry.taxCodeId,
             })),
             ...doc.taxByComponent
               .filter((c) => c.taxCents !== 0 && c.liabilityAccountId)

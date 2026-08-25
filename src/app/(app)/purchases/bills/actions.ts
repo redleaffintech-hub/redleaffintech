@@ -168,5 +168,13 @@ export async function billFormOptions() {
       },
     }),
   ]);
-  return { vendors, accounts, taxCodes, items, company };
+  return {
+    vendors,
+    accounts,
+    taxCodes,
+    items,
+    company,
+    /** The plain list the new-vendor dialog offers as a default code. */
+    purchaseTaxCodes: taxCodes.map((code) => ({ id: code.id, code: code.code, name: code.name })),
+  };
 }

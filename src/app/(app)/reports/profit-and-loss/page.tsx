@@ -1,72 +1,25 @@
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
 import { incomeStatement, type ReportPeriod } from "@/server/reports/financials";
-import { fiscalYearOf, isoDate, today } from "@/lib/dates";
-import { resolveFiscalYearRange } from "@/server/accounting/fiscal-calendar";
+import { fiscalYearOf, fiscalYearRange, isoDate, toUtcDay, today } from "@/lib/dates";
 import { PageHeader } from "@/components/ui";
-import { PrintButton } from "@/components/filter-bar";
+import { RangePicker, PrintButton } from "@/components/filter-bar";
 import { ExportCsvButton } from "@/components/export-csv-button";
 import { ReportSheet, periodLabel } from "@/components/report-shell";
-import { PeriodPicker } from "./period-picker";
 import { IncomeStatementTable } from "./statement-table";
 
 export const metadata = { title: "Profit & loss — Income statement" };
 
-/** Up to four columns: more stops fitting on a printed page. */
-const MAX_PERIODS = 4;
-
-/**
- * Column heading for a fiscal period, in the company's locale.
- *
- * A fiscal year is named for the month it ENDS in — "Dec-25" is the year ending
- * December 2025 — which is what makes the columns readable for a company whose
- * year does not end in December.
- */
-function columnLabel(end: Date, locale: string): string {
-  const month = new Intl.DateTimeFormat(locale, { month: "short", timeZone: "UTC" }).format(end);
-  return `${month}-${String(end.getUTCFullYear()).slice(2)}`;
-}
-
-export default async function ProfitAndLossPage({
-  searchParams,
-}: {
-  searchParams: Promise<Record<string, string | string[] | undefined>>;
-}) {
+export default async function ProfitAndLossPage({ searchParams }: PageProps<"/reports/profit-and-loss">) {
   const { company } = await requireCapability(CAPABILITIES.REPORTS);
   const params = await searchParams;
 
-  const currentFy = fiscalYearOf(today(), company.fiscalYearStartMonth);
-  const requestedEnd = Number(typeof params.end === "string" ? params.end : "");
-  const endYear = Number.isInteger(requestedEnd) && requestedEnd > 1900 && requestedEnd < 2200 ? requestedEnd : currentFy;
+  const defaults = fiscalYearRange(fiscalYearOf(today(), company.fiscalYearStartMonth), company.fiscalYearStartMonth);
+  const from = toUtcDay(typeof params.from === "string" ? params.from : isoDate(defaults.start));
+  const to = toUtcDay(typeof params.to === "string" ? params.to : isoDate(today()));
 
-  const requestedCount = Number(typeof params.periods === "string" ? params.periods : "");
-  const count = Number.isInteger(requestedCount) && requestedCount >= 1 && requestedCount <= MAX_PERIODS
-    ? requestedCount
-    : Math.min(MAX_PERIODS, 4);
-
-  // Oldest first, so the columns read left to right like the printed statement.
-  //
-  // Boundaries come from the fiscal periods that actually exist for each year,
-  // falling back to the current setting only for years never generated. That is
-  // what keeps a historical column fixed when the company adopts a new fiscal
-  // year start for a future year — the old years were closed on the old
-  // calendar and must keep reporting on it.
-  const periods: ReportPeriod[] = [];
-  for (let offset = count - 1; offset >= 0; offset--) {
-    const year = endYear - offset;
-    const range = await resolveFiscalYearRange(company.id, year, company.fiscalYearStartMonth);
-    // The current year is only complete up to today; a column running to a
-    // future date would present an empty stub as a real period.
-    const to = year === currentFy && range.end > today() ? today() : range.end;
-    periods.push({ label: columnLabel(range.end, company.locale || "en-CA"), from: range.start, to });
-  }
-
+  const periods: ReportPeriod[] = [{ label: "Selected period", from, to }];
   const statement = await incomeStatement(company.id, periods, company.baseCurrency);
-
-  const latest = periods[periods.length - 1];
-
-  const availableYears: number[] = [];
-  for (let y = currentFy + 1; y >= currentFy - 8; y--) availableYears.push(y);
 
   const percent = (value: number | null) => (value === null ? "—" : `${value.toFixed(1)}%`);
   const last = statement.periods.length - 1;
@@ -82,20 +35,16 @@ export default async function ProfitAndLossPage({
       <ReportSheet
         companyName={company.name}
         title="Income Statement"
-        periodLabel={periodLabel(periods[0].from, latest.to)}
+        periodLabel={periodLabel(from, to)}
         toolbar={
           <>
-            <PeriodPicker endYear={endYear} count={count} availableYears={availableYears} />
+            <RangePicker from={isoDate(from)} to={isoDate(to)} />
             <PrintButton />
             <ExportCsvButton report="income-statement" />
           </>
         }
       >
-        <IncomeStatementTable
-          statement={statement}
-          ledgerFrom={isoDate(latest.from)}
-          ledgerTo={isoDate(latest.to)}
-        />
+        <IncomeStatementTable statement={statement} ledgerFrom={isoDate(from)} ledgerTo={isoDate(to)} />
 
         <div className="mt-6 grid gap-3 border-t border-paper-300 pt-5 sm:grid-cols-2 lg:grid-cols-4">
           <Metric label="Gross margin" value={percent(statement.margins.GROSS[last])} />
@@ -104,7 +53,7 @@ export default async function ProfitAndLossPage({
           <Metric label="Net margin" value={percent(statement.margins.NET[last])} />
         </div>
         <p className="mt-2 text-[0.6875rem] text-muted-ink">
-          Margins are for {latest.label}, against net sales. Amounts in {company.baseCurrency}; costs shown in parentheses.
+          Margins are for the selected period, against net sales. Amounts in {company.baseCurrency}; costs shown in parentheses.
         </p>
       </ReportSheet>
     </>

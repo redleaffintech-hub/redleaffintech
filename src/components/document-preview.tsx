@@ -41,7 +41,6 @@ export function DocumentPreview({
   reference,
   referenceLabel,
   memo,
-  taxInclusive,
   accountName,
   computed,
 }: {
@@ -56,7 +55,6 @@ export function DocumentPreview({
   reference: string;
   referenceLabel: string;
   memo: string;
-  taxInclusive: boolean;
   accountName: (accountId: string) => string;
   computed: ReturnType<typeof computeDocument>;
 }) {
@@ -98,11 +96,7 @@ export function DocumentPreview({
         </div>
         <div>
           <p className="text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-muted-ink">Ship to</p>
-          {shipTo && !isAddressEmpty(shipTo) ? (
-            <AddressLines address={shipTo} className="mt-1" />
-          ) : (
-            <p className="mt-1 text-[0.8125rem] leading-6 text-muted-ink">Same as billing address</p>
-          )}
+          <AddressLines address={shipTo && !isAddressEmpty(shipTo) ? shipTo : billTo} className="mt-1" />
         </div>
         <dl className="space-y-1 text-[0.8125rem] sm:text-right">
           {secondDateLabel && secondDate && (
@@ -117,10 +111,6 @@ export function DocumentPreview({
               <dd className="text-ink-800">{reference}</dd>
             </div>
           )}
-          <div className="flex justify-between sm:justify-end sm:gap-6">
-            <dt className="text-muted-ink">Pricing</dt>
-            <dd className="text-ink-800">{taxInclusive ? "Tax inclusive" : "Tax exclusive"}</dd>
-          </div>
         </dl>
       </div>
 

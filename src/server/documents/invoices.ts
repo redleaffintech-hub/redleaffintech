@@ -220,12 +220,13 @@ export async function postInvoiceInTx(
       description: `${invoice.customer.name} — ${invoice.number}`,
       customerId: invoice.customerId,
     },
-    ...[...netByAccount(doc.lines).entries()].map(([accountId, netCents]) => ({
-      accountId,
-      creditCents: netCents,
+    ...netByAccount(doc.lines).map((entry) => ({
+      accountId: entry.accountId,
+      creditCents: entry.netCents,
       description: invoice.memo ?? `Invoice ${invoice.number}`,
       customerId: invoice.customerId,
       projectId: invoice.projectId,
+      taxCodeId: entry.taxCodeId,
     })),
     ...doc.taxByComponent
       .filter((c) => c.taxCents !== 0)

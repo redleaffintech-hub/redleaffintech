@@ -101,13 +101,29 @@ export function computeDocument(
   };
 }
 
-/** Group net amounts by GL account so the journal has one line per account. */
-export function netByAccount(lines: ComputedLine[]): Map<string, number> {
-  const map = new Map<string, number>();
+export interface NetByAccountEntry {
+  accountId: string;
+  taxCodeId: string | null;
+  netCents: number;
+}
+
+/**
+ * Group net amounts by GL account so the journal has one line per account
+ * (per account *and tax code*, so the tax centre can tell a taxed revenue
+ * line from a genuinely zero-rated/exempt one on the resulting JournalLine —
+ * collapsing tax codes together here is what silently untaxes every revenue
+ * line downstream).
+ */
+export function netByAccount(lines: ComputedLine[]): NetByAccountEntry[] {
+  const map = new Map<string, NetByAccountEntry>();
   for (const line of lines) {
-    map.set(line.accountId, (map.get(line.accountId) ?? 0) + line.netCents);
+    const taxCodeId = line.taxCodeId ?? null;
+    const key = `${line.accountId}|${taxCodeId ?? ""}`;
+    const existing = map.get(key);
+    if (existing) existing.netCents += line.netCents;
+    else map.set(key, { accountId: line.accountId, taxCodeId, netCents: line.netCents });
   }
-  return map;
+  return [...map.values()];
 }
 
 /**

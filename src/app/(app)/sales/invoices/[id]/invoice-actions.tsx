@@ -44,7 +44,7 @@ export function InvoiceActions({
 
   return (
     <>
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="no-print flex flex-wrap items-center gap-2">
         {!isPosted && status !== "VOID" && (
           <Button variant="primary" disabled={pending} onClick={() => run(() => postInvoiceAction(invoiceId))}>
             Post to ledger

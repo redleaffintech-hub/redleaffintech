@@ -19,6 +19,7 @@ import { Icon } from "@/components/shell/icons";
 import { Modal } from "@/components/modal";
 import {
   AddressEditor,
+  AddressLines,
   EMPTY_ADDRESS,
   addressFromParty,
   isAddressEmpty,
@@ -26,6 +27,7 @@ import {
 } from "@/components/document-address";
 import { DocumentPreview, type PreviewCompany } from "@/components/document-preview";
 import { CustomerForm, type CustomerFormTaxCode } from "@/components/customer-form";
+import { VendorForm, type VendorFormTaxCode } from "@/components/vendor-form";
 import { addProvincialTaxCodesAction } from "@/app/(app)/tax/actions";
 
 /**
@@ -215,6 +217,7 @@ export function DocumentForm({
   companyProfile,
   companyProvince,
   customerCreation,
+  vendorCreation,
   provincesWithSalesTax = [],
   canManageTaxCodes = false,
 }: {
@@ -235,6 +238,8 @@ export function DocumentForm({
   companyProvince?: string;
   /** Enables "add a new customer" inside the party list. */
   customerCreation?: { taxCodes: CustomerFormTaxCode[]; defaultTermsDays: number };
+  /** Enables "add a new vendor" inside the party list. */
+  vendorCreation?: { taxCodes: VendorFormTaxCode[]; defaultTermsDays: number };
   /** Provinces a published provincial rate exists for, for the missing-code notice. */
   provincesWithSalesTax?: readonly string[];
   canManageTaxCodes?: boolean;
@@ -291,6 +296,7 @@ export function DocumentForm({
   const [shipSameAsBill, setShipSameAsBill] = useState(!firstParty?.shipTo);
 
   const [customerDialogOpen, setCustomerDialogOpen] = useState(false);
+  const [vendorDialogOpen, setVendorDialogOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [addingCodes, startAddingCodes] = useTransition();
   const [codeNotice, setCodeNotice] = useState<string | null>(null);
@@ -537,13 +543,13 @@ export function DocumentForm({
               required
               className="sm:col-span-2"
               action={
-                customerCreation ? (
+                customerCreation || vendorCreation ? (
                   <button
                     type="button"
-                    onClick={() => setCustomerDialogOpen(true)}
+                    onClick={() => (customerCreation ? setCustomerDialogOpen(true) : setVendorDialogOpen(true))}
                     className="text-[0.75rem] font-medium text-brand-700 hover:underline"
                   >
-                    + New customer
+                    + New {config.partyLabel.toLowerCase()}
                   </button>
                 ) : undefined
               }
@@ -551,20 +557,28 @@ export function DocumentForm({
               <select
                 value={partyId}
                 onChange={(event) => {
-                  if (event.target.value === NEW_PARTY) return setCustomerDialogOpen(true);
+                  if (event.target.value === NEW_PARTY) {
+                    return customerCreation ? setCustomerDialogOpen(true) : setVendorDialogOpen(true);
+                  }
                   selectParty(event.target.value);
                 }}
                 className={clsx(inputClass, "pr-8")}
               >
                 {partyList.length === 0 && (
-                  <option value="">{customerCreation ? "No customers yet — add one" : "No records yet"}</option>
+                  <option value="">
+                    {customerCreation || vendorCreation
+                      ? `No ${config.partyLabel.toLowerCase()}s yet — add one`
+                      : "No records yet"}
+                  </option>
                 )}
                 {partyList.map((option) => (
                   <option key={option.id} value={option.id}>
                     {option.name}
                   </option>
                 ))}
-                {customerCreation && <option value={NEW_PARTY}>+ Add a new customer…</option>}
+                {(customerCreation || vendorCreation) && (
+                  <option value={NEW_PARTY}>+ Add a new {config.partyLabel.toLowerCase()}…</option>
+                )}
               </select>
             </Field>
 
@@ -658,10 +672,9 @@ export function DocumentForm({
                   </label>
                 </div>
                 {shipSameAsBill ? (
-                  <p className="rounded-lg bg-paper-100 px-3 py-2.5 text-[0.8125rem] leading-6 text-muted-ink">
-                    Delivered to the billing address
-                    {billTo.province ? ` in ${provinceName(billTo.province)}` : ""}.
-                  </p>
+                  <div className="rounded-lg bg-paper-100 px-3 py-2.5">
+                    <AddressLines address={billTo} />
+                  </div>
                 ) : (
                   <AddressEditor
                     value={shipTo}
@@ -1007,6 +1020,39 @@ export function DocumentForm({
         </Modal>
       )}
 
+      {vendorCreation && (
+        <Modal
+          open={vendorDialogOpen}
+          onClose={() => setVendorDialogOpen(false)}
+          title="New vendor"
+          description="Saved straight away, then selected on this document."
+          size="lg"
+        >
+          <VendorForm
+            compact
+            taxCodes={vendorCreation.taxCodes}
+            defaultTermsDays={vendorCreation.defaultTermsDays}
+            onCancel={() => setVendorDialogOpen(false)}
+            onCreated={(vendor) => {
+              setPartyList((current) => [...current, vendor].sort((a, b) => a.name.localeCompare(b.name)));
+              setVendorDialogOpen(false);
+              setPartyId(vendor.id);
+              // Vendors carry a default code rather than a place of supply — see selectParty.
+              if (vendor.taxCodeId) {
+                setLines((current) => current.map((line) => ({ ...line, taxCodeId: vendor.taxCodeId! })));
+              }
+              if (config.secondDateFromPartyTerms) {
+                setSecondDate(
+                  new Date(Date.parse(issueDate) + vendor.paymentTermsDays * 86_400_000)
+                    .toISOString()
+                    .slice(0, 10),
+                );
+              }
+            }}
+          />
+        </Modal>
+      )}
+
       {companyProfile && (
         <Modal
           open={previewOpen}
@@ -1041,7 +1087,6 @@ export function DocumentForm({
             reference={reference}
             referenceLabel={config.referenceLabel}
             memo={memo}
-            taxInclusive={taxInclusive}
             accountName={accountName}
             computed={preview}
           />

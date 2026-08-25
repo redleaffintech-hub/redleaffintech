@@ -5,7 +5,7 @@ import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES, can } from "@/lib/permissions";
 import { ACCOUNT_SUBTYPES, ACCOUNT_TYPES, NORMAL_BALANCE, type AccountType } from "@/lib/enums";
 import { today } from "@/lib/dates";
-import { Badge, Card, Money, PageHeader, Table, Td, Th, Tr } from "@/components/ui";
+import { Badge, Card, LinkButton, Money, PageHeader, Table, Td, Th, Tr } from "@/components/ui";
 import { FilterBar } from "@/components/filter-bar";
 import { ExportCsvButton } from "@/components/export-csv-button";
 import { Icon } from "@/components/shell/icons";
@@ -106,6 +106,7 @@ export default async function ChartOfAccountsPage({ searchParams }: PageProps<"/
         actions={
           <>
             <ExportCsvButton report="chart-of-accounts" />
+            <LinkButton href="/accounting/chart-of-accounts/opening-balances">Opening balances</LinkButton>
             <NewAccountButton />
           </>
         }

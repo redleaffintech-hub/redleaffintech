@@ -2,9 +2,10 @@ import { db } from "@/lib/db";
 import { contains } from "@/lib/search";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
-import { Card, PageHeader } from "@/components/ui";
+import { Card, LinkButton, PageHeader } from "@/components/ui";
 import { FilterBar } from "@/components/filter-bar";
 import { PartyTable, type PartyRow } from "@/components/party-views";
+import { Icon } from "@/components/shell/icons";
 
 export const metadata = { title: "Vendors" };
 
@@ -50,6 +51,12 @@ export default async function VendorsPage({ searchParams }: PageProps<"/purchase
         title="Vendors"
         breadcrumb={[{ label: "Purchases", href: "/purchases/bills" }, { label: "Vendors" }]}
         description="Vendors carry their own payment terms and default tax code, and duplicate bill detection keys off their invoice numbers."
+        actions={
+          <LinkButton href="/purchases/vendors/new" variant="primary">
+            <Icon name="plus" className="h-3.5 w-3.5" />
+            New vendor
+          </LinkButton>
+        }
       />
 
       <FilterBar
@@ -62,7 +69,7 @@ export default async function VendorsPage({ searchParams }: PageProps<"/purchase
       />
 
       <Card className="p-5">
-        <PartyTable rows={rows} hrefBase="/purchases/vendors" kind="vendor" />
+        <PartyTable rows={rows} hrefBase="/purchases/vendors" kind="vendor" newHref="/purchases/vendors/new" />
       </Card>
     </>
   );

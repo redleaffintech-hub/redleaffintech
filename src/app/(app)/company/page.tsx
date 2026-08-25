@@ -54,6 +54,7 @@ export default async function CompanyPage() {
                 defaultPaymentTermsDays: record.defaultPaymentTermsDays,
                 defaultTaxInclusive: record.defaultTaxInclusive,
                 invoiceFooter: record.invoiceFooter ?? "",
+                logoUrl: record.logoUrl,
               }}
               currencies={currencyOptions(record.baseCurrency)}
               postedEntries={postedEntries}
