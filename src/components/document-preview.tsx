@@ -66,10 +66,10 @@ export function DocumentPreview({
     <div className="print-full">
       {/* Letterhead */}
       <div className="flex flex-wrap items-start justify-between gap-6 border-b border-paper-200 pb-4">
-        <div className="flex items-start gap-3">
+        <div>
           {company.logoUrl && (
             // eslint-disable-next-line @next/next/no-img-element -- a data URL, not an optimizable remote asset
-            <img src={company.logoUrl} alt="" className="h-12 w-12 shrink-0 rounded object-contain" />
+            <img src={company.logoUrl} alt="" className="mb-2 h-12 w-12 rounded object-contain" />
           )}
           <div>
             <p className="text-[1.0625rem] font-semibold tracking-[-0.01em] text-ink-950">
