@@ -22,6 +22,7 @@ export const INCOME_STATEMENT_TYPES: AccountType[] = ["REVENUE", "EXPENSE"];
 export const ACCOUNT_SUBTYPES: Record<AccountType, string[]> = {
   ASSET: [
     "BANK",
+    "CASH",
     "ACCOUNTS_RECEIVABLE",
     "OTHER_CURRENT_ASSET",
     "PREPAID_EXPENSE",
@@ -54,7 +55,8 @@ export const ACCOUNT_SUBTYPES: Record<AccountType, string[]> = {
 
 /** Human-readable subtype names for pickers and the chart of accounts. */
 export const SUBTYPE_LABELS: Record<string, string> = {
-  BANK: "Bank & cash",
+  BANK: "Bank",
+  CASH: "Cash on hand",
   ACCOUNTS_RECEIVABLE: "Accounts receivable",
   OTHER_CURRENT_ASSET: "Other current asset",
   PREPAID_EXPENSE: "Prepaid expense",
@@ -88,6 +90,15 @@ export const SUBTYPE_LABELS: Record<string, string> = {
 export function subtypeLabel(subtype: string): string {
   return SUBTYPE_LABELS[subtype] ?? subtype.replace(/_/g, " ").toLowerCase();
 }
+
+/**
+ * Asset subtypes that are cash or a cash equivalent — a bank account or a
+ * cash-on-hand / petty-cash account. Reports that talk about "cash" (the
+ * dashboard tile, the cash-flow statement, the balance-sheet cash line) and
+ * pickers that choose where money is received or paid treat both the same way.
+ * Bank-feed and reconciliation flows stay BANK-only: a till has no statement.
+ */
+export const CASH_ASSET_SUBTYPES = ["BANK", "CASH"] as const;
 
 /**
  * How the Profit & Loss statement groups expenses, by SUBTYPE.

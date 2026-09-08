@@ -18,7 +18,7 @@ export async function paymentFormOptions() {
       select: { id: true, name: true },
     }),
     db.account.findMany({
-      where: { companyId: company.id, subtype: "BANK", isActive: true },
+      where: { companyId: company.id, subtype: { in: ["BANK", "CASH"] }, isActive: true },
       orderBy: { code: "asc" },
       select: { id: true, name: true },
     }),

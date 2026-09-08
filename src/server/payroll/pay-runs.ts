@@ -71,7 +71,7 @@ export function computeNetPayCents(line: PayRunLineInput): number {
 
 async function validateBankAccount(tx: Tx, companyId: string, bankAccountId: string) {
   const account = await tx.account.findFirst({
-    where: { companyId, id: bankAccountId, isActive: true, subtype: { in: ["BANK", "CREDIT_CARD"] } },
+    where: { companyId, id: bankAccountId, isActive: true, subtype: { in: ["BANK", "CASH", "CREDIT_CARD"] } },
   });
   if (!account) throw new PayRunError("Choose a valid bank or credit card account to fund net pay from.");
   return account;

@@ -60,7 +60,7 @@ export async function expenseFormOptions() {
   const { company } = await requireCompany();
   const [paymentAccounts, expenseAccounts, taxCodes, vendors] = await Promise.all([
     db.account.findMany({
-      where: { companyId: company.id, isActive: true, subtype: { in: ["BANK", "CREDIT_CARD"] } },
+      where: { companyId: company.id, isActive: true, subtype: { in: ["BANK", "CASH", "CREDIT_CARD"] } },
       orderBy: { code: "asc" },
       select: { id: true, code: true, name: true, subtype: true },
     }),

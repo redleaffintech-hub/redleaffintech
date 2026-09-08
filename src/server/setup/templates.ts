@@ -22,7 +22,7 @@ export const CANADIAN_SERVICE_COA: AccountTemplate[] = [
   // ── Assets ────────────────────────────────────────────────────────────────
   { code: "1000", name: "Business Chequing", type: "ASSET", subtype: "BANK" },
   { code: "1010", name: "Business Savings", type: "ASSET", subtype: "BANK" },
-  { code: "1020", name: "Petty Cash", type: "ASSET", subtype: "BANK" },
+  { code: "1020", name: "Petty Cash", type: "ASSET", subtype: "CASH" },
   {
     code: "1100",
     name: "Accounts Receivable",

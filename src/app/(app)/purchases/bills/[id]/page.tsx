@@ -26,7 +26,7 @@ export default async function BillDetailPage({ params }: PageProps<"/purchases/b
 
   const [bankAccounts, taxEntries, audit] = await Promise.all([
     db.account.findMany({
-      where: { companyId: company.id, subtype: { in: ["BANK", "CREDIT_CARD"] }, isActive: true },
+      where: { companyId: company.id, subtype: { in: ["BANK", "CASH", "CREDIT_CARD"] }, isActive: true },
       orderBy: { code: "asc" },
       select: { id: true, name: true },
     }),

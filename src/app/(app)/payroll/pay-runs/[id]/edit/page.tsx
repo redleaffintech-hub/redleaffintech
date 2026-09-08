@@ -24,7 +24,7 @@ export default async function EditPayRunPage({ params }: { params: Promise<{ id:
       select: { id: true, legalFirstName: true, legalLastName: true, preferredName: true, compensationType: true, payRateCents: true, payFrequency: true },
     }),
     db.account.findMany({
-      where: { companyId: company.id, isActive: true, subtype: { in: ["BANK", "CREDIT_CARD"] } },
+      where: { companyId: company.id, isActive: true, subtype: { in: ["BANK", "CASH", "CREDIT_CARD"] } },
       orderBy: { code: "asc" },
       select: { id: true, code: true, name: true },
     }),

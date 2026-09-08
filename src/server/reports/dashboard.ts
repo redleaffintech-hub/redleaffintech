@@ -7,6 +7,7 @@
  */
 
 import { db } from "@/lib/db";
+import { CASH_ASSET_SUBTYPES } from "@/lib/enums";
 import { addDays, addMonths, endOfMonth, monthsBetween, startOfMonth, today, utcDate, fiscalYearOf, fiscalYearRange } from "@/lib/dates";
 import { arAging, apAging, DEFAULT_BUCKETS, bucketLabels } from "./aging";
 import { monthlyPerformance, profitAndLoss } from "./financials";
@@ -38,7 +39,7 @@ export async function dashboardData(companyId: string) {
       arAging(companyId, asOf),
       apAging(companyId, asOf),
       db.account.findMany({
-        where: { companyId, subtype: { in: ["BANK", "CREDIT_CARD"] }, isActive: true },
+        where: { companyId, subtype: { in: [...CASH_ASSET_SUBTYPES, "CREDIT_CARD"] }, isActive: true },
         select: { id: true, code: true, name: true, subtype: true, type: true },
         orderBy: { code: "asc" },
       }),
@@ -59,8 +60,9 @@ export async function dashboardData(companyId: string) {
     ]);
 
   // Cash: closing balance per month across every bank & cash account.
+  const cashSubtypes = CASH_ASSET_SUBTYPES as readonly string[];
   const cashLines = await db.journalLine.findMany({
-    where: { companyId, accountId: { in: cashAccounts.filter((a) => a.subtype === "BANK").map((a) => a.id) } },
+    where: { companyId, accountId: { in: cashAccounts.filter((a) => cashSubtypes.includes(a.subtype)).map((a) => a.id) } },
     select: { date: true, debitCents: true, creditCents: true },
     orderBy: { date: "asc" },
   });

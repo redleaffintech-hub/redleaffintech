@@ -8,7 +8,7 @@
  */
 
 import { db } from "@/lib/db";
-import { INCOME_STATEMENT_SUBTYPES, NORMAL_BALANCE, type AccountType } from "@/lib/enums";
+import { CASH_ASSET_SUBTYPES, INCOME_STATEMENT_SUBTYPES, NORMAL_BALANCE, type AccountType } from "@/lib/enums";
 import { fiscalYearRange, fiscalYearOf, monthsBetween, endOfMonth } from "@/lib/dates";
 
 export interface DateRange {
@@ -390,7 +390,7 @@ export async function monthlyPerformance(companyId: string, range: DateRange) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const BS_SECTIONS = [
-  { key: "CURRENT_ASSETS", label: "Current assets", type: "ASSET", subtypes: ["BANK", "ACCOUNTS_RECEIVABLE", "OTHER_CURRENT_ASSET", "PREPAID_EXPENSE", "INVENTORY", "TAX_RECOVERABLE"] },
+  { key: "CURRENT_ASSETS", label: "Current assets", type: "ASSET", subtypes: ["BANK", "CASH", "ACCOUNTS_RECEIVABLE", "OTHER_CURRENT_ASSET", "PREPAID_EXPENSE", "INVENTORY", "TAX_RECOVERABLE"] },
   { key: "FIXED_ASSETS", label: "Property & equipment", type: "ASSET", subtypes: ["FIXED_ASSET", "ACCUMULATED_DEPRECIATION"] },
   { key: "CURRENT_LIABILITIES", label: "Current liabilities", type: "LIABILITY", subtypes: ["ACCOUNTS_PAYABLE", "CREDIT_CARD", "SALES_TAX_PAYABLE", "PAYROLL_LIABILITY", "OTHER_CURRENT_LIABILITY"] },
   { key: "LONG_TERM_LIABILITIES", label: "Long-term liabilities", type: "LIABILITY", subtypes: ["LONG_TERM_LIABILITY"] },
@@ -561,7 +561,7 @@ export async function cashFlow(companyId: string, range: DateRange) {
   let netIncomeCents = 0;
   for (const account of movements) {
     const netDebit = account.debitCents - account.creditCents;
-    if (account.subtype === "BANK") continue;
+    if ((CASH_ASSET_SUBTYPES as readonly string[]).includes(account.subtype)) continue;
 
     if (account.type === "REVENUE" || account.type === "EXPENSE") {
       netIncomeCents += account.type === "REVENUE" ? -netDebit : -netDebit;
@@ -577,8 +577,9 @@ export async function cashFlow(companyId: string, range: DateRange) {
   const investingCents = sections.INVESTING.reduce((s, i) => s + i.amountCents, 0);
   const financingCents = sections.FINANCING.reduce((s, i) => s + i.amountCents, 0);
 
-  const cashOpeningCents = openingCash.filter((a) => a.subtype === "BANK").reduce((s, a) => s + a.balanceCents, 0);
-  const cashMovementCents = movements.filter((a) => a.subtype === "BANK").reduce((s, a) => s + a.balanceCents, 0);
+  const isCash = (a: AccountBalance) => (CASH_ASSET_SUBTYPES as readonly string[]).includes(a.subtype);
+  const cashOpeningCents = openingCash.filter(isCash).reduce((s, a) => s + a.balanceCents, 0);
+  const cashMovementCents = movements.filter(isCash).reduce((s, a) => s + a.balanceCents, 0);
 
   return {
     range,
