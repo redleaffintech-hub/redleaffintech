@@ -1,0 +1,40 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+#
+# The app carries no host-specific code. Render runs it as a plain Node web
+# service: `npm run build` (prisma migrate deploy + generate + next build
+# --webpack) then `next start`, which binds 0.0.0.0:$PORT as Render expects.
+#
+# `netlify.toml` in the repo is inert here — Render never reads it.
+#
+# To deploy: Render Dashboard → New → Blueprint → connect
+# redleaffintech-hub/redleaffintech. Render reads this file and prompts for the
+# five secret env vars below (sync:false). Values come from the current Netlify
+# site (Site config → Environment variables) — same Neon database.
+services:
+  - type: web
+    name: redleaf-accounting
+    runtime: node
+    plan: free            # 512 MB / spins down after 15 min idle. Bump to "starter" ($7/mo) for always-on.
+    region: virginia      # same AWS us-east-1 as the Neon database
+    branch: main
+    autoDeployTrigger: commit
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start
+    healthCheckPath: /login
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: PRISMA_CLI_QUERY_ENGINE_TYPE
+        value: library
+      - key: NPM_CONFIG_PRODUCTION
+        value: "false"     # keep devDependencies — the build needs tailwind, tsx, the Netlify types
+      - key: CONTACT_EMAIL
+        value: hello@redleaffintech.com
+      - key: DATABASE_URL
+        sync: false        # Neon POOLED connection string
+      - key: DATABASE_URL_UNPOOLED
+        sync: false        # Neon DIRECT string — prisma migrate needs this at build time
+      - key: SESSION_SECRET
+        sync: false        # the production secret, not the local dev one
+      - key: NEXT_PUBLIC_SITE_URL
+        sync: false        # https://redleaffintech.com (or the .onrender.com URL until DNS moves)
