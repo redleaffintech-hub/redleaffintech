@@ -58,14 +58,14 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [{ label: "All expenses", href: "/expenses", capability: CAPABILITIES.EXPENSES, exact: true }],
   },
   {
-    label: "Banking",
+    label: "Bank Reconciliation",
     module: "ACCOUNTING",
     icon: "bank",
     items: [
+      { label: "Reconcile", href: "/banking/reconcile", capability: CAPABILITIES.BANKING },
       { label: "Review queue", href: "/banking", capability: CAPABILITIES.BANKING, exact: true, badgeKey: "bankQueue" },
       { label: "Accounts", href: "/banking/accounts", capability: CAPABILITIES.BANKING },
       { label: "Rules", href: "/banking/rules", capability: CAPABILITIES.BANKING },
-      { label: "Reconcile", href: "/banking/reconcile", capability: CAPABILITIES.BANKING },
     ],
   },
   {

@@ -171,3 +171,289 @@ body {
   body { background: #fff; }
   .print-full { box-shadow: none !important; border: none !important; }
 }
+
+/* ── Sales invoice document ──────────────────────────────────────────────────
+   One visual template, shared by the invoice preview, the saved invoice view
+   and the print / PDF output. The exact palette comes from the client mockup:
+   header bands #c4d4de, alternating rows #e5edf2 / white, borders #a9bdc9,
+   slate text #263238, red accents #b02020. Screen and print both read from
+   here so the three surfaces cannot drift. */
+.invoice-paper {
+  --inv-head-bg: #c4d4de;
+  --inv-row-alt: #e5edf2;
+  --inv-border: #a9bdc9;
+  --inv-ink: #263238;
+  --inv-accent: #b02020;
+  color: var(--inv-ink);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+.invoice-paper .inv-accent { color: var(--inv-accent); }
+
+.invoice-paper .inv-band {
+  background: var(--inv-head-bg);
+  border: 1px solid var(--inv-border);
+  padding: 0.375rem 0.625rem;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.invoice-paper .inv-box {
+  border: 1px solid var(--inv-border);
+  border-top: 0;
+  padding: 0.625rem;
+}
+
+.invoice-paper .inv-scroll { overflow-x: auto; }
+
+.invoice-paper table.inv-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.invoice-paper .inv-table th,
+.invoice-paper .inv-table td {
+  border: 1px solid var(--inv-border);
+  padding: 0.4375rem 0.625rem;
+  text-align: left;
+  vertical-align: top;
+}
+.invoice-paper .inv-table thead th {
+  background: var(--inv-head-bg);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.invoice-paper .inv-table tbody tr { background: #fff; }
+.invoice-paper .inv-table tbody tr:nth-child(even) { background: var(--inv-row-alt); }
+.invoice-paper .inv-table td.inv-num,
+.invoice-paper .inv-table th.inv-num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.invoice-paper table.inv-totals {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.invoice-paper .inv-totals td {
+  padding: 0.3125rem 0.625rem;
+  border: 1px solid var(--inv-border);
+}
+.invoice-paper .inv-totals td:last-child { text-align: right; white-space: nowrap; }
+.invoice-paper .inv-totals tr.inv-grand td {
+  background: var(--inv-head-bg);
+  font-weight: 700;
+  border-top: 2px solid var(--inv-accent);
+}
+.invoice-paper .inv-totals tr.inv-due td {
+  font-weight: 700;
+  color: var(--inv-accent);
+}
+
+.invoice-paper .inv-footer {
+  margin-top: 1.25rem;
+  border-top: 2px solid var(--inv-accent);
+  background: var(--inv-row-alt);
+  padding: 0.75rem 0.875rem;
+  font-size: 0.75rem;
+  line-height: 1.55;
+}
+
+@media print {
+  .invoice-paper .inv-scroll { overflow: visible !important; }
+  /* Repeat the column header on every page and never split a row or the
+     footer block across a page break. */
+  .invoice-paper .inv-table thead { display: table-header-group; }
+  .invoice-paper .inv-table tr { break-inside: avoid; }
+  .invoice-paper .inv-keep,
+  .invoice-paper .inv-footer { break-inside: avoid; }
+  /* Keep the coloured bands and zebra striping in the PDF. */
+  .invoice-paper .inv-band,
+  .invoice-paper .inv-table thead th,
+  .invoice-paper .inv-table tbody tr:nth-child(even),
+  .invoice-paper .inv-totals tr.inv-grand td,
+  .invoice-paper .inv-footer {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}
+
+/* ── Customer statement document ────────────────────────────────────────────
+   One visual template, shared by the on-screen statement and its print / PDF
+   output. Palette from the approved mockup: dark slate #263238 header with
+   white text, red #b02020 accents, #c4d4de section / table headings,
+   #e5edf2 / white alternating rows, #a9bdc9 borders, #263238 main text and
+   #5a737f secondary text. Self-contained — shares nothing with .invoice-paper. */
+.statement-paper {
+  --st-head-bg: #263238;
+  --st-band-bg: #c4d4de;
+  --st-row-alt: #e5edf2;
+  --st-border: #a9bdc9;
+  --st-accent: #b02020;
+  --st-ink: #263238;
+  --st-muted: #5a737f;
+  color: var(--st-ink);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+.statement-paper .st-accent { color: var(--st-accent); }
+.statement-paper .st-muted { color: var(--st-muted); }
+
+.statement-paper .st-header {
+  background: var(--st-head-bg);
+  color: #fff;
+  padding: 1rem 1.25rem;
+}
+.statement-paper .st-header a { color: #fff; }
+.statement-paper .st-rule { height: 3px; background: var(--st-accent); }
+
+.statement-paper .st-band {
+  background: var(--st-band-bg);
+  border: 1px solid var(--st-border);
+  padding: 0.375rem 0.625rem;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.statement-paper .st-box {
+  border: 1px solid var(--st-border);
+  border-top: 0;
+  padding: 0.625rem;
+}
+
+.statement-paper .st-scroll { overflow-x: auto; }
+.statement-paper table.st-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.statement-paper .st-table th,
+.statement-paper .st-table td {
+  border: 1px solid var(--st-border);
+  padding: 0.4375rem 0.625rem;
+  text-align: left;
+  vertical-align: top;
+}
+.statement-paper .st-table thead th {
+  background: var(--st-band-bg);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.statement-paper .st-table tbody tr { background: #fff; }
+.statement-paper .st-table tbody tr:nth-child(even) { background: var(--st-row-alt); }
+.statement-paper .st-table td.st-num,
+.statement-paper .st-table th.st-num { text-align: right; white-space: nowrap; }
+
+.statement-paper table.st-summary {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.statement-paper .st-summary td {
+  border: 1px solid var(--st-border);
+  padding: 0.3125rem 0.625rem;
+}
+.statement-paper .st-summary td:last-child { text-align: right; white-space: nowrap; }
+.statement-paper .st-summary tr.st-total td {
+  background: var(--st-band-bg);
+  font-weight: 700;
+  border-top: 2px solid var(--st-accent);
+}
+
+.statement-paper .st-current {
+  margin-top: 0.75rem;
+  background: var(--st-band-bg);
+  border: 1px solid var(--st-border);
+  border-left: 3px solid var(--st-accent);
+  padding: 0.625rem 0.875rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  font-weight: 700;
+}
+.statement-paper .st-message {
+  margin-top: 1rem;
+  border: 1px solid var(--st-border);
+  background: #fff;
+  padding: 0.75rem 0.875rem;
+}
+.statement-paper .st-thanks {
+  margin-top: 0.625rem;
+  text-align: center;
+  font-weight: 600;
+}
+
+@media print {
+  .statement-paper .st-scroll { overflow: visible !important; }
+  .statement-paper .st-table thead { display: table-header-group; }
+  .statement-paper .st-table tr { break-inside: avoid; }
+  .statement-paper .st-keep,
+  .statement-paper .st-current,
+  .statement-paper .st-message { break-inside: avoid; }
+  .statement-paper .st-header,
+  .statement-paper .st-rule,
+  .statement-paper .st-band,
+  .statement-paper .st-table thead th,
+  .statement-paper .st-table tbody tr:nth-child(even),
+  .statement-paper .st-summary tr.st-total td,
+  .statement-paper .st-current {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}
+
+/* ── Bank reconciliation workspace ─────────────────────────────────────────── */
+.recon {
+  --rc-head: #c4d4de;
+  --rc-alt: #e5edf2;
+  --rc-border: #a9bdc9;
+}
+.recon table.rc-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.8125rem;
+}
+.recon .rc-table th,
+.recon .rc-table td {
+  border-bottom: 1px solid var(--rc-border);
+  padding: 0.5rem 0.625rem;
+  text-align: left;
+  vertical-align: top;
+  color: #263238;
+}
+.recon .rc-table thead th {
+  background: var(--rc-head);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.recon .rc-table tbody tr { background: #fff; }
+.recon .rc-table tbody tr:nth-child(even) { background: var(--rc-alt); }
+.recon .rc-table tbody tr.rc-selected { background: #d3e7f5; }
+.recon .rc-table td.rc-num,
+.recon .rc-table th.rc-num { text-align: right; white-space: nowrap; }
+.recon .rc-scroll { overflow-x: auto; }
+
+@media print {
+  .recon .rc-no-print { display: none !important; }
+  .recon .rc-scroll { overflow: visible !important; }
+  .recon .rc-table thead { display: table-header-group; }
+  .recon .rc-table tr { break-inside: avoid; }
+  .recon .rc-report { break-inside: avoid; }
+  .recon .rc-table thead th,
+  .recon .rc-table tbody tr:nth-child(even) {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}

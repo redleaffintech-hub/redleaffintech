@@ -114,6 +114,165 @@ export async function createBillInTx(tx: Tx, input: BillInput) {
   });
 }
 
+/** The `BillLine` rows for a computed document, in create order. */
+function billLineCreateData(doc: ReturnType<typeof computeDocument>) {
+  return doc.lines.map((l) => ({
+    lineNo: l.lineNo,
+    itemId: l.itemId ?? null,
+    accountId: l.accountId,
+    description: l.description,
+    quantityMilli: l.quantityMilli,
+    unitPriceCents: l.unitPriceCents,
+    discountPercentMicro: l.discountPercentMicro,
+    netCents: l.netCents,
+    taxCodeId: l.taxCodeId ?? null,
+    taxCents: l.taxCents,
+    totalCents: l.totalCents,
+    isBillable: l.isBillable ?? false,
+    customerId: l.customerId ?? null,
+    projectId: l.projectId ?? null,
+  }));
+}
+
+export interface BillUpdateInput extends BillInput {
+  billId: string;
+}
+
+/**
+ * Edit an existing bill.
+ *
+ * A draft (or a bill awaiting approval) is rewritten in place. A posted bill
+ * with no payments applied is unwound exactly as {@link voidBill} would — its
+ * journal, tax rows and stock movements reversed — then rebuilt from the new
+ * inputs and re-posted, keeping the same bill number. Editing is refused for a
+ * void bill or one with money against it. The bill number is never changed here.
+ */
+export async function updateBill(input: BillUpdateInput) {
+  return db.$transaction(async (tx) => {
+    const existing = await tx.bill.findFirst({
+      where: { id: input.billId, companyId: input.companyId },
+      include: { allocations: true },
+    });
+    if (!existing) throw new Error("Bill not found in this company.");
+    if (existing.status === "VOID") {
+      throw new Error(`Bill ${existing.number} is void. Record a new bill instead of editing it.`);
+    }
+    if (existing.allocations.length > 0 || existing.amountPaidCents !== 0) {
+      throw new Error(`Bill ${existing.number} has payments applied. Unapply them before editing it.`);
+    }
+
+    const vendor = await tx.vendor.findFirst({
+      where: { id: input.vendorId, companyId: input.companyId },
+    });
+    if (!vendor) throw new Error("Vendor not found in this company.");
+
+    // Duplicate detection, ignoring this bill itself.
+    if (input.vendorInvoiceNo) {
+      const duplicate = await tx.bill.findFirst({
+        where: {
+          companyId: input.companyId,
+          vendorId: input.vendorId,
+          vendorInvoiceNo: input.vendorInvoiceNo,
+          status: { not: "VOID" },
+          NOT: { id: existing.id },
+        },
+      });
+      if (duplicate) {
+        throw new Error(
+          `${vendor.name} invoice ${input.vendorInvoiceNo} is already recorded as ${duplicate.number}.`,
+        );
+      }
+    }
+
+    const wasPosted = Boolean(existing.journalEntryId);
+
+    if (wasPosted) {
+      await reverseJournal(tx, existing.journalEntryId!, {
+        companyId: input.companyId,
+        memo: `Edit bill ${existing.number}`,
+        userId: input.userId,
+      });
+      const taxRows = await tx.taxEntry.findMany({
+        where: { companyId: input.companyId, sourceType: "BILL", sourceId: existing.id },
+      });
+      if (taxRows.length) {
+        await tx.taxEntry.createMany({
+          data: taxRows.map((t) => ({
+            companyId: input.companyId,
+            date: t.date,
+            direction: t.direction,
+            sourceType: "BILL",
+            sourceId: existing.id,
+            sourceNumber: `${existing.number} (edit)`,
+            taxCodeId: t.taxCodeId,
+            taxComponentId: t.taxComponentId,
+            jurisdiction: t.jurisdiction,
+            kind: t.kind,
+            rateMicro: t.rateMicro,
+            taxableCents: -t.taxableCents,
+            taxCents: -t.taxCents,
+            recoverableCents: -t.recoverableCents,
+            taxPeriodId: t.taxPeriodId,
+            partyName: t.partyName,
+          })),
+        });
+      }
+      const stockMovements = await tx.inventoryMovement.findMany({
+        where: { companyId: input.companyId, sourceType: "BILL", sourceId: existing.id, type: "PURCHASE" },
+      });
+      for (const movement of stockMovements) await reverseStockMovement(tx, movement.id, input.userId);
+    }
+
+    const issueDate = toUtcDay(input.issueDate);
+    const dueDate = input.dueDate ? toUtcDay(input.dueDate) : addDays(issueDate, vendor.paymentTermsDays);
+    const taxCodes = await loadTaxCodes(tx, input.companyId, input.lines.map((l) => l.taxCodeId));
+    const doc = computeDocument(input.lines, taxCodes, input.taxInclusive ?? false, issueDate);
+
+    await tx.billLine.deleteMany({ where: { billId: existing.id } });
+
+    await tx.bill.update({
+      where: { id: existing.id },
+      data: {
+        vendorId: input.vendorId,
+        vendorInvoiceNo: input.vendorInvoiceNo ?? null,
+        issueDate,
+        dueDate,
+        memo: input.memo ?? null,
+        projectId: input.projectId ?? null,
+        taxInclusive: input.taxInclusive ?? false,
+        subtotalCents: doc.subtotalCents,
+        taxCents: doc.taxCents,
+        totalCents: doc.totalCents,
+        balanceCents: doc.totalCents,
+        amountPaidCents: 0,
+        status: existing.approvalStatus === "PENDING" ? "AWAITING_APPROVAL" : "DRAFT",
+        journalEntryId: null,
+        postedAt: null,
+        lines: { create: billLineCreateData(doc) },
+      },
+    });
+
+    await tx.auditLog.create({
+      data: {
+        companyId: input.companyId,
+        userId: input.userId ?? null,
+        action: "UPDATE",
+        entityType: "Bill",
+        entityId: existing.id,
+        summary: `Edited bill ${existing.number}`,
+      },
+    });
+
+    if (wasPosted || input.post) {
+      return postBillInTx(tx, existing.id, input.companyId, input.userId);
+    }
+    return tx.bill.findUniqueOrThrow({
+      where: { id: existing.id },
+      include: { lines: true, vendor: true },
+    });
+  });
+}
+
 export async function approveBill(billId: string, companyId: string, userId: string) {
   return db.$transaction(async (tx) => {
     const bill = await tx.bill.findFirst({ where: { id: billId, companyId } });

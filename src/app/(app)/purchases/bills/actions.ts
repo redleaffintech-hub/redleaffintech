@@ -6,7 +6,7 @@ import { db } from "@/lib/db";
 import { toCents } from "@/lib/money";
 import { CAPABILITIES } from "@/lib/permissions";
 import { requireCapability, requireCompany } from "@/server/auth/context";
-import { approveBill, createBill, postBill, voidBill } from "@/server/documents/bills";
+import { approveBill, createBill, postBill, updateBill, voidBill } from "@/server/documents/bills";
 import { recordPayment } from "@/server/documents/payments";
 
 const schema = z.object({
@@ -62,6 +62,42 @@ export async function createBillAction(payload: string) {
     revalidatePath("/purchases/bills");
     revalidatePath("/");
     return { redirectTo: `/purchases/bills/${bill.id}` };
+  } catch (error) {
+    return { error: (error as Error).message };
+  }
+}
+
+export async function updateBillAction(billId: string, payload: string) {
+  const { company, user } = await requireCapability(CAPABILITIES.BILLS);
+  const parsed = schema.safeParse(JSON.parse(payload));
+  if (!parsed.success) return { error: parsed.error.issues[0].message };
+
+  try {
+    await updateBill({
+      billId,
+      companyId: company.id,
+      vendorId: parsed.data.partyId,
+      issueDate: parsed.data.issueDate,
+      dueDate: parsed.data.dueDate,
+      vendorInvoiceNo: parsed.data.reference || undefined,
+      memo: parsed.data.memo || undefined,
+      taxInclusive: parsed.data.taxInclusive,
+      userId: user.id,
+      post: parsed.data.post,
+      lines: parsed.data.lines.map((line) => ({
+        accountId: line.accountId,
+        description: line.description,
+        quantityMilli: Math.round(line.quantity * 1000),
+        unitPriceCents: toCents(line.unitPrice),
+        discountPercentMicro: Math.round(line.discountPercent * 1_000_000),
+        taxCodeId: line.taxCodeId,
+        itemId: line.itemId,
+      })),
+    });
+    revalidatePath("/purchases/bills");
+    revalidatePath(`/purchases/bills/${billId}`);
+    revalidatePath("/");
+    return { redirectTo: `/purchases/bills/${billId}` };
   } catch (error) {
     return { error: (error as Error).message };
   }
@@ -139,7 +175,7 @@ export async function payBillAction(formData: FormData) {
 
 export async function billFormOptions() {
   const { company } = await requireCompany();
-  const [vendors, accounts, taxCodes, items] = await Promise.all([
+  const [vendors, accounts, taxCodes, items, profile] = await Promise.all([
     db.vendor.findMany({
       where: { companyId: company.id, isActive: true },
       orderBy: { name: "asc" },
@@ -167,6 +203,14 @@ export async function billFormOptions() {
         taxCodeId: true, purchaseTaxCodeId: true,
       },
     }),
+    db.company.findUniqueOrThrow({
+      where: { id: company.id },
+      select: {
+        name: true, legalName: true, addressLine1: true, addressLine2: true, city: true, province: true,
+        postalCode: true, businessNumber: true, gstNumber: true, qstNumber: true, pstNumber: true,
+        email: true, phone: true, website: true, invoiceFooter: true, logoUrl: true,
+      },
+    }),
   ]);
   return {
     vendors,
@@ -174,6 +218,7 @@ export async function billFormOptions() {
     taxCodes,
     items,
     company,
+    profile,
     /** The plain list the new-vendor dialog offers as a default code. */
     purchaseTaxCodes: taxCodes.map((code) => ({ id: code.id, code: code.code, name: code.name })),
   };

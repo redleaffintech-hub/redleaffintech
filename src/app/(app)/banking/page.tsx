@@ -11,7 +11,7 @@ import { ImportPanel, TransferButton } from "./banking-tools";
 import { bankingOptions } from "./actions";
 import { SYSTEM_ACCOUNTS } from "@/lib/enums";
 
-export const metadata = { title: "Banking" };
+export const metadata = { title: "Bank review queue" };
 
 export default async function BankingPage() {
   const { company } = await requireCapability(CAPABILITIES.BANKING);
@@ -20,7 +20,7 @@ export default async function BankingPage() {
 
   const [queue, recent, transfers, defaults] = await Promise.all([
     db.bankTransaction.findMany({
-      where: { companyId: company.id, status: "UNMATCHED" },
+      where: { companyId: company.id, status: "UNMATCHED", reconciliationId: null },
       include: { bankAccount: { select: { name: true, type: true } } },
       orderBy: { date: "desc" },
       take: 60,
@@ -49,7 +49,7 @@ export default async function BankingPage() {
     <>
       <PageHeader
         title="Bank review queue"
-        breadcrumb={[{ label: "Banking" }, { label: "Review queue" }]}
+        breadcrumb={[{ label: "Bank Reconciliation" }, { label: "Review queue" }]}
         description={
           queue.length > 0
             ? `${queue.length} transactions waiting — ${formatMoney(inflowCents, { currency })} in, ${formatMoney(Math.abs(outflowCents), { currency })} out. Nothing here has touched the ledger yet.`

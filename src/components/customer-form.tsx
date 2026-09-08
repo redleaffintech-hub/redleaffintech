@@ -4,12 +4,33 @@ import { useState } from "react";
 import clsx from "clsx";
 import { PROVINCES } from "@/lib/enums";
 import { Button, Field, SectionDivider, inputClass } from "@/components/ui";
-import { createCustomerAction } from "@/app/(app)/sales/customers/actions";
+import { createCustomerAction, updateCustomerAction } from "@/app/(app)/sales/customers/actions";
 
 export interface CustomerFormTaxCode {
   id: string;
   code: string;
   name: string;
+}
+
+/** An existing customer's editable fields, as loaded for the edit page. */
+export interface CustomerFormValues {
+  id: string;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  taxCodeId: string | null;
+  paymentTermsDays: number;
+  addressLine1: string | null;
+  addressLine2: string | null;
+  city: string | null;
+  province: string | null;
+  postalCode: string | null;
+  shipToLine1: string | null;
+  shipToLine2: string | null;
+  shipToCity: string | null;
+  shipToProvince: string | null;
+  shipToPostalCode: string | null;
+  notes: string | null;
 }
 
 /** What `createCustomerAction` hands back, and what the invoice editor consumes. */
@@ -64,6 +85,28 @@ const EMPTY: FormState = {
   notes: "",
 };
 
+/** Nullable DB columns become the "" the controlled inputs expect. */
+function toFormState(customer: CustomerFormValues): FormState {
+  return {
+    name: customer.name ?? "",
+    email: customer.email ?? "",
+    phone: customer.phone ?? "",
+    taxCodeId: customer.taxCodeId ?? "",
+    paymentTermsDays: String(customer.paymentTermsDays),
+    addressLine1: customer.addressLine1 ?? "",
+    addressLine2: customer.addressLine2 ?? "",
+    city: customer.city ?? "",
+    province: customer.province ?? "",
+    postalCode: customer.postalCode ?? "",
+    shipToLine1: customer.shipToLine1 ?? "",
+    shipToLine2: customer.shipToLine2 ?? "",
+    shipToCity: customer.shipToCity ?? "",
+    shipToProvince: customer.shipToProvince ?? "",
+    shipToPostalCode: customer.shipToPostalCode ?? "",
+    notes: customer.notes ?? "",
+  };
+}
+
 const BILLING_FIELDS: AddressFieldNames = {
   line1: "addressLine1",
   line2: "addressLine2",
@@ -89,18 +132,29 @@ export function CustomerForm({
   taxCodes,
   defaultTermsDays,
   onCreated,
+  onSaved,
   onCancel,
   compact = false,
+  customer,
 }: {
   taxCodes: CustomerFormTaxCode[];
   defaultTermsDays: number;
-  onCreated: (customer: CreatedCustomer) => void;
+  /** Called after a create, with the record the invoice editor can select. */
+  onCreated?: (customer: CreatedCustomer) => void;
+  /** Called after an edit is saved. */
+  onSaved?: () => void;
   onCancel?: () => void;
   /** Tighter grid and no notes field, for the dialog on the invoice screen. */
   compact?: boolean;
+  /** When set, the form edits this customer instead of creating a new one. */
+  customer?: CustomerFormValues;
 }) {
-  const [form, setForm] = useState<FormState>({ ...EMPTY, paymentTermsDays: String(defaultTermsDays) });
-  const [sameAsBilling, setSameAsBilling] = useState(true);
+  const [form, setForm] = useState<FormState>(
+    customer ? toFormState(customer) : { ...EMPTY, paymentTermsDays: String(defaultTermsDays) },
+  );
+  const [sameAsBilling, setSameAsBilling] = useState(
+    customer ? !(customer.shipToLine1 || customer.shipToCity || customer.shipToProvince) : true,
+  );
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -113,21 +167,23 @@ export function CustomerForm({
     if (!form.name.trim()) return setError("A customer needs a name.");
 
     setSaving(true);
-    const result = await createCustomerAction(
-      JSON.stringify({
-        ...form,
-        // Ticking "same as billing" stores no shipping address at all, which the
-        // invoice editor reads as "fall back to the billing address". Storing a
-        // copy instead would leave a stale one behind if billing were corrected.
-        ...(sameAsBilling
-          ? { shipToLine1: "", shipToLine2: "", shipToCity: "", shipToProvince: "", shipToPostalCode: "" }
-          : {}),
-      }),
-    );
+    const payload = JSON.stringify({
+      ...form,
+      // Ticking "same as billing" stores no shipping address at all, which the
+      // invoice editor reads as "fall back to the billing address". Storing a
+      // copy instead would leave a stale one behind if billing were corrected.
+      ...(sameAsBilling
+        ? { shipToLine1: "", shipToLine2: "", shipToCity: "", shipToProvince: "", shipToPostalCode: "" }
+        : {}),
+    });
+    const result = customer
+      ? await updateCustomerAction(customer.id, payload)
+      : await createCustomerAction(payload);
     setSaving(false);
 
     if (result?.error) return setError(result.error);
-    if (result?.customer) onCreated(result.customer);
+    if (customer) onSaved?.();
+    else if (result?.customer) onCreated?.(result.customer);
   }
 
   const cols = compact ? "sm:grid-cols-2" : "sm:grid-cols-2 lg:grid-cols-3";
@@ -225,7 +281,7 @@ export function CustomerForm({
 
       <div className="flex flex-wrap items-center gap-2">
         <Button variant="primary" onClick={submit} disabled={saving}>
-          {saving ? "Saving…" : "Save customer"}
+          {saving ? "Saving…" : customer ? "Save changes" : "Save customer"}
         </Button>
         {onCancel && (
           <Button onClick={onCancel} disabled={saving}>

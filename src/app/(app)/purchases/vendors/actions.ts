@@ -117,6 +117,81 @@ export async function createVendorAction(payload: string) {
   return { ok: true as const, vendor: toPartyOption(vendor) };
 }
 
+/**
+ * Edit an existing vendor. Same validation and duplicate-name guard as create.
+ */
+export async function updateVendorAction(vendorId: string, payload: string) {
+  const { company, user } = await requireCapability(CAPABILITIES.BILLS);
+
+  const existing = await db.vendor.findFirst({
+    where: { id: vendorId, companyId: company.id },
+    select: { id: true },
+  });
+  if (!existing) return { error: "That vendor does not exist." };
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(payload);
+  } catch {
+    return { error: "Could not read the vendor details." };
+  }
+
+  const parsed = vendorSchema.safeParse(raw);
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Check the vendor details." };
+  const input = parsed.data;
+
+  const clash = await db.vendor.findFirst({
+    where: {
+      companyId: company.id,
+      name: { equals: input.name, mode: "insensitive" },
+      NOT: { id: vendorId },
+    },
+    select: { name: true },
+  });
+  if (clash) return { error: `${clash.name} already exists as a vendor.` };
+
+  if (input.taxCodeId) {
+    const code = await db.taxCode.findFirst({
+      where: { id: input.taxCodeId, companyId: company.id },
+      select: { id: true },
+    });
+    if (!code) return { error: "That tax code does not exist in this company." };
+  }
+
+  const vendor = await db.vendor.update({
+    where: { id: vendorId },
+    data: {
+      name: input.name,
+      email: input.email || null,
+      phone: input.phone ?? null,
+      businessNumber: input.businessNumber ?? null,
+      taxCodeId: input.taxCodeId ?? null,
+      paymentTermsDays: input.paymentTermsDays,
+      addressLine1: input.addressLine1 ?? null,
+      city: input.city ?? null,
+      province: input.province ?? null,
+      postalCode: input.postalCode ?? null,
+      notes: input.notes ?? null,
+    },
+  });
+
+  await recordAudit({
+    companyId: company.id,
+    userId: user.id,
+    action: "UPDATE",
+    entityType: "Vendor",
+    entityId: vendor.id,
+    summary: `Updated vendor ${vendor.name}`,
+  });
+
+  revalidatePath("/purchases/vendors");
+  revalidatePath(`/purchases/vendors/${vendor.id}`);
+  revalidatePath(`/purchases/vendors/${vendor.id}/edit`);
+  revalidatePath("/purchases/bills/new");
+
+  return { ok: true as const, vendor: toPartyOption(vendor) };
+}
+
 type VendorRecord = Awaited<ReturnType<typeof db.vendor.create>>;
 
 /**

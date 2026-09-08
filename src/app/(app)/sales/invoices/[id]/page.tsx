@@ -6,9 +6,7 @@ import { CAPABILITIES, can } from "@/lib/permissions";
 import { formatDate, formatDateLong, formatDateTime, daysBetween, today } from "@/lib/dates";
 import { formatMoney, formatQty, formatRate } from "@/lib/money";
 import { taxRegistrationLines } from "@/lib/tax-registration";
-import {
-  Badge, Card, CardHeader, Money, PageHeader, StatusBadge, Table, Td, Th, Tr,
-} from "@/components/ui";
+import { Badge, Card, CardHeader, Money, PageHeader, StatusBadge } from "@/components/ui";
 import { InvoiceActions } from "./invoice-actions";
 
 export default async function InvoiceDetailPage({ params }: PageProps<"/sales/invoices/[id]">) {
@@ -54,7 +52,7 @@ export default async function InvoiceDetailPage({ params }: PageProps<"/sales/in
     }),
     db.company.findUniqueOrThrow({
       where: { id: company.id },
-      select: { name: true, legalName: true, addressLine1: true, city: true, province: true, postalCode: true, gstNumber: true, qstNumber: true, pstNumber: true, email: true, phone: true, invoiceFooter: true, logoUrl: true },
+      select: { name: true, legalName: true, addressLine1: true, addressLine2: true, city: true, province: true, postalCode: true, businessNumber: true, gstNumber: true, qstNumber: true, pstNumber: true, email: true, phone: true, website: true, invoiceFooter: true, logoUrl: true },
     }),
   ]);
 
@@ -88,6 +86,37 @@ export default async function InvoiceDetailPage({ params }: PageProps<"/sales/in
 
   const placeOfSupply = shipTo?.province ?? billTo.province ?? null;
 
+  const fmt = (cents: number) => formatMoney(cents, { currency });
+
+  /** Header detail rows — optional ones drop out when they hold nothing. */
+  const detailRows: { label: string; value: string }[] = [
+    { label: "Invoice #", value: invoice.number },
+    { label: "Invoice date", value: formatDateLong(invoice.issueDate) },
+    { label: "Due date", value: formatDate(invoice.dueDate) },
+    { label: "Terms", value: invoice.terms ?? `Net ${invoice.customer.paymentTermsDays}` },
+  ];
+  if (invoice.poNumber) detailRows.push({ label: "PO / reference", value: invoice.poNumber });
+  if (invoice.project) detailRows.push({ label: "Project", value: invoice.project.name });
+
+  const companyAddress = [
+    companyProfile.addressLine1,
+    companyProfile.addressLine2,
+    [companyProfile.city, companyProfile.province, companyProfile.postalCode].filter(Boolean).join(", ") || null,
+  ].filter(Boolean).join(", ");
+  const footerContact = [
+    companyProfile.email,
+    companyProfile.phone,
+    companyProfile.website,
+    companyAddress || null,
+  ].filter(Boolean) as string[];
+
+  const hasItemColumn = invoice.lines.some((line) => line.item);
+
+  // Editable while nothing is owed against it: a draft is rewritten, a posted
+  // invoice is reversed and re-posted under the same number.
+  const canEdit =
+    invoice.status !== "VOID" && invoice.allocations.length === 0 && invoice.amountPaidCents === 0;
+
   return (
     <>
       <PageHeader
@@ -114,25 +143,37 @@ export default async function InvoiceDetailPage({ params }: PageProps<"/sales/in
             sentAt={invoice.sentAt?.toISOString() ?? null}
             bankAccounts={bankAccounts}
             canRecordPayment={canPay}
+            canEdit={canEdit}
           />
         }
       />
 
       <div className="grid gap-4 lg:grid-cols-[1fr_20rem] lg:items-start">
         {/* The document */}
-        <Card className="print-full">
-          <div className="flex flex-wrap items-start justify-between gap-6 border-b border-paper-200 pb-5">
-            <div>
+        <Card className="invoice-paper print-full">
+          {/* Letterhead — company at left, red Invoice mark and details at right */}
+          <div className="flex flex-wrap items-start justify-between gap-6 border-b-2 border-[color:var(--inv-accent)] pb-4">
+            <div className="flex items-start gap-3">
               {companyProfile.logoUrl && (
                 // eslint-disable-next-line @next/next/no-img-element -- a data URL, not an optimizable remote asset
-                <img src={companyProfile.logoUrl} alt="" className="mb-2 h-12 w-12 rounded object-contain" />
+                <img src={companyProfile.logoUrl} alt="" className="h-14 w-14 rounded object-contain" />
               )}
               <div>
-                <p className="text-[1.125rem] font-semibold tracking-[-0.01em] text-ink-950">{companyProfile.legalName ?? companyProfile.name}</p>
-                <p className="mt-1 text-[0.8125rem] leading-6 text-muted-ink">
+                <p className="text-[1.0625rem] font-semibold tracking-[-0.01em]">
+                  {companyProfile.legalName ?? companyProfile.name}
+                </p>
+                <p className="mt-1 text-[0.8125rem] leading-6 text-[color:var(--inv-ink)]/75">
                   {companyProfile.addressLine1}
                   {companyProfile.addressLine1 && <br />}
+                  {companyProfile.addressLine2}
+                  {companyProfile.addressLine2 && <br />}
                   {[companyProfile.city, companyProfile.province, companyProfile.postalCode].filter(Boolean).join(", ")}
+                  {companyProfile.businessNumber && (
+                    <>
+                      <br />
+                      Business no.: {companyProfile.businessNumber}
+                    </>
+                  )}
                   {taxRegistrationLines(companyProfile).map((registration) => (
                     <span key={registration.label}>
                       <br />
@@ -142,129 +183,148 @@ export default async function InvoiceDetailPage({ params }: PageProps<"/sales/in
                 </p>
               </div>
             </div>
-            <div className="text-right">
-              <p className="text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-maple-600">Invoice</p>
-              <p className="tnum text-[1.375rem] font-semibold tracking-[-0.02em] text-ink-950">{invoice.number}</p>
-              <p className="mt-1 text-[0.8125rem] text-muted-ink">{formatDateLong(invoice.issueDate)}</p>
+            <div className="min-w-[15rem] text-right">
+              <p className="inv-accent text-[1.75rem] font-bold uppercase tracking-[0.02em]">Invoice</p>
+              <table className="mt-2 ml-auto text-[0.8125rem]">
+                <tbody>
+                  {detailRows.map((row) => (
+                    <tr key={row.label}>
+                      <td className="py-0.5 pr-3 text-left text-[color:var(--inv-ink)]/70">{row.label}</td>
+                      <td className="tnum py-0.5 text-right font-medium">{row.value}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
 
-          <div className="grid gap-6 border-b border-paper-200 py-5 sm:grid-cols-3">
-            <div>
-              <p className="text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-muted-ink">Bill to</p>
-              <p className="mt-1 text-[0.9375rem] font-medium text-ink-900">{billTo.name}</p>
-              <p className="text-[0.8125rem] leading-6 text-muted-ink">
-                {addressBody(billTo)}
-                {invoice.customer.email && (
-                  <>
-                    <br />
-                    {invoice.customer.email}
-                  </>
-                )}
-              </p>
+          {/* Bill to / Ship to, side by side */}
+          <div className="mt-5 grid gap-4 sm:grid-cols-2">
+            <div className="inv-keep">
+              <div className="inv-band">Bill to</div>
+              <div className="inv-box text-[0.8125rem] leading-6">
+                <p className="font-medium">{billTo.name}</p>
+                <p>{addressBody(billTo)}</p>
+                {invoice.customer.email && <p>{invoice.customer.email}</p>}
+              </div>
             </div>
-            <div>
-              <p className="text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-muted-ink">Ship to</p>
-              <p className="mt-1 text-[0.9375rem] font-medium text-ink-900">{(shipTo ?? billTo).name}</p>
-              <p className="text-[0.8125rem] leading-6 text-muted-ink">{addressBody(shipTo ?? billTo)}</p>
-              {placeOfSupply && (
-                <p className="mt-1.5 text-[0.75rem] text-muted-ink">
-                  Place of supply: <span className="font-medium text-ink-800">{placeOfSupply}</span>
+            <div className="inv-keep">
+              <div className="inv-band">Ship to</div>
+              <div className="inv-box text-[0.8125rem] leading-6">
+                <p className="font-medium">{(shipTo ?? billTo).name}</p>
+                <p>{addressBody(shipTo ?? billTo)}</p>
+                {placeOfSupply && (
+                  <p className="mt-1 text-[0.6875rem] text-[color:var(--inv-ink)]/60">
+                    Place of supply: <span className="font-medium">{placeOfSupply}</span>
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Lines */}
+          <div className="inv-scroll mt-5">
+            <table className="inv-table min-w-[36rem]">
+              <thead>
+                <tr>
+                  {hasItemColumn && <th className="w-24">Item #</th>}
+                  <th>Description</th>
+                  <th className="inv-num w-20">Qty</th>
+                  <th className="inv-num w-28">Unit price</th>
+                  <th className="inv-num w-28">Line total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {invoice.lines.map((line) => (
+                  <tr key={line.id}>
+                    {hasItemColumn && <td className="tnum">{line.item?.code ?? ""}</td>}
+                    <td>
+                      <span className="font-medium">{line.description}</span>
+                      <span className="mt-0.5 block text-[0.6875rem] text-[color:var(--inv-ink)]/60">
+                        {line.account.code} · {line.account.name}
+                        {line.taxCode && ` · ${line.taxCode.code}`}
+                        {line.discountPercentMicro > 0 && ` · ${formatRate(line.discountPercentMicro / 100)} off`}
+                      </span>
+                    </td>
+                    <td className="inv-num tnum">{formatQty(line.quantityMilli)}</td>
+                    <td className="inv-num tnum">{fmt(line.unitPriceCents)}</td>
+                    <td className="inv-num tnum">{fmt(line.netCents)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Notes at left, tax breakdown and totals at right */}
+          <div className="mt-5 grid gap-4 sm:grid-cols-2">
+            <div className="inv-keep">
+              {invoice.memo && (
+                <>
+                  <div className="inv-band">Notes</div>
+                  <div className="inv-box whitespace-pre-line text-[0.8125rem] leading-6">{invoice.memo}</div>
+                </>
+              )}
+            </div>
+            <div className="inv-keep">
+              <table className="inv-totals ml-auto max-w-xs text-[0.8125rem]">
+                <tbody>
+                  <tr>
+                    <td className="text-[color:var(--inv-ink)]/75">Subtotal</td>
+                    <td className="tnum">{fmt(invoice.subtotalCents)}</td>
+                  </tr>
+                  {invoice.discountCents > 0 && (
+                    <tr>
+                      <td className="text-[color:var(--inv-ink)]/75">Discount</td>
+                      <td className="tnum">{fmt(-invoice.discountCents)}</td>
+                    </tr>
+                  )}
+                  {groupTax(taxEntries).map(([label, cents]) => (
+                    <tr key={label}>
+                      <td className="text-[color:var(--inv-ink)]/75">{label}</td>
+                      <td className="tnum">{fmt(cents)}</td>
+                    </tr>
+                  ))}
+                  <tr className="inv-grand">
+                    <td>Total</td>
+                    <td className="tnum">{fmt(invoice.totalCents)}</td>
+                  </tr>
+                  {invoice.amountPaidCents > 0 && (
+                    <tr>
+                      <td className="text-[color:var(--inv-ink)]/75">Paid</td>
+                      <td className="tnum">{fmt(-invoice.amountPaidCents)}</td>
+                    </tr>
+                  )}
+                  {invoice.writtenOffCents > 0 && (
+                    <tr>
+                      <td className="text-[color:var(--inv-ink)]/75">Written off</td>
+                      <td className="tnum">{fmt(-invoice.writtenOffCents)}</td>
+                    </tr>
+                  )}
+                  <tr className="inv-due">
+                    <td>Balance due</td>
+                    <td className="tnum">{fmt(invoice.balanceCents)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Footer — payment instructions and contact details */}
+          {(companyProfile.invoiceFooter || footerContact.length > 0) && (
+            <div className="inv-footer">
+              {companyProfile.invoiceFooter && (
+                <p className="whitespace-pre-line">
+                  <span className="font-semibold">Payment instructions.</span> {companyProfile.invoiceFooter}
+                </p>
+              )}
+              {footerContact.length > 0 && (
+                <p className={companyProfile.invoiceFooter ? "mt-1.5" : ""}>
+                  <span className="font-semibold">{companyProfile.legalName ?? companyProfile.name}</span>
+                  {" — "}
+                  {footerContact.join("  ·  ")}
                 </p>
               )}
             </div>
-            <div className="sm:text-right">
-              <dl className="space-y-1 text-[0.8125rem]">
-                <div className="flex justify-between sm:justify-end sm:gap-6">
-                  <dt className="text-muted-ink">Terms</dt>
-                  <dd className="text-ink-800">{invoice.terms ?? `Net ${invoice.customer.paymentTermsDays}`}</dd>
-                </div>
-                <div className="flex justify-between sm:justify-end sm:gap-6">
-                  <dt className="text-muted-ink">Due date</dt>
-                  <dd className="text-ink-800">{formatDate(invoice.dueDate)}</dd>
-                </div>
-                {invoice.poNumber && (
-                  <div className="flex justify-between sm:justify-end sm:gap-6">
-                    <dt className="text-muted-ink">PO / reference</dt>
-                    <dd className="text-ink-800">{invoice.poNumber}</dd>
-                  </div>
-                )}
-                {invoice.project && (
-                  <div className="flex justify-between sm:justify-end sm:gap-6">
-                    <dt className="text-muted-ink">Project</dt>
-                    <dd className="text-ink-800">{invoice.project.name}</dd>
-                  </div>
-                )}
-              </dl>
-            </div>
-          </div>
-
-          <Table className="mt-1">
-            <thead>
-              <tr>
-                <Th>Description</Th>
-                <Th width="5rem" align="right">Qty</Th>
-                <Th width="7rem" align="right">Rate</Th>
-                <Th width="6rem">Tax</Th>
-                <Th width="8rem" align="right">Amount</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {invoice.lines.map((line) => (
-                <Tr key={line.id}>
-                  <Td>
-                    <span className="font-medium text-ink-900">{line.description}</span>
-                    <span className="block text-[0.75rem] text-muted-ink">
-                      {line.account.code} · {line.account.name}
-                    </span>
-                  </Td>
-                  <Td align="right" className="tnum">{formatQty(line.quantityMilli)}</Td>
-                  <Td align="right"><Money cents={line.unitPriceCents} /></Td>
-                  <Td>
-                    {line.taxCode ? (
-                      <span className="text-[0.75rem] text-muted-ink" title={line.taxCode.name}>
-                        {line.taxCode.code}
-                      </span>
-                    ) : (
-                      <span className="text-[0.75rem] text-muted-ink">—</span>
-                    )}
-                  </Td>
-                  <Td align="right"><Money cents={line.netCents} /></Td>
-                </Tr>
-              ))}
-            </tbody>
-          </Table>
-
-          <div className="mt-4 flex justify-end">
-            <dl className="w-full max-w-xs space-y-1.5 text-[0.8125rem]">
-              <Row label="Subtotal" value={invoice.subtotalCents} currency={currency} />
-              {invoice.discountCents > 0 && <Row label="Discount" value={-invoice.discountCents} currency={currency} />}
-              {groupTax(taxEntries).map(([label, cents]) => (
-                <Row key={label} label={label} value={cents} currency={currency} />
-              ))}
-              <div className="flex items-center justify-between border-t border-paper-300 pt-2 text-[0.9375rem] font-semibold">
-                <dt className="text-ink-900">Total</dt>
-                <dd className="tnum text-ink-950">{formatMoney(invoice.totalCents, { currency })}</dd>
-              </div>
-              {invoice.amountPaidCents > 0 && <Row label="Paid" value={-invoice.amountPaidCents} currency={currency} />}
-              {invoice.writtenOffCents > 0 && <Row label="Written off" value={-invoice.writtenOffCents} currency={currency} />}
-              <div className="flex items-center justify-between rounded-md bg-paper-100 px-2 py-1.5 text-[0.9375rem] font-semibold">
-                <dt className="text-ink-900">Balance due</dt>
-                <dd className="tnum text-ink-950">{formatMoney(invoice.balanceCents, { currency })}</dd>
-              </div>
-            </dl>
-          </div>
-
-          {(invoice.memo || companyProfile.invoiceFooter) && (
-            <p className="mt-5 border-t border-paper-200 pt-4 text-[0.8125rem] leading-6 text-muted-ink">
-              {invoice.memo}
-              {companyProfile.invoiceFooter && (
-                <>
-                  <br />
-                  {companyProfile.invoiceFooter}
-                </>
-              )}
-            </p>
           )}
         </Card>
 
@@ -403,13 +463,4 @@ function groupTax(entries: { kind: string; rateMicro: number; taxCents: number }
     map.set(label, (map.get(label) ?? 0) + entry.taxCents);
   }
   return [...map.entries()];
-}
-
-function Row({ label, value, currency }: { label: string; value: number; currency: string }) {
-  return (
-    <div className="flex items-center justify-between">
-      <dt className="text-muted-ink">{label}</dt>
-      <dd className="tnum text-ink-900">{formatMoney(value, { currency })}</dd>
-    </div>
-  );
 }

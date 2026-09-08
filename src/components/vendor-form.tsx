@@ -4,7 +4,7 @@ import { useState } from "react";
 import clsx from "clsx";
 import { PROVINCES } from "@/lib/enums";
 import { Button, Field, SectionDivider, inputClass } from "@/components/ui";
-import { createVendorAction } from "@/app/(app)/purchases/vendors/actions";
+import { createVendorAction, updateVendorAction } from "@/app/(app)/purchases/vendors/actions";
 
 export interface VendorFormTaxCode {
   id: string;
@@ -14,6 +14,38 @@ export interface VendorFormTaxCode {
 
 /** What `createVendorAction` hands back, and what the bill editor consumes. */
 export type CreatedVendor = NonNullable<Awaited<ReturnType<typeof createVendorAction>>["vendor"]>;
+
+/** An existing vendor's editable fields, as loaded for the edit page. */
+export interface VendorFormValues {
+  id: string;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  businessNumber: string | null;
+  taxCodeId: string | null;
+  paymentTermsDays: number;
+  addressLine1: string | null;
+  city: string | null;
+  province: string | null;
+  postalCode: string | null;
+  notes: string | null;
+}
+
+function toFormState(vendor: VendorFormValues): FormState {
+  return {
+    name: vendor.name ?? "",
+    email: vendor.email ?? "",
+    phone: vendor.phone ?? "",
+    businessNumber: vendor.businessNumber ?? "",
+    taxCodeId: vendor.taxCodeId ?? "",
+    paymentTermsDays: String(vendor.paymentTermsDays),
+    addressLine1: vendor.addressLine1 ?? "",
+    city: vendor.city ?? "",
+    province: vendor.province ?? "",
+    postalCode: vendor.postalCode ?? "",
+    notes: vendor.notes ?? "",
+  };
+}
 
 interface FormState {
   name: string;
@@ -53,17 +85,26 @@ export function VendorForm({
   taxCodes,
   defaultTermsDays,
   onCreated,
+  onSaved,
   onCancel,
   compact = false,
+  vendor,
 }: {
   taxCodes: VendorFormTaxCode[];
   defaultTermsDays: number;
-  onCreated: (vendor: CreatedVendor) => void;
+  /** Called after a create, with the record the bill editor can select. */
+  onCreated?: (vendor: CreatedVendor) => void;
+  /** Called after an edit is saved. */
+  onSaved?: () => void;
   onCancel?: () => void;
   /** Tighter grid and no notes field, for the dialog on the bill screen. */
   compact?: boolean;
+  /** When set, the form edits this vendor instead of creating a new one. */
+  vendor?: VendorFormValues;
 }) {
-  const [form, setForm] = useState<FormState>({ ...EMPTY, paymentTermsDays: String(defaultTermsDays) });
+  const [form, setForm] = useState<FormState>(
+    vendor ? toFormState(vendor) : { ...EMPTY, paymentTermsDays: String(defaultTermsDays) },
+  );
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -76,11 +117,14 @@ export function VendorForm({
     if (!form.name.trim()) return setError("A vendor needs a name.");
 
     setSaving(true);
-    const result = await createVendorAction(JSON.stringify(form));
+    const result = vendor
+      ? await updateVendorAction(vendor.id, JSON.stringify(form))
+      : await createVendorAction(JSON.stringify(form));
     setSaving(false);
 
     if (result?.error) return setError(result.error);
-    if (result?.vendor) onCreated(result.vendor);
+    if (vendor) onSaved?.();
+    else if (result?.vendor) onCreated?.(result.vendor);
   }
 
   const cols = compact ? "sm:grid-cols-2" : "sm:grid-cols-2 lg:grid-cols-3";
@@ -194,7 +238,7 @@ export function VendorForm({
 
       <div className="flex flex-wrap items-center gap-2">
         <Button variant="primary" onClick={submit} disabled={saving}>
-          {saving ? "Saving…" : "Save vendor"}
+          {saving ? "Saving…" : vendor ? "Save changes" : "Save vendor"}
         </Button>
         {onCancel && (
           <Button onClick={onCancel} disabled={saving}>

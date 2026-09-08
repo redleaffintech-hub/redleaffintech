@@ -21,7 +21,7 @@ export default async function BankRulesPage() {
     <>
       <PageHeader
         title="Categorisation rules"
-        breadcrumb={[{ label: "Banking", href: "/banking" }, { label: "Rules" }]}
+        breadcrumb={[{ label: "Bank Reconciliation", href: "/banking" }, { label: "Rules" }]}
         description="Rules pre-fill the review queue. They suggest an account and tax code; nothing posts until you confirm, unless a rule is set to auto-confirm."
       />
 

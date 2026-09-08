@@ -51,7 +51,7 @@ export default async function BankAccountsPage() {
     <>
       <PageHeader
         title="Bank & card accounts"
-        breadcrumb={[{ label: "Banking", href: "/banking" }, { label: "Accounts" }]}
+        breadcrumb={[{ label: "Bank Reconciliation", href: "/banking" }, { label: "Accounts" }]}
         description="Each account is bound to a general-ledger account, so the balance here and the balance sheet are the same number."
         actions={<LinkButton href="/banking/reconcile" variant="primary">Reconcile an account</LinkButton>}
       />

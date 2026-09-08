@@ -159,6 +159,13 @@ async function resetDatabase() {
     await tx.creditNoteLine.deleteMany(); await tx.creditNote.deleteMany();
     await tx.billLine.deleteMany(); await tx.bill.deleteMany();
     await tx.expenseLine.deleteMany(); await tx.expense.deleteMany();
+    // Payroll and HR (children before parents; leave rows before leave types).
+    await tx.payRunLine.deleteMany(); await tx.payRun.deleteMany();
+    await tx.leaveRequest.deleteMany(); await tx.leaveBalanceAdjustment.deleteMany();
+    await tx.employee.deleteMany(); await tx.department.deleteMany(); await tx.leaveType.deleteMany();
+    // Inventory movements restrict-reference their item, so clear them first.
+    await tx.inventoryMovement.deleteMany();
+    await tx.bankReconciliationMatch.deleteMany();
     await tx.bankTransaction.deleteMany(); await tx.bankReconciliation.deleteMany();
     await tx.bankRule.deleteMany(); await tx.bankAccount.deleteMany();
     await tx.journalLine.deleteMany(); await tx.journalEntry.deleteMany();
@@ -577,26 +584,60 @@ async function buildBooks(companyId: string, userId: string) {
     });
   }
 
-  // A completed reconciliation for the first quarter.
-  const q1End = utcDate(YEAR, 3, 31);
-  if (q1End < TODAY) {
-    const q1Transactions = await db.bankTransaction.findMany({
-      where: { companyId, bankAccountId: chequing.id, date: { lte: q1End }, status: { in: ["MATCHED", "CATEGORIZED"] } },
+  // A completed monthly reconciliation for March, so the history and the
+  // carried-forward opening balance are demonstrable.
+  const marStart = utcDate(YEAR, 3, 1);
+  const marEnd = utcDate(YEAR, 3, 31);
+  if (marEnd < TODAY) {
+    const marTransactions = await db.bankTransaction.findMany({
+      where: {
+        companyId, bankAccountId: chequing.id,
+        date: { gte: marStart, lte: marEnd },
+        status: { in: ["MATCHED", "CATEGORIZED"] },
+      },
     });
-    const movement = q1Transactions.reduce((s, t) => s + t.amountCents, 0);
+    const movement = marTransactions.reduce((s, t) => s + t.amountCents, 0);
+    const opening = 8_420_000;
+    const closing = opening + movement;
+    // A month that reconciled cleanly: statement closing equals the book
+    // balance, no timing items. Frozen so the history never re-computes.
+    const frozenReport = {
+      asOfIso: marEnd.toISOString().slice(0, 10),
+      currency: "CAD",
+      bankAccountName: chequing.name,
+      monthLabel: "March " + YEAR,
+      nextMonthLabel: "April " + YEAR,
+      statementClosingCents: closing,
+      outstandingReceipts: [] as { date: string; description: string; amountCents: number }[],
+      outstandingPayments: [] as { date: string; description: string; amountCents: number }[],
+      outstandingReceiptsCents: 0,
+      outstandingPaymentsCents: 0,
+      adjustedBankBalanceCents: closing,
+      bookBalanceCents: closing,
+      differenceCents: 0,
+      unmatchedStatementItems: [] as { date: string; description: string; amountCents: number }[],
+      balanced: true,
+      frozen: true,
+    };
     const reconciliation = await db.bankReconciliation.create({
       data: {
         companyId, bankAccountId: chequing.id,
-        statementStartDate: utcDate(YEAR, 1, 1), statementEndDate: q1End,
-        openingBalanceCents: 8_420_000,
-        closingBalanceCents: 8_420_000 + movement,
-        clearedBalanceCents: 8_420_000 + movement,
-        differenceCents: 0, status: "COMPLETED",
-        completedAt: addDays(q1End, 4), completedById: userId, lockedAt: addDays(q1End, 4),
+        statementYear: YEAR, statementMonth: 3,
+        statementStartDate: marStart, statementEndDate: marEnd,
+        openingBalanceCents: opening,
+        closingBalanceCents: closing,
+        clearedBalanceCents: closing,
+        bookBalanceCents: closing,
+        adjustedBankBalanceCents: closing,
+        outstandingReceiptsCents: 0,
+        outstandingPaymentsCents: 0,
+        reportJson: JSON.stringify(frozenReport),
+        differenceCents: 0, status: "COMPLETED", version: 1,
+        completedAt: addDays(marEnd, 4), completedById: userId, lockedAt: addDays(marEnd, 4),
       },
     });
     await db.bankTransaction.updateMany({
-      where: { id: { in: q1Transactions.map((t) => t.id) } },
+      where: { id: { in: marTransactions.map((t) => t.id) } },
       data: { reconciliationId: reconciliation.id, status: "RECONCILED" },
     });
   }

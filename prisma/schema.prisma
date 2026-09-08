@@ -207,6 +207,7 @@ model Company {
   bankTransactions BankTransaction[]
   bankRules        BankRule[]
   reconciliations  BankReconciliation[]
+  bankReconciliationMatches BankReconciliationMatch[]
   taxEntries       TaxEntry[]
   attachments      Attachment[]
   auditLogs        AuditLog[]
@@ -1370,22 +1371,69 @@ model BankReconciliation {
   id                  String    @id @default(cuid())
   companyId           String
   bankAccountId       String
+  /// The calendar month the statement covers. This is the reconciliation unit:
+  /// one per bank account per month. Period dates are always the first and last
+  /// day of this month. Backfilled from statementEndDate for pre-existing rows.
+  statementYear       Int
+  statementMonth      Int
   statementStartDate  DateTime
   statementEndDate    DateTime
+  /// Actual statement figures. Opening carries forward from the previous
+  /// completed reconciliation's closing balance.
   openingBalanceCents Int
   closingBalanceCents Int
   clearedBalanceCents Int       @default(0)
   differenceCents     Int       @default(0)
+  /// Snapshots frozen at completion so a historical month-end report never
+  /// re-computes when later activity clears.
+  bookBalanceCents         Int?
+  outstandingReceiptsCents Int   @default(0)
+  outstandingPaymentsCents Int   @default(0)
+  adjustedBankBalanceCents Int?
+  /// The frozen month-end report, serialized. Source of truth once COMPLETED.
+  reportJson          String?
+  /// Explanation of any book timing items left outstanding at completion.
+  notes               String?
+  /// Optimistic-concurrency guard: completion checks and bumps this atomically.
+  version             Int       @default(0)
   status              String    @default("IN_PROGRESS") // IN_PROGRESS | COMPLETED
+  startedById         String?
   completedAt         DateTime?
   completedById       String?
   lockedAt            DateTime?
   createdAt           DateTime  @default(now())
 
-  company     Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  bankAccount BankAccount       @relation(fields: [bankAccountId], references: [id], onDelete: Cascade)
+  company      Company                  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  bankAccount  BankAccount              @relation(fields: [bankAccountId], references: [id], onDelete: Cascade)
   transactions BankTransaction[]
+  matches      BankReconciliationMatch[]
 
+  @@unique([companyId, bankAccountId, statementYear, statementMonth], map: "BankReconciliation_account_month_key")
+  @@index([companyId, bankAccountId])
+}
+
+/// One reconciled match: statement transaction(s) tied to bank-ledger journal
+/// line(s) with equal totals and the same net cash direction. Supports 1:1 and
+/// grouped matches. Ids are stored as arrays rather than a child table because
+/// the sets are small and always read whole.
+model BankReconciliationMatch {
+  id               String   @id @default(cuid())
+  companyId        String
+  reconciliationId String
+  bankAccountId    String
+  /// Net cash into the bank ledger: + deposit/receipt, − payment/withdrawal.
+  netCents         Int
+  /// Imported statement transaction ids on this match.
+  statementTxnIds  String[]
+  /// Bank-ledger journal line ids on this match.
+  bookLineIds      String[]
+  createdAt        DateTime @default(now())
+  createdById      String?
+
+  company        Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  reconciliation BankReconciliation @relation(fields: [reconciliationId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, reconciliationId])
   @@index([companyId, bankAccountId])
 }
 

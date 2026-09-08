@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import clsx from "clsx";
-import { Button, Field, inputClass } from "@/components/ui";
+import { Button, Field, LinkButton, inputClass } from "@/components/ui";
 import { Icon } from "@/components/shell/icons";
 import { useMoney } from "@/components/currency-context";
 import {
@@ -18,6 +18,7 @@ export function InvoiceActions({
   sentAt,
   bankAccounts,
   canRecordPayment,
+  canEdit,
 }: {
   invoiceId: string;
   status: string;
@@ -26,6 +27,7 @@ export function InvoiceActions({
   sentAt: string | null;
   bankAccounts: { id: string; name: string }[];
   canRecordPayment: boolean;
+  canEdit: boolean;
 }) {
   const money = useMoney();
   const router = useRouter();
@@ -45,6 +47,7 @@ export function InvoiceActions({
   return (
     <>
       <div className="no-print flex flex-wrap items-center gap-2">
+        {canEdit && <LinkButton href={`/sales/invoices/${invoiceId}/edit`}>Edit</LinkButton>}
         {!isPosted && status !== "VOID" && (
           <Button variant="primary" disabled={pending} onClick={() => run(() => postInvoiceAction(invoiceId))}>
             Post to ledger

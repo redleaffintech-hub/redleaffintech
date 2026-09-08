@@ -4,10 +4,10 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { toCents } from "@/lib/money";
-import { CAPABILITIES, can } from "@/lib/permissions";
+import { CAPABILITIES } from "@/lib/permissions";
 import { PROVINCES_WITH_SALES_TAX } from "@/server/setup/templates";
 import { requireCapability, requireCompany, recordAudit } from "@/server/auth/context";
-import { createInvoice, postInvoice, voidInvoice } from "@/server/documents/invoices";
+import { createInvoice, postInvoice, updateInvoice, voidInvoice } from "@/server/documents/invoices";
 import { peekNumber } from "@/server/documents/numbering";
 import { recordPayment } from "@/server/documents/payments";
 import { writeOffInvoice } from "@/server/documents/credit-notes";
@@ -99,6 +99,46 @@ export async function createInvoiceAction(payload: string) {
     revalidatePath("/sales/invoices");
     revalidatePath("/");
     return { redirectTo: `/sales/invoices/${invoice.id}` };
+  } catch (error) {
+    return { error: (error as Error).message };
+  }
+}
+
+export async function updateInvoiceAction(invoiceId: string, payload: string) {
+  const { company, user } = await requireCapability(CAPABILITIES.INVOICES);
+  const parsed = invoiceSchema.safeParse(JSON.parse(payload));
+  if (!parsed.success) return { error: parsed.error.issues[0].message };
+
+  try {
+    await updateInvoice({
+      invoiceId,
+      companyId: company.id,
+      customerId: parsed.data.partyId,
+      issueDate: parsed.data.issueDate,
+      dueDate: parsed.data.dueDate,
+      memo: parsed.data.memo || undefined,
+      poNumber: parsed.data.reference || undefined,
+      taxInclusive: parsed.data.taxInclusive,
+      billTo: parsed.data.billTo,
+      shipTo: parsed.data.shipTo,
+      userId: user.id,
+      post: parsed.data.post,
+      // The number is fixed once an invoice exists — updateInvoice ignores it.
+      lines: parsed.data.lines.map((line) => ({
+        accountId: line.accountId,
+        description: line.description,
+        quantityMilli: Math.round(line.quantity * 1000),
+        unitPriceCents: toCents(line.unitPrice),
+        discountPercentMicro: Math.round(line.discountPercent * 1_000_000),
+        taxCodeId: line.taxCodeId,
+        itemId: line.itemId,
+      })),
+    });
+
+    revalidatePath("/sales/invoices");
+    revalidatePath(`/sales/invoices/${invoiceId}`);
+    revalidatePath("/");
+    return { redirectTo: `/sales/invoices/${invoiceId}` };
   } catch (error) {
     return { error: (error as Error).message };
   }
@@ -196,7 +236,7 @@ export async function writeOffInvoiceAction(invoiceId: string, reason: string) {
 
 /** Options the invoice, quote and credit-note editors need, tenant-scoped. */
 export async function invoiceFormOptions() {
-  const { company, role } = await requireCompany();
+  const { company } = await requireCompany();
   const [customerRecords, accounts, taxCodes, items, profile] = await Promise.all([
     db.customer.findMany({
       where: { companyId: company.id, isActive: true },
@@ -233,9 +273,9 @@ export async function invoiceFormOptions() {
     db.company.findUniqueOrThrow({
       where: { id: company.id },
       select: {
-        name: true, legalName: true, addressLine1: true, city: true, province: true,
-        postalCode: true, gstNumber: true, qstNumber: true, pstNumber: true, invoiceFooter: true,
-        logoUrl: true,
+        name: true, legalName: true, addressLine1: true, addressLine2: true, city: true, province: true,
+        postalCode: true, businessNumber: true, gstNumber: true, qstNumber: true, pstNumber: true,
+        email: true, phone: true, website: true, invoiceFooter: true, logoUrl: true,
       },
     }),
   ]);
@@ -278,6 +318,5 @@ export async function invoiceFormOptions() {
     /** The plain list the new-customer dialog offers as a default code. */
     salesTaxCodes: taxCodes.map((code) => ({ id: code.id, code: code.code, name: code.name })),
     provincesWithSalesTax: PROVINCES_WITH_SALES_TAX,
-    canManageTaxCodes: can(role, CAPABILITIES.TAX_SETTINGS),
   };
 }

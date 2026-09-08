@@ -4,7 +4,7 @@ import { db } from "@/lib/db";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES, can, canApprove } from "@/lib/permissions";
 import { formatDate, formatDateTime, daysBetween, today } from "@/lib/dates";
-import { formatMoney, formatQty, formatRate } from "@/lib/money";
+import { formatMoney, formatQty } from "@/lib/money";
 import { Badge, Card, CardHeader, DefinitionList, Money, PageHeader, StatusBadge, Table, Td, Th, Tr } from "@/components/ui";
 import { BillActions } from "./bill-actions";
 
@@ -42,6 +42,8 @@ export default async function BillDetailPage({ params }: PageProps<"/purchases/b
   ]);
 
   const overdueDays = daysBetween(bill.dueDate, today());
+  const editable =
+    bill.status !== "VOID" && bill.allocations.length === 0 && bill.amountPaidCents === 0;
   const recoverableCents = taxEntries.reduce((s, t) => s + t.recoverableCents, 0);
   const nonRecoverableCents = taxEntries.reduce((s, t) => s + t.taxCents - t.recoverableCents, 0);
 
@@ -71,6 +73,7 @@ export default async function BillDetailPage({ params }: PageProps<"/purchases/b
             canPay={can(role, CAPABILITIES.PAYMENTS)}
             canApprove={canApprove(role, CAPABILITIES.BILLS)}
             canEdit={can(role, CAPABILITIES.BILLS)}
+            editable={editable}
           />
         }
       />

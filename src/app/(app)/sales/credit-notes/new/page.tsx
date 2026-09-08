@@ -47,7 +47,6 @@ export default async function NewCreditNotePage() {
           defaultTermsDays: options.company.defaultPaymentTermsDays,
         }}
         provincesWithSalesTax={options.provincesWithSalesTax}
-        canManageTaxCodes={options.canManageTaxCodes}
       />
     </>
   );

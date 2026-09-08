@@ -57,32 +57,33 @@ function blankAddress(address: DocumentAddressInput | null | undefined) {
   return !address.line1 && !address.line2 && !address.city && !address.province && !address.postalCode;
 }
 
-export async function createInvoice(input: InvoiceInput) {
-  return db.$transaction(async (tx) => {
-    const invoice = await createInvoiceInTx(tx, input);
-    if (input.post) return postInvoiceInTx(tx, invoice.id, input.companyId, input.userId);
-    return invoice;
-  });
+/** The fields a customer contributes when the document does not carry its own address. */
+interface AddressCustomer {
+  name: string;
+  country: string;
+  addressLine1: string | null;
+  addressLine2: string | null;
+  city: string | null;
+  province: string | null;
+  postalCode: string | null;
+  shipToLine1: string | null;
+  shipToLine2: string | null;
+  shipToCity: string | null;
+  shipToProvince: string | null;
+  shipToPostalCode: string | null;
+  shipToCountry: string | null;
 }
 
-export async function createInvoiceInTx(tx: Tx, input: InvoiceInput) {
-  const issueDate = toUtcDay(input.issueDate);
-  const customer = await tx.customer.findFirst({
-    where: { id: input.customerId, companyId: input.companyId },
-  });
-  if (!customer) throw new Error("Customer not found in this company.");
-
-  const dueDate = input.dueDate
-    ? toUtcDay(input.dueDate)
-    : addDays(issueDate, customer.paymentTermsDays);
-
-  const taxCodes = await loadTaxCodes(tx, input.companyId, input.lines.map((l) => l.taxCodeId));
-  const doc = computeDocument(input.lines, taxCodes, input.taxInclusive ?? false, issueDate);
-  const number = input.number ?? (await nextNumber(tx, input.companyId, "invoice"));
-
-  // Fall back to the customer record for anything the caller did not state, so
-  // an invoice raised by the seed, a recurring template or the API still carries
-  // a complete address rather than an empty one.
+/**
+ * Resolve the bill-to / ship-to columns stored ON the invoice.
+ *
+ * A document that states its own address keeps it verbatim; otherwise it falls
+ * back to the customer record so a seed, recurring template or API call still
+ * writes a complete address. A ship-to of `null` (or an all-blank one with no
+ * customer default) means "ship to the billing address". Shared by create and
+ * edit so the two can never diverge on the fallback rules.
+ */
+function documentAddressColumns(customer: AddressCustomer, input: Pick<InvoiceInput, "billTo" | "shipTo">) {
   const billTo =
     input.billTo && !blankAddress(input.billTo)
       ? input.billTo
@@ -118,6 +119,66 @@ export async function createInvoiceInTx(tx: Tx, input: InvoiceInput) {
               country: customer.shipToCountry ?? customer.country,
             };
 
+  return {
+    billToName: billTo.name ?? customer.name,
+    billToLine1: billTo.line1 ?? null,
+    billToLine2: billTo.line2 ?? null,
+    billToCity: billTo.city ?? null,
+    billToProvince: billTo.province ?? null,
+    billToPostalCode: billTo.postalCode ?? null,
+    billToCountry: billTo.country ?? customer.country,
+
+    shipToName: shipTo?.name ?? null,
+    shipToLine1: shipTo?.line1 ?? null,
+    shipToLine2: shipTo?.line2 ?? null,
+    shipToCity: shipTo?.city ?? null,
+    shipToProvince: shipTo?.province ?? null,
+    shipToPostalCode: shipTo?.postalCode ?? null,
+    shipToCountry: shipTo ? (shipTo.country ?? customer.country) : null,
+  };
+}
+
+/** The `InvoiceLine` rows for a computed document, in create order. */
+function lineCreateData(doc: ReturnType<typeof computeDocument>) {
+  return doc.lines.map((l) => ({
+    lineNo: l.lineNo,
+    itemId: l.itemId ?? null,
+    accountId: l.accountId,
+    description: l.description,
+    quantityMilli: l.quantityMilli,
+    unitPriceCents: l.unitPriceCents,
+    discountPercentMicro: l.discountPercentMicro,
+    netCents: l.netCents,
+    taxCodeId: l.taxCodeId ?? null,
+    taxCents: l.taxCents,
+    totalCents: l.totalCents,
+    projectId: l.projectId ?? null,
+  }));
+}
+
+export async function createInvoice(input: InvoiceInput) {
+  return db.$transaction(async (tx) => {
+    const invoice = await createInvoiceInTx(tx, input);
+    if (input.post) return postInvoiceInTx(tx, invoice.id, input.companyId, input.userId);
+    return invoice;
+  });
+}
+
+export async function createInvoiceInTx(tx: Tx, input: InvoiceInput) {
+  const issueDate = toUtcDay(input.issueDate);
+  const customer = await tx.customer.findFirst({
+    where: { id: input.customerId, companyId: input.companyId },
+  });
+  if (!customer) throw new Error("Customer not found in this company.");
+
+  const dueDate = input.dueDate
+    ? toUtcDay(input.dueDate)
+    : addDays(issueDate, customer.paymentTermsDays);
+
+  const taxCodes = await loadTaxCodes(tx, input.companyId, input.lines.map((l) => l.taxCodeId));
+  const doc = computeDocument(input.lines, taxCodes, input.taxInclusive ?? false, issueDate);
+  const number = input.number ?? (await nextNumber(tx, input.companyId, "invoice"));
+
   return tx.invoice.create({
     data: {
       companyId: input.companyId,
@@ -131,46 +192,144 @@ export async function createInvoiceInTx(tx: Tx, input: InvoiceInput) {
       poNumber: input.poNumber,
       projectId: input.projectId ?? null,
       taxInclusive: input.taxInclusive ?? false,
-
-      billToName: billTo.name ?? customer.name,
-      billToLine1: billTo.line1 ?? null,
-      billToLine2: billTo.line2 ?? null,
-      billToCity: billTo.city ?? null,
-      billToProvince: billTo.province ?? null,
-      billToPostalCode: billTo.postalCode ?? null,
-      billToCountry: billTo.country ?? customer.country,
-
-      shipToName: shipTo?.name ?? null,
-      shipToLine1: shipTo?.line1 ?? null,
-      shipToLine2: shipTo?.line2 ?? null,
-      shipToCity: shipTo?.city ?? null,
-      shipToProvince: shipTo?.province ?? null,
-      shipToPostalCode: shipTo?.postalCode ?? null,
-      shipToCountry: shipTo ? (shipTo.country ?? customer.country) : null,
+      ...documentAddressColumns(customer, input),
       subtotalCents: doc.subtotalCents,
       discountCents: doc.discountCents,
       taxCents: doc.taxCents,
       totalCents: doc.totalCents,
       balanceCents: doc.totalCents,
       createdById: input.userId ?? null,
-      lines: {
-        create: doc.lines.map((l) => ({
-          lineNo: l.lineNo,
-          itemId: l.itemId ?? null,
-          accountId: l.accountId,
-          description: l.description,
-          quantityMilli: l.quantityMilli,
-          unitPriceCents: l.unitPriceCents,
-          discountPercentMicro: l.discountPercentMicro,
-          netCents: l.netCents,
-          taxCodeId: l.taxCodeId ?? null,
-          taxCents: l.taxCents,
-          totalCents: l.totalCents,
-          projectId: l.projectId ?? null,
-        })),
-      },
+      lines: { create: lineCreateData(doc) },
     },
     include: { lines: true, customer: true },
+  });
+}
+
+export interface InvoiceUpdateInput extends InvoiceInput {
+  invoiceId: string;
+}
+
+/**
+ * Edit an existing invoice.
+ *
+ * A draft is simply rewritten. A posted invoice with no payments or credits
+ * applied is unwound exactly as {@link voidInvoice} would — its journal, tax
+ * rows and stock movements reversed — then rebuilt from the new inputs and
+ * re-posted, keeping the same invoice record and number. Editing is refused for
+ * a void invoice or one that has money against it (unapply first, or raise a
+ * credit note). The invoice number itself is never changed here.
+ */
+export async function updateInvoice(input: InvoiceUpdateInput) {
+  return db.$transaction(async (tx) => {
+    const existing = await tx.invoice.findFirst({
+      where: { id: input.invoiceId, companyId: input.companyId },
+      include: { allocations: true },
+    });
+    if (!existing) throw new Error("Invoice not found in this company.");
+    if (existing.status === "VOID") {
+      throw new Error(`Invoice ${existing.number} is void. Create a new invoice instead of editing it.`);
+    }
+    if (existing.allocations.length > 0 || existing.amountPaidCents !== 0) {
+      throw new Error(
+        `Invoice ${existing.number} has payments or credits applied. Unapply them before editing it.`,
+      );
+    }
+
+    const customer = await tx.customer.findFirst({
+      where: { id: input.customerId, companyId: input.companyId },
+    });
+    if (!customer) throw new Error("Customer not found in this company.");
+
+    const wasPosted = Boolean(existing.journalEntryId);
+
+    if (wasPosted) {
+      await reverseJournal(tx, existing.journalEntryId!, {
+        companyId: input.companyId,
+        memo: `Edit invoice ${existing.number}`,
+        userId: input.userId,
+      });
+      const taxRows = await tx.taxEntry.findMany({
+        where: { companyId: input.companyId, sourceType: "INVOICE", sourceId: existing.id },
+      });
+      if (taxRows.length) {
+        await tx.taxEntry.createMany({
+          data: taxRows.map((t) => ({
+            companyId: input.companyId,
+            date: t.date,
+            direction: t.direction,
+            sourceType: "INVOICE",
+            sourceId: existing.id,
+            sourceNumber: `${existing.number} (edit)`,
+            taxCodeId: t.taxCodeId,
+            taxComponentId: t.taxComponentId,
+            jurisdiction: t.jurisdiction,
+            kind: t.kind,
+            rateMicro: t.rateMicro,
+            taxableCents: -t.taxableCents,
+            taxCents: -t.taxCents,
+            recoverableCents: -t.recoverableCents,
+            taxPeriodId: t.taxPeriodId,
+            partyName: t.partyName,
+          })),
+        });
+      }
+      const stockMovements = await tx.inventoryMovement.findMany({
+        where: { companyId: input.companyId, sourceType: "INVOICE", sourceId: existing.id, type: "SALE" },
+      });
+      for (const movement of stockMovements) await reverseStockMovement(tx, movement.id, input.userId);
+    }
+
+    const issueDate = toUtcDay(input.issueDate);
+    const dueDate = input.dueDate ? toUtcDay(input.dueDate) : addDays(issueDate, customer.paymentTermsDays);
+    const taxCodes = await loadTaxCodes(tx, input.companyId, input.lines.map((l) => l.taxCodeId));
+    const doc = computeDocument(input.lines, taxCodes, input.taxInclusive ?? false, issueDate);
+
+    await tx.invoiceLine.deleteMany({ where: { invoiceId: existing.id } });
+
+    await tx.invoice.update({
+      where: { id: existing.id },
+      data: {
+        customerId: input.customerId,
+        issueDate,
+        dueDate,
+        memo: input.memo ?? null,
+        terms: input.terms ?? null,
+        poNumber: input.poNumber ?? null,
+        projectId: input.projectId ?? null,
+        taxInclusive: input.taxInclusive ?? false,
+        ...documentAddressColumns(customer, input),
+        subtotalCents: doc.subtotalCents,
+        discountCents: doc.discountCents,
+        taxCents: doc.taxCents,
+        totalCents: doc.totalCents,
+        balanceCents: doc.totalCents,
+        amountPaidCents: 0,
+        writtenOffCents: 0,
+        status: "DRAFT",
+        journalEntryId: null,
+        postedAt: null,
+        lines: { create: lineCreateData(doc) },
+      },
+    });
+
+    await tx.auditLog.create({
+      data: {
+        companyId: input.companyId,
+        userId: input.userId ?? null,
+        action: "UPDATE",
+        entityType: "Invoice",
+        entityId: existing.id,
+        summary: `Edited invoice ${existing.number}`,
+      },
+    });
+
+    if (wasPosted || input.post) {
+      return postInvoiceInTx(tx, existing.id, input.companyId, input.userId);
+    }
+    return tx.invoice.findUniqueOrThrow({
+      where: { id: existing.id },
+      include: { lines: true, customer: true },
+    });
   });
 }
 

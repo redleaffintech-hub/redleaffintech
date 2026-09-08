@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import clsx from "clsx";
-import { Button, Field, inputClass } from "@/components/ui";
+import { Button, Field, LinkButton, inputClass } from "@/components/ui";
 import { Dialog } from "@/app/(app)/sales/invoices/[id]/invoice-actions";
 import { useMoney } from "@/components/currency-context";
 import { approveBillAction, payBillAction, postBillAction, voidBillAction } from "../actions";
@@ -18,6 +18,7 @@ export function BillActions({
   canPay,
   canApprove,
   canEdit,
+  editable,
 }: {
   billId: string;
   status: string;
@@ -28,6 +29,8 @@ export function BillActions({
   canPay: boolean;
   canApprove: boolean;
   canEdit: boolean;
+  /** This specific bill can still be edited (not void, nothing owed against it). */
+  editable: boolean;
 }) {
   const money = useMoney();
   const router = useRouter();
@@ -47,6 +50,7 @@ export function BillActions({
   return (
     <>
       <div className="flex flex-wrap items-center gap-2">
+        {canEdit && editable && <LinkButton href={`/purchases/bills/${billId}/edit`}>Edit</LinkButton>}
         {approvalStatus === "PENDING" && canApprove && (
           <Button variant="primary" disabled={pending} onClick={() => run(() => approveBillAction(billId))}>
             Approve & post

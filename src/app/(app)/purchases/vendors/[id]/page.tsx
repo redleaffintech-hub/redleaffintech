@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
 import { requireCapability } from "@/server/auth/context";
@@ -53,6 +54,7 @@ export default async function VendorDetailPage({ params, searchParams }: PagePro
           <>
             <PrintButton label="Print statement" />
             <ExportCsvButton report="vendor-statement" params={{ party: vendor.id }} />
+            <LinkButton href={`/purchases/vendors/${vendor.id}/edit`}>Edit vendor</LinkButton>
             <LinkButton href="/purchases/bills/new" variant="primary">
               <Icon name="plus" className="h-3.5 w-3.5" />
               New bill
@@ -112,7 +114,17 @@ export default async function VendorDetailPage({ params, searchParams }: PagePro
 
         <div className="no-print space-y-4">
           <Card>
-            <CardHeader title="Details" />
+            <CardHeader
+              title="Details"
+              action={
+                <Link
+                  href={`/purchases/vendors/${vendor.id}/edit`}
+                  className="text-[0.75rem] font-medium text-brand-700 hover:underline"
+                >
+                  Edit
+                </Link>
+              }
+            />
             <div className="mt-3">
               <DefinitionList
                 items={[

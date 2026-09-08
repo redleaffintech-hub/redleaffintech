@@ -1,155 +1,113 @@
 import { db } from "@/lib/db";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
-import { recalculate } from "@/server/banking/reconcile";
-import { accountBalance } from "@/server/reports/financials";
-import { formatDate, isoDate, today, endOfMonth, startOfMonth, addMonths } from "@/lib/dates";
-import { formatMoney } from "@/lib/money";
-import { Badge, Card, CardHeader, EmptyState, Money, PageHeader, Table, Td, Th, Tr } from "@/components/ui";
-import { ReconcileWorkspace, StartReconciliationForm } from "./reconcile-workspace";
+import { buildWorkspace, reconciliationHistory } from "@/server/banking/reconcile";
+import { today, formatMonthLong } from "@/lib/dates";
+import { EmptyState, PageHeader } from "@/components/ui";
+import { ReconcileClient } from "./reconcile-workspace";
 
-export const metadata = { title: "Reconcile" };
+export const metadata = { title: "Bank Reconciliation" };
+
+function toInt(value: unknown, fallback: number) {
+  const n = typeof value === "string" ? Number.parseInt(value, 10) : NaN;
+  return Number.isFinite(n) ? n : fallback;
+}
 
 export default async function ReconcilePage({ searchParams }: PageProps<"/banking/reconcile">) {
   const { company } = await requireCapability(CAPABILITIES.BANKING);
+  const currency = company.baseCurrency;
   const params = await searchParams;
 
   const bankAccounts = await db.bankAccount.findMany({
     where: { companyId: company.id, isActive: true },
     orderBy: { name: "asc" },
+    select: { id: true, name: true, openingBalanceCents: true },
   });
 
-  const inProgress = await db.bankReconciliation.findFirst({
-    where: { companyId: company.id, status: "IN_PROGRESS" },
-    include: { bankAccount: true },
-  });
-
-  if (inProgress) {
-    const state = await recalculate(company.id, inProgress.id);
-    const transactions = await db.bankTransaction.findMany({
-      where: {
-        companyId: company.id,
-        bankAccountId: inProgress.bankAccountId,
-        date: { lte: inProgress.statementEndDate },
-        status: { notIn: ["EXCLUDED"] },
-        OR: [{ reconciliationId: null }, { reconciliationId: inProgress.id }],
-      },
-      orderBy: { date: "asc" },
-    });
-
+  if (bankAccounts.length === 0) {
     return (
       <>
         <PageHeader
-          title={`Reconcile ${inProgress.bankAccount.name}`}
-          breadcrumb={[{ label: "Banking", href: "/banking" }, { label: "Reconcile" }]}
-          description={`Statement ${formatDate(inProgress.statementStartDate)} to ${formatDate(inProgress.statementEndDate)}. Tick every line that appears on the statement until the difference reaches zero.`}
+          title="Bank Reconciliation"
+          breadcrumb={[{ label: "Bank Reconciliation", href: "/banking" }, { label: "Reconcile" }]}
+          description="Match bank statement activity to your bank ledger, one month at a time."
         />
-        <ReconcileWorkspace
-          reconciliationId={inProgress.id}
-          state={{
-            openingBalanceCents: state.openingBalanceCents,
-            closingBalanceCents: state.closingBalanceCents,
-            clearedDepositsCents: state.clearedDepositsCents,
-            clearedWithdrawalsCents: state.clearedWithdrawalsCents,
-            clearedCountDeposits: state.clearedCountDeposits,
-            clearedCountWithdrawals: state.clearedCountWithdrawals,
-            clearedBalanceCents: state.clearedBalanceCents,
-            differenceCents: state.differenceCents,
-          }}
-          transactions={transactions.map((t) => ({
-            id: t.id,
-            date: formatDate(t.date),
-            description: t.description,
-            amountCents: t.amountCents,
-            cleared: t.reconciliationId === inProgress.id,
-            posted: Boolean(t.journalEntryId),
-          }))}
+        <EmptyState
+          title="No bank accounts"
+          description="Add a bank account under Bank Reconciliation → Accounts before reconciling."
         />
       </>
     );
   }
 
-  const history = await db.bankReconciliation.findMany({
-    where: { companyId: company.id, status: "COMPLETED" },
-    include: { bankAccount: true },
-    orderBy: { statementEndDate: "desc" },
-    take: 10,
+  const accountId =
+    typeof params.account === "string" && bankAccounts.some((b) => b.id === params.account)
+      ? params.account
+      : bankAccounts[0].id;
+
+  // Default to the month just gone — the one a bank statement most likely covers.
+  const now = today();
+  const priorMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
+  const year = toInt(params.year, priorMonth.getUTCFullYear());
+  const month = toInt(params.month, priorMonth.getUTCMonth() + 1);
+  const safeMonth = month >= 1 && month <= 12 ? month : priorMonth.getUTCMonth() + 1;
+
+  const existing = await db.bankReconciliation.findFirst({
+    where: {
+      companyId: company.id,
+      bankAccountId: accountId,
+      statementYear: year,
+      statementMonth: safeMonth,
+    },
+    select: { id: true },
   });
 
-  const suggestedAccountId = typeof params.account === "string" ? params.account : bankAccounts[0]?.id;
-  const suggested = bankAccounts.find((b) => b.id === suggestedAccountId) ?? bankAccounts[0];
-  const lastFor = suggested
-    ? await db.bankReconciliation.findFirst({
-        where: { companyId: company.id, bankAccountId: suggested.id, status: "COMPLETED" },
-        orderBy: { statementEndDate: "desc" },
-      })
-    : null;
+  let carryOpeningCents = bankAccounts.find((b) => b.id === accountId)?.openingBalanceCents ?? 0;
+  if (!existing) {
+    const prior = await db.bankReconciliation.findFirst({
+      where: { companyId: company.id, bankAccountId: accountId, status: "COMPLETED" },
+      orderBy: { statementEndDate: "desc" },
+      select: { closingBalanceCents: true },
+    });
+    if (prior) carryOpeningCents = prior.closingBalanceCents;
+  }
 
-  const openingCents = lastFor
-    ? lastFor.closingBalanceCents
-    : suggested
-      ? suggested.openingBalanceCents
-      : 0;
-
-  const lastMonth = startOfMonth(addMonths(today(), -1));
-  const bookBalanceCents = suggested ? await accountBalance(company.id, suggested.accountId, endOfMonth(lastMonth)) : 0;
+  const [workspace, history] = await Promise.all([
+    existing ? buildWorkspace(company.id, existing.id) : Promise.resolve(null),
+    reconciliationHistory(company.id),
+  ]);
 
   return (
     <>
       <PageHeader
-        title="Bank reconciliation"
-        breadcrumb={[{ label: "Banking", href: "/banking" }, { label: "Reconcile" }]}
-        description="A reconciliation can only be completed when the difference between the statement and the cleared book balance is exactly zero."
+        title="Bank Reconciliation"
+        breadcrumb={[{ label: "Bank Reconciliation", href: "/banking" }, { label: "Reconcile" }]}
+        description="Match bank statement activity to your bank ledger, one month at a time."
       />
 
-      <div className="grid gap-4 lg:grid-cols-[22rem_1fr] lg:items-start">
-        {bankAccounts.length === 0 ? (
-          <EmptyState title="No bank accounts" description="Add a bank account before reconciling." />
-        ) : (
-          <StartReconciliationForm
-            bankAccounts={bankAccounts.map((b) => ({ id: b.id, name: b.name }))}
-            defaultBankAccountId={suggested?.id ?? ""}
-            defaultStart={isoDate(lastFor ? lastFor.statementEndDate : lastMonth)}
-            defaultEnd={isoDate(endOfMonth(lastMonth))}
-            defaultOpening={(openingCents / 100).toFixed(2)}
-            suggestedClosing={(bookBalanceCents / 100).toFixed(2)}
-          />
-        )}
-
-        <Card className="p-5">
-          <CardHeader title="Completed reconciliations" subtitle="Locked once finished" />
-          {history.length === 0 ? (
-            <EmptyState title="Nothing reconciled yet" description="Complete a reconciliation to build the history." />
-          ) : (
-            <Table className="mt-3">
-              <thead>
-                <tr>
-                  <Th>Account</Th>
-                  <Th width="14rem">Statement period</Th>
-                  <Th width="9rem" align="right">Closing balance</Th>
-                  <Th width="8rem" align="right">Difference</Th>
-                  <Th width="7rem">Status</Th>
-                </tr>
-              </thead>
-              <tbody>
-                {history.map((reconciliation) => (
-                  <Tr key={reconciliation.id}>
-                    <Td className="font-medium text-ink-900">{reconciliation.bankAccount.name}</Td>
-                    <Td className="text-muted-ink">
-                      {formatDate(reconciliation.statementStartDate)} – {formatDate(reconciliation.statementEndDate)}
-                    </Td>
-                    <Td align="right"><Money cents={reconciliation.closingBalanceCents} /></Td>
-                    <Td align="right"><Money cents={reconciliation.differenceCents} /></Td>
-                    <Td>
-                      <Badge tone="positive">reconciled</Badge>
-                    </Td>
-                  </Tr>
-                ))}
-              </tbody>
-            </Table>
-          )}
-        </Card>
-      </div>
+      <ReconcileClient
+        currency={currency}
+        canWrite={!company.isReadOnly}
+        bankAccounts={bankAccounts.map((b) => ({ id: b.id, name: b.name }))}
+        accountId={accountId}
+        year={year}
+        month={safeMonth}
+        monthLabel={formatMonthLong(new Date(Date.UTC(year, safeMonth - 1, 1)))}
+        carryOpeningCents={carryOpeningCents}
+        workspace={workspace}
+        history={history.map((h) => ({
+          id: h.id,
+          bankAccountId: h.bankAccountId,
+          bankAccountName: h.bankAccount.name,
+          year: h.statementYear,
+          month: h.statementMonth,
+          monthLabel: formatMonthLong(h.statementStartDate),
+          status: h.status,
+          closingBalanceCents: h.closingBalanceCents,
+          differenceCents: h.differenceCents,
+          completedAtIso: h.completedAt ? h.completedAt.toISOString() : null,
+        }))}
+      />
     </>
   );
 }

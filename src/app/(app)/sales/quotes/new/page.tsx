@@ -46,7 +46,6 @@ export default async function NewQuotePage() {
           defaultTermsDays: options.company.defaultPaymentTermsDays,
         }}
         provincesWithSalesTax={options.provincesWithSalesTax}
-        canManageTaxCodes={options.canManageTaxCodes}
       />
     </>
   );

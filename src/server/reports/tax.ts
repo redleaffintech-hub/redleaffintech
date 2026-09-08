@@ -184,20 +184,23 @@ export async function taxPeriodReturn(companyId: string, taxPeriodId: string) {
 
   const sales = await db.taxEntry.aggregate({
     where: { companyId, date: { gte: range.from, lte: range.to }, direction: "SALE" },
-    _sum: { taxableCents: true, taxCents: true },
+    _sum: { taxCents: true },
   });
 
-  // Zero-rated and exempt revenue still has to be reported as supplies.
-  const untaxedCodes = await db.taxCode.findMany({
-    where: { companyId, OR: [{ isZeroRated: true }, { isExempt: true }] },
-    select: { id: true },
-  });
-  const untaxedRevenue = await db.journalLine.aggregate({
+  // Line 101 is total sales and other revenue for the period: every credit to a
+  // REVENUE account, net of debits (sales returns, year-end close). Taxable,
+  // zero-rated and exempt supplies are all revenue, so all are captured with no
+  // tax-code bookkeeping. Deriving it straight from the revenue accounts is the
+  // only figure that cannot double-count a supply — summing `tax_entries`
+  // instead counts a sale once per tax component (a GST + PST code books two
+  // rows), and the previous hybrid also assumed every posted revenue line
+  // carried its tax code, which postings made before 2026-08-25 do not, so an
+  // untaxed-revenue fallback query matched them and added each taxed sale twice.
+  const revenue = await db.journalLine.aggregate({
     where: {
       companyId,
       date: { gte: range.from, lte: range.to },
       accountType: "REVENUE",
-      OR: [{ taxCodeId: null }, { taxCodeId: { in: untaxedCodes.map((c) => c.id) } }],
     },
     _sum: { creditCents: true, debitCents: true },
   });
@@ -206,8 +209,7 @@ export async function taxPeriodReturn(companyId: string, taxPeriodId: string) {
     period,
     summary,
     line101SuppliesCents:
-      (sales._sum.taxableCents ?? 0) +
-      ((untaxedRevenue._sum?.creditCents ?? 0) - (untaxedRevenue._sum?.debitCents ?? 0)),
+      (revenue._sum.creditCents ?? 0) - (revenue._sum.debitCents ?? 0),
     line105CollectedCents: sales._sum.taxCents ?? 0,
     line108ItcCents: summary.totals.recoverableCents,
     line109NetCents: summary.totals.netCents,

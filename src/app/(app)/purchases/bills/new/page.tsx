@@ -8,7 +8,7 @@ export const metadata = { title: "New bill" };
 
 export default async function NewBillPage() {
   await requireCapability(CAPABILITIES.BILLS);
-  const { vendors, accounts, taxCodes, items, purchaseTaxCodes } = await billFormOptions();
+  const { vendors, accounts, taxCodes, items, purchaseTaxCodes, company, profile } = await billFormOptions();
 
   return (
     <>
@@ -28,6 +28,8 @@ export default async function NewBillPage() {
         defaultTermsDays={30}
         onSubmitAction={createBillAction}
         cancelHref="/purchases/bills"
+        companyProfile={profile}
+        companyProvince={company.province}
         vendorCreation={{ taxCodes: purchaseTaxCodes, defaultTermsDays: 30 }}
       />
     </>

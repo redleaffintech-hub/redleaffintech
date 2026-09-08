@@ -43,7 +43,6 @@ export default async function NewInvoicePage() {
           defaultTermsDays: options.company.defaultPaymentTermsDays,
         }}
         provincesWithSalesTax={options.provincesWithSalesTax}
-        canManageTaxCodes={options.canManageTaxCodes}
       />
     </>
   );

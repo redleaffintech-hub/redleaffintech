@@ -11,7 +11,13 @@ import {
   suggestMatches, suggestRule, unmatchTransaction,
 } from "@/server/banking/matching";
 import { importTransactions, parseCsv, parseOfx } from "@/server/banking/import";
-import { completeReconciliation, recalculate, setCleared, startReconciliation } from "@/server/banking/reconcile";
+import {
+  completeReconciliation,
+  getOrStartReconciliation,
+  matchSelected,
+  removeMatch,
+  saveStatementBalances,
+} from "@/server/banking/reconcile";
 
 export async function categorizeAction(transactionId: string, accountId: string, taxCodeId: string | null, memo?: string) {
   const { company, user } = await requireCapability(CAPABILITIES.BANKING);
@@ -158,16 +164,23 @@ export async function deleteRuleAction(ruleId: string) {
 
 // ── Reconciliation ──────────────────────────────────────────────────────────
 
-export async function startReconciliationAction(formData: FormData) {
-  const { company } = await requireCapability(CAPABILITIES.BANKING);
+/** Every reconciliation mutation passes through this: tenant + permission are
+ *  already handled by requireCapability; this adds the read-only file check. */
+function assertWritable(company: { isReadOnly: boolean }) {
+  if (company.isReadOnly) {
+    throw new Error("This company file is read-only. Reconciliations can be viewed but not changed.");
+  }
+}
+
+export async function openReconciliationAction(bankAccountId: string, year: number, month: number) {
+  const { company, user } = await requireCapability(CAPABILITIES.BANKING);
   try {
-    const reconciliation = await startReconciliation(company.id, {
-      bankAccountId: String(formData.get("bankAccountId")),
-      statementStartDate: String(formData.get("statementStartDate")),
-      statementEndDate: String(formData.get("statementEndDate")),
-      openingBalanceCents: toCents(String(formData.get("openingBalance") ?? "0")),
-      closingBalanceCents: toCents(String(formData.get("closingBalance") ?? "0")),
-    });
+    assertWritable(company);
+    const reconciliation = await getOrStartReconciliation(
+      company.id,
+      { bankAccountId, year, month },
+      user.id,
+    );
     revalidatePath("/banking/reconcile");
     return { ok: true, id: reconciliation.id };
   } catch (error) {
@@ -175,21 +188,60 @@ export async function startReconciliationAction(formData: FormData) {
   }
 }
 
-export async function toggleClearedAction(reconciliationId: string, transactionId: string, cleared: boolean) {
+export async function saveStatementBalancesAction(
+  reconciliationId: string,
+  openingBalance: string,
+  closingBalance: string,
+  notes: string,
+) {
   const { company } = await requireCapability(CAPABILITIES.BANKING);
   try {
-    const state = await setCleared(company.id, reconciliationId, [transactionId], cleared);
+    assertWritable(company);
+    await saveStatementBalances(company.id, reconciliationId, {
+      openingBalanceCents: toCents(openingBalance || "0"),
+      closingBalanceCents: toCents(closingBalance || "0"),
+      notes: notes.trim() || null,
+    });
     revalidatePath("/banking/reconcile");
-    return { ok: true, differenceCents: state.differenceCents };
+    return { ok: true };
   } catch (error) {
     return { error: (error as Error).message };
   }
 }
 
-export async function completeReconciliationAction(reconciliationId: string) {
+export async function matchSelectedAction(
+  reconciliationId: string,
+  statementTxnIds: string[],
+  bookLineIds: string[],
+) {
   const { company, user } = await requireCapability(CAPABILITIES.BANKING);
   try {
-    await completeReconciliation(company.id, reconciliationId, user.id);
+    assertWritable(company);
+    await matchSelected(company.id, reconciliationId, statementTxnIds, bookLineIds, user.id);
+    revalidatePath("/banking/reconcile");
+    return { ok: true };
+  } catch (error) {
+    return { error: (error as Error).message };
+  }
+}
+
+export async function removeMatchAction(reconciliationId: string, matchId: string) {
+  const { company } = await requireCapability(CAPABILITIES.BANKING);
+  try {
+    assertWritable(company);
+    await removeMatch(company.id, reconciliationId, matchId);
+    revalidatePath("/banking/reconcile");
+    return { ok: true };
+  } catch (error) {
+    return { error: (error as Error).message };
+  }
+}
+
+export async function completeReconciliationAction(reconciliationId: string, version: number) {
+  const { company, user } = await requireCapability(CAPABILITIES.BANKING);
+  try {
+    assertWritable(company);
+    await completeReconciliation(company.id, reconciliationId, version, user.id);
     revalidatePath("/banking/reconcile");
     revalidatePath("/");
     return { ok: true };

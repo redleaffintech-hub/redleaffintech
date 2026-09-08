@@ -134,6 +134,90 @@ export async function createCustomerAction(payload: string) {
   return { ok: true as const, customer: toPartyOption(customer) };
 }
 
+/**
+ * Edit an existing customer.
+ *
+ * Same validation and shape as `createCustomerAction`. Addresses already
+ * snapshotted onto issued invoices are not touched — those are a record of what
+ * was sent. Only new documents pick up the change.
+ */
+export async function updateCustomerAction(customerId: string, payload: string) {
+  const { company, user } = await requireCapability(CAPABILITIES.INVOICES);
+
+  const existing = await db.customer.findFirst({
+    where: { id: customerId, companyId: company.id },
+    select: { id: true },
+  });
+  if (!existing) return { error: "That customer does not exist." };
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(payload);
+  } catch {
+    return { error: "Could not read the customer details." };
+  }
+
+  const parsed = customerSchema.safeParse(raw);
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Check the customer details." };
+  const input = parsed.data;
+
+  const clash = await db.customer.findFirst({
+    where: {
+      companyId: company.id,
+      name: { equals: input.name, mode: "insensitive" },
+      NOT: { id: customerId },
+    },
+    select: { name: true },
+  });
+  if (clash) return { error: `${clash.name} already exists as a customer.` };
+
+  if (input.taxCodeId) {
+    const code = await db.taxCode.findFirst({
+      where: { id: input.taxCodeId, companyId: company.id },
+      select: { id: true },
+    });
+    if (!code) return { error: "That tax code does not exist in this company." };
+  }
+
+  const customer = await db.customer.update({
+    where: { id: customerId },
+    data: {
+      name: input.name,
+      email: input.email || null,
+      phone: input.phone ?? null,
+      taxCodeId: input.taxCodeId ?? null,
+      paymentTermsDays: input.paymentTermsDays,
+      addressLine1: input.addressLine1 ?? null,
+      addressLine2: input.addressLine2 ?? null,
+      city: input.city ?? null,
+      province: input.province ?? null,
+      postalCode: input.postalCode ?? null,
+      shipToLine1: input.shipToLine1 ?? null,
+      shipToLine2: input.shipToLine2 ?? null,
+      shipToCity: input.shipToCity ?? null,
+      shipToProvince: input.shipToProvince ?? null,
+      shipToPostalCode: input.shipToPostalCode ?? null,
+      notes: input.notes ?? null,
+    },
+  });
+
+  await recordAudit({
+    companyId: company.id,
+    userId: user.id,
+    action: "UPDATE",
+    entityType: "Customer",
+    entityId: customer.id,
+    summary: `Updated customer ${customer.name}`,
+  });
+
+  revalidatePath("/sales/customers");
+  revalidatePath(`/sales/customers/${customer.id}`);
+  revalidatePath(`/sales/customers/${customer.id}/edit`);
+  revalidatePath("/sales/invoices/new");
+
+  return { ok: true as const, customer: toPartyOption(customer) };
+}
+
 type CustomerRecord = Awaited<ReturnType<typeof db.customer.create>>;
 
 /**

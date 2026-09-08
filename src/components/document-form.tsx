@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import clsx from "clsx";
 import { computeDocument, type RawLine } from "@/server/documents/lines";
@@ -28,7 +28,6 @@ import {
 import { DocumentPreview, type PreviewCompany } from "@/components/document-preview";
 import { CustomerForm, type CustomerFormTaxCode } from "@/components/customer-form";
 import { VendorForm, type VendorFormTaxCode } from "@/components/vendor-form";
-import { addProvincialTaxCodesAction } from "@/app/(app)/tax/actions";
 
 /**
  * The line-based document editor: invoices, sales quotes, customer credit notes
@@ -40,6 +39,31 @@ import { addProvincialTaxCodesAction } from "@/app/(app)/tax/actions";
  */
 
 export type DocumentKind = "INVOICE" | "QUOTE" | "CREDIT_NOTE" | "BILL";
+
+/** Seeds the editor from an existing document (invoice edit). */
+export interface DocumentFormInitial {
+  partyId: string;
+  number: string;
+  issueDate: string;
+  secondDate: string;
+  taxInclusive: boolean;
+  memo: string;
+  reference: string;
+  billTo: DocumentAddress;
+  /** Null means "ship to the billing address". */
+  shipTo: DocumentAddress | null;
+  lines: Array<{
+    description: string;
+    quantity: string;
+    unitPrice: string;
+    discount: string;
+    accountId: string;
+    taxCodeId: string;
+    itemId: string | null;
+  }>;
+  /** The document is already posted: saving re-posts it, with no draft option. */
+  posted: boolean;
+}
 
 interface KindConfig {
   /** What the document is called, in running text and on the preview. */
@@ -219,7 +243,7 @@ export function DocumentForm({
   customerCreation,
   vendorCreation,
   provincesWithSalesTax = [],
-  canManageTaxCodes = false,
+  initial,
 }: {
   kind: DocumentKind;
   parties: PartyOption[];
@@ -242,7 +266,8 @@ export function DocumentForm({
   vendorCreation?: { taxCodes: VendorFormTaxCode[]; defaultTermsDays: number };
   /** Provinces a published provincial rate exists for, for the missing-code notice. */
   provincesWithSalesTax?: readonly string[];
-  canManageTaxCodes?: boolean;
+  /** When set, the editor opens on this document and saving updates it in place. */
+  initial?: DocumentFormInitial;
 }) {
   const money = useMoney();
   const router = useRouter();
@@ -250,7 +275,9 @@ export function DocumentForm({
 
   // Tax codes live in state because a cross-province sale can add one without
   // leaving the form.
-  const [taxCodes, setTaxCodes] = useState<TaxCodeSpec[]>(taxCodesProp);
+  // Tax codes are configured only by an administrator in Tax Centre → Tax codes;
+  // this form selects from them and never creates one.
+  const [taxCodes] = useState<TaxCodeSpec[]>(taxCodesProp);
   const [partyList, setPartyList] = useState<PartyOption[]>(parties);
 
   /**
@@ -266,74 +293,113 @@ export function DocumentForm({
   const accountChoices = sideAccounts.length > 0 ? sideAccounts : accounts;
   const defaultAccount = accountChoices[0]?.id ?? "";
 
-  const [partyId, setPartyId] = useState(partyList[0]?.id ?? "");
-  const [number, setNumber] = useState(suggestedNumber ?? "");
-  const [issueDate, setIssueDate] = useState(new Date().toISOString().slice(0, 10));
+  const [partyId, setPartyId] = useState(initial?.partyId ?? partyList[0]?.id ?? "");
+  const [number, setNumber] = useState(initial?.number ?? suggestedNumber ?? "");
+  const [issueDate, setIssueDate] = useState(initial?.issueDate ?? new Date().toISOString().slice(0, 10));
   const [secondDate, setSecondDate] = useState(
-    new Date(Date.now() + defaultTermsDays * 86_400_000).toISOString().slice(0, 10),
+    initial?.secondDate ?? new Date(Date.now() + defaultTermsDays * 86_400_000).toISOString().slice(0, 10),
   );
-  const [taxInclusive, setTaxInclusive] = useState(defaultTaxInclusive);
-  const [memo, setMemo] = useState("");
-  const [reference, setReference] = useState("");
-  const [postNow, setPostNow] = useState(true);
+  const [taxInclusive, setTaxInclusive] = useState(initial?.taxInclusive ?? defaultTaxInclusive);
+  const [memo, setMemo] = useState(initial?.memo ?? "");
+  const [reference, setReference] = useState(initial?.reference ?? "");
+  // A new document defaults to posting; editing a draft defaults to keeping it a
+  // draft; editing a posted invoice always re-posts (the checkbox is hidden).
+  const [postNow, setPostNow] = useState(initial ? initial.posted : true);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   const firstParty = partyList[0];
-  /** Where the first customer in the list takes delivery, before anything is edited. */
-  const initialPlaceOfSupply = !config.usesPlaceOfSupply
-    ? null
-    : config.showAddresses
-      ? (firstParty?.shipTo?.province ?? firstParty?.billTo?.province) || companyProvince || null
-      : companyProvince || null;
+  /**
+   * The province that rates the first line before anything is edited. An invoice
+   * or quote reads it off the customer's address; a credit note off the customer
+   * record (no address editor, but still rated like the invoice it credits); a
+   * bill off the company's own province, which is what a local supplier charges.
+   */
+  const initialPlaceOfSupply =
+    (firstParty?.shipTo?.province ?? firstParty?.billTo?.province) || companyProvince || null;
 
   const [billTo, setBillTo] = useState<DocumentAddress>(
-    firstParty ? addressFromParty(firstParty.name, firstParty.billTo ?? null) : EMPTY_ADDRESS,
+    initial
+      ? initial.billTo
+      : firstParty
+        ? addressFromParty(firstParty.name, firstParty.billTo ?? null)
+        : EMPTY_ADDRESS,
   );
   const [shipTo, setShipTo] = useState<DocumentAddress>(
-    firstParty?.shipTo ? addressFromParty(firstParty.name, firstParty.shipTo) : EMPTY_ADDRESS,
+    initial
+      ? (initial.shipTo ?? EMPTY_ADDRESS)
+      : firstParty?.shipTo
+        ? addressFromParty(firstParty.name, firstParty.shipTo)
+        : EMPTY_ADDRESS,
   );
-  const [shipSameAsBill, setShipSameAsBill] = useState(!firstParty?.shipTo);
+  const [shipSameAsBill, setShipSameAsBill] = useState(
+    initial ? initial.shipTo === null : !firstParty?.shipTo,
+  );
 
   const [customerDialogOpen, setCustomerDialogOpen] = useState(false);
   const [vendorDialogOpen, setVendorDialogOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
-  const [addingCodes, startAddingCodes] = useTransition();
-  const [codeNotice, setCodeNotice] = useState<string | null>(null);
+
+  const party = useMemo(() => partyList.find((p) => p.id === partyId), [partyList, partyId]);
 
   /**
    * Where the supply is delivered, which is what selects the tax code.
    *
-   * Falls back through ship-to → bill-to → the company's own province. A
-   * document that shows no addresses but is still one we issue — a credit note —
-   * lands on the company's province, which is where the invoice it reverses was
-   * almost certainly rated. A purchase document has no place of supply at all.
+   * Falls back through ship-to → bill-to → the company's own province. An invoice
+   * or quote takes it from the editable addresses on the form. A credit note has
+   * no address editor but is still one we issue, so it follows the selected
+   * customer's own province — the same place of supply as the invoice it
+   * credits. A purchase document has no place of supply at all.
    */
   const placeOfSupply = !config.usesPlaceOfSupply
     ? null
     : config.showAddresses
       ? (shipSameAsBill ? billTo.province : shipTo.province) || billTo.province || companyProvince || null
-      : companyProvince || null;
+      : (party?.shipTo?.province ?? party?.billTo?.province) || companyProvince || null;
+
+  /**
+   * The province a new line defaults its tax code to. On a bill this is the
+   * company's own province — the vendor's decision still governs, so every
+   * purchase code stays on offer (`offeredCodes` is not filtered when there is
+   * no place of supply), but a local supplier will have charged this rate.
+   */
+  const taxDefaultProvince = config.usesPlaceOfSupply ? placeOfSupply : companyProvince || null;
 
   const offeredCodes = useMemo(
     () => codesForPlaceOfSupply(taxCodes, placeOfSupply),
     [taxCodes, placeOfSupply],
   );
-  const defaultTax = defaultCodeForPlaceOfSupply(taxCodes, placeOfSupply)?.id ?? "";
+  const defaultTax = defaultCodeForPlaceOfSupply(taxCodes, taxDefaultProvince)?.id ?? "";
 
-  const [lines, setLines] = useState<EditorLine[]>(() => [
-    {
-      key: crypto.randomUUID(),
-      description: "",
-      quantity: "1",
-      unitPrice: "",
-      discount: "",
-      accountId: defaultAccount,
-      taxCodeId: defaultCodeForPlaceOfSupply(taxCodesProp, initialPlaceOfSupply)?.id ?? "",
-    },
-  ]);
-
-  const party = partyList.find((p) => p.id === partyId);
+  const [lines, setLines] = useState<EditorLine[]>(() =>
+    initial && initial.lines.length > 0
+      ? initial.lines.map((line) => ({
+          key: crypto.randomUUID(),
+          description: line.description,
+          quantity: line.quantity,
+          unitPrice: line.unitPrice,
+          discount: line.discount,
+          accountId: line.accountId,
+          taxCodeId: line.taxCodeId,
+          itemId: line.itemId ?? undefined,
+        }))
+      : [
+          {
+            key: crypto.randomUUID(),
+            description: "",
+            quantity: "1",
+            unitPrice: "",
+            discount: "",
+            accountId: defaultAccount,
+            // A bill starts on the vendor's own default code if it has one,
+            // otherwise (like every sales document) on the province default.
+            taxCodeId:
+              (config.accountSide === "EXPENSE" ? firstParty?.taxCodeId : null) ??
+              defaultCodeForPlaceOfSupply(taxCodesProp, initialPlaceOfSupply)?.id ??
+              "",
+          },
+        ],
+  );
 
   const missingProvincialCode = isMissingProvincialCode(taxCodes, placeOfSupply, provincesWithSalesTax);
 
@@ -360,9 +426,16 @@ export function DocumentForm({
 
       const province = (next.shipTo?.province ?? nextBill.province) || companyProvince || null;
       repointLines(province);
-    } else if (next.taxCodeId) {
-      // Vendors carry a default code rather than a place of supply.
-      setLines((current) => current.map((line) => ({ ...line, taxCodeId: next.taxCodeId! })));
+    } else if (config.usesPlaceOfSupply) {
+      // A credit note shows no address editor, but its tax still follows the
+      // customer's province — the same place of supply as the invoice it credits.
+      const province = (next.shipTo?.province ?? next.billTo?.province) || companyProvince || null;
+      repointLines(province);
+    } else {
+      // A bill: the vendor's own default code wins if it has set one, otherwise
+      // the lines fall to the company's province default.
+      const code = next.taxCodeId ?? defaultTax;
+      if (code) setLines((current) => current.map((line) => ({ ...line, taxCodeId: code })));
     }
 
     if (config.secondDateFromPartyTerms) {
@@ -386,21 +459,6 @@ export function DocumentForm({
     setShipSameAsBill(same);
     const province = (same ? billTo.province : shipTo.province) || billTo.province || companyProvince || null;
     repointLines(province);
-  }
-
-  function addProvincialCodes() {
-    if (!placeOfSupply) return;
-    setCodeNotice(null);
-    startAddingCodes(async () => {
-      const result = await addProvincialTaxCodesAction(placeOfSupply);
-      if (result?.error) return setCodeNotice(result.error);
-      if (result?.taxCodes?.length) {
-        const merged = [...taxCodes, ...result.taxCodes];
-        setTaxCodes(merged);
-        repointLines(placeOfSupply, merged);
-        setCodeNotice(`Added ${result.taxCodes.map((code) => code.code).join(", ")}.`);
-      }
-    });
   }
 
   const taxCodeMap = useMemo(
@@ -529,7 +587,13 @@ export function DocumentForm({
     return account ? `${account.code} · ${account.name}` : "Unknown account";
   };
 
-  const primaryLabel = config.allowDraft && !postNow ? "Save draft" : `Save ${config.noun}`;
+  const itemNumber = (itemId: string) => items.find((i) => i.id === itemId)?.code ?? null;
+
+  const primaryLabel = initial
+    ? "Save changes"
+    : config.allowDraft && !postNow
+      ? "Save draft"
+      : `Save ${config.noun}`;
   const shipToForPreview = shipSameAsBill || isAddressEmpty(shipTo) ? null : shipTo;
 
   return (
@@ -585,13 +649,14 @@ export function DocumentForm({
             {config.numberLabel ? (
               <Field
                 label={config.numberLabel}
-                required
-                hint="Type over it to use your own."
+                required={!initial}
+                hint={initial ? "Fixed once the invoice exists." : "Type over it to use your own."}
               >
                 <input
                   value={number}
                   onChange={(event) => setNumber(event.target.value)}
-                  className={clsx(inputClass, "tnum")}
+                  readOnly={Boolean(initial)}
+                  className={clsx(inputClass, "tnum", initial && "cursor-not-allowed opacity-60")}
                 />
               </Field>
             ) : null}
@@ -694,30 +759,15 @@ export function DocumentForm({
                       <Icon name="warning" className="mt-0.5 h-4 w-4 shrink-0 text-caution" />
                       <span>
                         This company has no sales tax code for {provinceName(placeOfSupply!)}. Charging the federal
-                        rate alone would under-collect on a supply delivered there.
+                        rate alone would under-collect on a supply delivered there. An administrator must add the
+                        code under Tax Centre → Tax codes before this document can be rated correctly.
                       </span>
                     </p>
-                    <div className="mt-2 flex flex-wrap items-center gap-2">
-                      {canManageTaxCodes ? (
-                        <Button onClick={addProvincialCodes} disabled={addingCodes}>
-                          {addingCodes ? "Adding…" : `Add the ${placeOfSupply} tax code`}
-                        </Button>
-                      ) : (
-                        <span className="text-[0.75rem] text-muted-ink">
-                          Ask someone with tax settings access to add it under Tax Centre → Tax codes.
-                        </span>
-                      )}
-                      <a href="/tax/codes" className="text-[0.75rem] font-medium text-brand-700 hover:underline">
-                        Open Tax codes
-                      </a>
-                    </div>
-                    {codeNotice && <p className="mt-2 text-[0.75rem] text-ink-700">{codeNotice}</p>}
                   </div>
                 ) : (
                   <p className="text-[0.75rem] text-muted-ink">
                     Place of supply: <span className="font-medium text-ink-800">{provinceName(placeOfSupply!)}</span> ·
                     codes offered below: {offeredCodes.map((code) => code.code).join(", ") || "none"}
-                    {codeNotice && <span className="ml-2 text-ink-700">{codeNotice}</span>}
                   </p>
                 )}
               </div>
@@ -930,7 +980,7 @@ export function DocumentForm({
             </p>
           )}
 
-          {config.allowDraft && (
+          {config.allowDraft && !initial?.posted && (
             <label className="mt-4 flex cursor-pointer items-start gap-2 rounded-lg border border-paper-300 p-3">
               <input
                 type="checkbox"
@@ -945,6 +995,13 @@ export function DocumentForm({
                 </span>
               </span>
             </label>
+          )}
+
+          {initial?.posted && (
+            <p className="mt-4 rounded-lg border border-paper-300 bg-paper-100 p-3 text-[0.75rem] leading-5 text-muted-ink">
+              This {config.noun} is already posted. Saving reverses its original journal entry and posts the
+              corrected one, keeping the same number.
+            </p>
           )}
 
           {error && (
@@ -1076,6 +1133,9 @@ export function DocumentForm({
           }
         >
           <DocumentPreview
+            variant={kind === "INVOICE" ? "invoice" : "standard"}
+            itemNumber={itemNumber}
+            partyHeading={config.showAddresses ? undefined : config.partyLabel}
             title={config.noun.toUpperCase()}
             number={config.numberLabel ? number : "Allocated on save"}
             company={companyProfile}
