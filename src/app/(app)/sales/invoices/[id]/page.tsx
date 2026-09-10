@@ -1,6 +1,18 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { db } from "@/lib/db";
+import { getCompanyOrThrow } from "@/server/db/companies";
+import { getCustomer } from "@/server/db/customers";
+import { listAccounts } from "@/server/db/accounts";
+import { getTaxCodesByIds } from "@/server/db/tax-codes";
+import { listItemsByIds } from "@/server/db/items";
+import { invoices as invoicesRepo } from "@/server/db/invoices";
+import { getEntryWithLines } from "@/server/db/journal-entries";
+import { listTaxEntriesForSource } from "@/server/db/tax-entries";
+import { listAllocationsForInvoice } from "@/server/db/payment-allocations";
+import { getPayment } from "@/server/db/payments";
+import { creditNotes as creditNotesRepo } from "@/server/db/credit-notes";
+import { projects as projectsRepo } from "@/server/db/supporting";
+import { listAuditLogs } from "@/server/db/audit-logs";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES, can } from "@/lib/permissions";
 import { formatDate, formatDateLong, formatDateTime, daysBetween, today } from "@/lib/dates";
@@ -14,47 +26,81 @@ export default async function InvoiceDetailPage({ params }: PageProps<"/sales/in
   const currency = company.baseCurrency;
   const { id } = await params;
 
-  const invoice = await db.invoice.findFirst({
-    where: { id, companyId: company.id },
-    include: {
-      customer: true,
-      project: true,
-      lines: {
-        orderBy: { lineNo: "asc" },
-        include: { account: true, taxCode: { include: { components: true } }, item: true },
-      },
-      allocations: {
-        include: { payment: true, creditNote: { select: { id: true, number: true } } },
-        orderBy: { date: "asc" },
-      },
-      journalEntry: {
-        include: { lines: { include: { account: true }, orderBy: { lineNo: "asc" } } },
-      },
-    },
-  });
-  if (!invoice) notFound();
+  const raw = await invoicesRepo.get(company.id, id);
+  if (!raw) notFound();
 
-  const [bankAccounts, taxEntries, auditTrail, companyProfile] = await Promise.all([
-    db.account.findMany({
-      where: { companyId: company.id, subtype: { in: ["BANK", "CASH"] }, isActive: true },
-      orderBy: { code: "asc" },
-      select: { id: true, name: true },
-    }),
-    db.taxEntry.findMany({
-      where: { companyId: company.id, sourceType: "INVOICE", sourceId: invoice.id },
-      include: { taxCode: true },
-    }),
-    db.auditLog.findMany({
-      where: { companyId: company.id, entityType: { in: ["Invoice", "JournalEntry"] }, entityId: { in: [invoice.id, invoice.journalEntryId ?? ""] } },
-      orderBy: { createdAt: "desc" },
-      include: { user: { select: { name: true } } },
-      take: 10,
-    }),
-    db.company.findUniqueOrThrow({
-      where: { id: company.id },
-      select: { name: true, legalName: true, addressLine1: true, addressLine2: true, city: true, province: true, postalCode: true, businessNumber: true, gstNumber: true, qstNumber: true, pstNumber: true, email: true, phone: true, website: true, invoiceFooter: true, logoUrl: true },
-    }),
-  ]);
+  const [accounts, customerDoc, entry, taxEntries, allocDocs, companyProfile, allAudit] =
+    await Promise.all([
+      listAccounts(company.id),
+      getCustomer(company.id, raw.customerId),
+      raw.journalEntryId ? getEntryWithLines(company.id, raw.journalEntryId) : Promise.resolve(null),
+      listTaxEntriesForSource(company.id, "INVOICE", raw.id),
+      listAllocationsForInvoice(company.id, raw.id),
+      getCompanyOrThrow(company.id),
+      listAuditLogs(company.id, { limit: 30 }),
+    ]);
+  const accountById = new Map(accounts.map((a) => [a.id, a]));
+  const taxCodeById = await getTaxCodesByIds(
+    company.id,
+    [...raw.lines.map((l) => l.taxCodeId), ...taxEntries.map((t) => t.taxCodeId)].filter(
+      (x): x is string => Boolean(x),
+    ),
+  );
+  const itemById = await listItemsByIds(
+    company.id,
+    raw.lines.map((l) => l.itemId).filter((x): x is string => Boolean(x)),
+  ).then((rows) => new Map(rows.map((i) => [i.id, i])));
+  const project = raw.projectId ? await projectsRepo.get(company.id, raw.projectId) : null;
+
+  const invoice = {
+    ...raw,
+    customer: customerDoc!,
+    project,
+    lines: raw.lines.map((l) => ({
+      ...l,
+      account: accountById.get(l.accountId) ?? { code: "", name: "" },
+      taxCode: l.taxCodeId ? taxCodeById.get(l.taxCodeId) ?? null : null,
+      item: l.itemId ? itemById.get(l.itemId) ?? null : null,
+    })),
+    allocations: await Promise.all(
+      allocDocs
+        .sort((a, b) => a.date.getTime() - b.date.getTime())
+        .map(async (al) => ({
+          ...al,
+          payment: al.paymentId ? await getPayment(company.id, al.paymentId) : null,
+          creditNote: al.creditNoteId
+            ? await creditNotesRepo.get(company.id, al.creditNoteId).then((c) =>
+                c ? { id: c.id, number: c.number } : null,
+              )
+            : null,
+        })),
+    ),
+    journalEntry: entry
+      ? {
+          ...entry,
+          lines: entry.lines.map((l) => ({
+            ...l,
+            account: accountById.get(l.accountId) ?? { code: "", name: "" },
+          })),
+        }
+      : null,
+  };
+
+  const bankAccounts = accounts
+    .filter((a) => a.isActive && ["BANK", "CASH"].includes(a.subtype))
+    .map((a) => ({ id: a.id, name: a.name }));
+  const auditTrail = allAudit
+    .filter(
+      (a) =>
+        ["Invoice", "JournalEntry"].includes(a.entityType) &&
+        [invoice.id, invoice.journalEntryId ?? ""].includes(a.entityId ?? ""),
+    )
+    .slice(0, 10)
+    .map((a) => ({ ...a, user: null as { name: string } | null }));
+  const taxEntriesJoined = taxEntries.map((t) => ({
+    ...t,
+    taxCode: t.taxCodeId ? taxCodeById.get(t.taxCodeId) ?? null : null,
+  }));
 
   const overdueDays = daysBetween(invoice.dueDate, today());
   const canPay = can(role, CAPABILITIES.PAYMENTS);
@@ -236,7 +282,7 @@ export default async function InvoiceDetailPage({ params }: PageProps<"/sales/in
               </thead>
               <tbody>
                 {invoice.lines.map((line) => (
-                  <tr key={line.id}>
+                  <tr key={line.lineNo}>
                     {hasItemColumn && <td className="tnum">{line.item?.code ?? ""}</td>}
                     <td>
                       <span className="font-medium">{line.description}</span>
@@ -394,11 +440,11 @@ export default async function InvoiceDetailPage({ params }: PageProps<"/sales/in
             )}
           </Card>
 
-          {taxEntries.length > 0 && (
+          {taxEntriesJoined.length > 0 && (
             <Card>
               <CardHeader title="Tax detail" subtitle="Rates snapshotted at posting" />
               <ul className="mt-3 space-y-1.5 text-[0.8125rem]">
-                {taxEntries.map((entry) => (
+                {taxEntriesJoined.map((entry) => (
                   <li key={entry.id} className="flex items-center gap-2">
                     <Badge tone="info">{entry.kind}</Badge>
                     <span className="flex-1 text-muted-ink">

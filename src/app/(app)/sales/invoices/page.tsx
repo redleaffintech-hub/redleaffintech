@@ -1,9 +1,9 @@
 import Link from "next/link";
-import { db } from "@/lib/db";
-import { contains } from "@/lib/search";
+import { invoices as invoicesRepo } from "@/server/db/invoices";
+import { getCustomer } from "@/server/db/customers";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
-import { formatDate, today, daysBetween, dateRangeWhere } from "@/lib/dates";
+import { formatDate, today, daysBetween } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
 import {
   Card, EmptyState, LinkButton, Money, PageHeader, StatusBadge, Table, Td, Th, Tr,
@@ -20,54 +20,64 @@ export default async function InvoicesPage({ searchParams }: PageProps<"/sales/i
   const params = await searchParams;
   const status = typeof params.status === "string" ? params.status : "";
   const query = typeof params.q === "string" ? params.q : "";
-  // The range narrows by invoice date, which is the date the revenue was
-  // recognised — not the due date, which would answer a different question.
-  const issuedBetween = dateRangeWhere(params.from, params.to);
-
+  // The range narrows by invoice date — the date the revenue was recognised.
   const asOfNow = today();
 
   /**
    * "Overdue" is a fact about the due date, not a stored flag — deriving it
    * keeps the list honest without a nightly job having to have run.
    */
-  const openStatuses = { status: { in: ["SENT", "PARTIALLY_PAID", "OVERDUE"] } };
-  const where = {
-    companyId: company.id,
-    ...(status === "OPEN"
-      ? openStatuses
-      : status === "OVERDUE"
-        ? { ...openStatuses, balanceCents: { gt: 0 }, dueDate: { lt: asOfNow } }
-        : status
-          ? { status }
-          : {}),
-    ...(query
-      ? { OR: [{ number: contains(query) }, { customer: { name: contains(query) } }] }
-      : {}),
-    ...(issuedBetween ? { issueDate: issuedBetween } : {}),
-  };
+  const from =
+    typeof params.from === "string" && /^\d{4}-\d{2}-\d{2}$/.test(params.from)
+      ? new Date(`${params.from}T00:00:00.000Z`)
+      : null;
+  const to =
+    typeof params.to === "string" && /^\d{4}-\d{2}-\d{2}$/.test(params.to)
+      ? new Date(`${params.to}T23:59:59.999Z`)
+      : null;
+  const issuedBetween = Boolean(from || to);
 
-  const [invoices, counts, totals, overdueCount] = await Promise.all([
-    db.invoice.findMany({
-      where,
-      include: { customer: { select: { id: true, name: true } } },
-      orderBy: [{ issueDate: "desc" }, { number: "desc" }],
-      take: 150,
+  const q = query.toLowerCase();
+  const OPEN = ["SENT", "PARTIALLY_PAID", "OVERDUE"];
+  const everyInvoice = await invoicesRepo.list(company.id, { orderBy: "issueDate", direction: "desc" });
+  const customerNames = new Map<string, string>();
+  await Promise.all(
+    [...new Set(everyInvoice.map((i) => i.customerId))].map(async (id) => {
+      customerNames.set(id, (await getCustomer(company.id, id))?.name ?? "—");
     }),
-    db.invoice.groupBy({ by: ["status"], where: { companyId: company.id }, _count: true }),
-    db.invoice.aggregate({
-      where: { companyId: company.id, status: { in: ["SENT", "PARTIALLY_PAID", "OVERDUE"] } },
-      _sum: { balanceCents: true },
-    }),
-    db.invoice.count({
-      where: { companyId: company.id, ...openStatuses, balanceCents: { gt: 0 }, dueDate: { lt: asOfNow } },
-    }),
-  ]);
+  );
+
+  const isOverdue = (i: (typeof everyInvoice)[number]) =>
+    OPEN.includes(i.status) && i.balanceCents > 0 && i.dueDate < asOfNow;
+
+  const invoices = everyInvoice
+    .filter((i) => {
+      if (status === "OPEN") return OPEN.includes(i.status);
+      if (status === "OVERDUE") return isOverdue(i);
+      if (status) return i.status === status;
+      return true;
+    })
+    .filter(
+      (i) =>
+        !q ||
+        i.number.toLowerCase().includes(q) ||
+        (customerNames.get(i.customerId) ?? "").toLowerCase().includes(q),
+    )
+    .filter((i) => (!from || i.issueDate >= from) && (!to || i.issueDate <= to))
+    .slice(0, 150)
+    .map((i) => ({ ...i, customer: { id: i.customerId, name: customerNames.get(i.customerId) ?? "—" } }));
+
+  const statusCount = new Map<string, number>();
+  for (const i of everyInvoice) statusCount.set(i.status, (statusCount.get(i.status) ?? 0) + 1);
+  const overdueCount = everyInvoice.filter(isOverdue).length;
+  const outstandingCents = everyInvoice
+    .filter((i) => OPEN.includes(i.status))
+    .reduce((sum, i) => sum + i.balanceCents, 0);
 
   const countOf = (statuses: string[]) =>
-    counts.filter((c) => statuses.includes(c.status)).reduce((s, c) => s + c._count, 0);
+    statuses.reduce((sum, st) => sum + (statusCount.get(st) ?? 0), 0);
 
   const asOf = asOfNow;
-  const outstandingCents = totals._sum.balanceCents ?? 0;
 
   return (
     <>

@@ -2,15 +2,20 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { db } from "@/lib/db";
 import { toCents } from "@/lib/money";
 import { CAPABILITIES } from "@/lib/permissions";
 import { PROVINCES_WITH_SALES_TAX } from "@/server/setup/templates";
 import { requireCapability, requireCompany, recordAudit } from "@/server/auth/context";
-import { createInvoice, postInvoice, updateInvoice, voidInvoice } from "@/server/documents/invoices";
-import { peekNumber } from "@/server/documents/numbering";
-import { recordPayment } from "@/server/documents/payments";
-import { writeOffInvoice } from "@/server/documents/credit-notes";
+import { createInvoice, postInvoice, updateInvoice, voidInvoice } from "@/server/documents/invoices-fs";
+import { recordPayment } from "@/server/documents/payments-fs";
+import { writeOffInvoice } from "@/server/documents/credit-notes-fs";
+import { peekSequence } from "@/server/db/companies";
+import { getCompanyOrThrow } from "@/server/db/companies";
+import { invoices as invoicesRepo } from "@/server/db/invoices";
+import { listCustomers } from "@/server/db/customers";
+import { listAccountsByType } from "@/server/db/accounts";
+import { listTaxCodes } from "@/server/db/tax-codes";
+import { listItems } from "@/server/db/items";
 
 const lineSchema = z.object({
   description: z.string().min(1),
@@ -59,15 +64,14 @@ export async function createInvoiceAction(payload: string) {
    * a number the user typed over is treated as an explicit override, and an
    * override deliberately leaves the counter alone.
    */
-  const suggested = await peekNumber(db, company.id, "invoice");
+  const suggested = await peekSequence(company.id, "invoice");
   const supplied = parsed.data.number?.trim();
   const explicitNumber = supplied && supplied !== suggested ? supplied : undefined;
 
   if (explicitNumber) {
-    const clash = await db.invoice.findFirst({
-      where: { companyId: company.id, number: explicitNumber },
-      select: { id: true },
-    });
+    const clash = (
+      await invoicesRepo.list(company.id, { where: [["number", "==", explicitNumber]], limit: 1 })
+    )[0];
     if (clash) return { error: `Invoice ${explicitNumber} already exists. Choose another number.` };
   }
 
@@ -170,9 +174,9 @@ export async function voidInvoiceAction(invoiceId: string) {
 
 export async function markInvoiceSentAction(invoiceId: string) {
   const { company, user } = await requireCapability(CAPABILITIES.INVOICES);
-  const invoice = await db.invoice.findFirst({ where: { id: invoiceId, companyId: company.id } });
+  const invoice = await invoicesRepo.get(company.id, invoiceId);
   if (!invoice) return { error: "Invoice not found." };
-  await db.invoice.update({ where: { id: invoiceId }, data: { sentAt: new Date() } });
+  await invoicesRepo.update(company.id, invoiceId, { sentAt: new Date() });
   await recordAudit({
     companyId: company.id, userId: user.id, action: "UPDATE", entityType: "Invoice",
     entityId: invoiceId, summary: `Marked ${invoice.number} as sent to the customer`,
@@ -195,9 +199,7 @@ export async function recordReceiptAction(formData: FormData) {
   const parsed = receiptSchema.safeParse(Object.fromEntries(formData));
   if (!parsed.success) return { error: "Check the payment details and try again." };
 
-  const invoice = await db.invoice.findFirst({
-    where: { id: parsed.data.invoiceId, companyId: company.id },
-  });
+  const invoice = await invoicesRepo.get(company.id, parsed.data.invoiceId);
   if (!invoice) return { error: "Invoice not found." };
 
   try {
@@ -237,48 +239,14 @@ export async function writeOffInvoiceAction(invoiceId: string, reason: string) {
 /** Options the invoice, quote and credit-note editors need, tenant-scoped. */
 export async function invoiceFormOptions() {
   const { company } = await requireCompany();
-  const [customerRecords, accounts, taxCodes, items, profile] = await Promise.all([
-    db.customer.findMany({
-      where: { companyId: company.id, isActive: true },
-      orderBy: { name: "asc" },
-      select: {
-        id: true, name: true, taxCodeId: true, paymentTermsDays: true, country: true,
-        addressLine1: true, addressLine2: true, city: true, province: true, postalCode: true,
-        shipToLine1: true, shipToLine2: true, shipToCity: true, shipToProvince: true,
-        shipToPostalCode: true, shipToCountry: true,
-      },
-    }),
-    db.account.findMany({
-      where: { companyId: company.id, isActive: true, type: { in: ["REVENUE", "LIABILITY"] } },
-      orderBy: { code: "asc" },
-      select: { id: true, code: true, name: true, type: true },
-    }),
-    db.taxCode.findMany({
-      where: { companyId: company.id, isActive: true, appliesToSales: true },
-      orderBy: { code: "asc" },
-      include: { components: true },
-    }),
-    // Active items only: an archived item must not be selectable on a new
-    // document, though documents that already reference one still display it.
-    db.serviceItem.findMany({
-      where: { companyId: company.id, isActive: true },
-      orderBy: [{ code: "asc" }],
-      select: {
-        id: true, code: true, name: true, description: true, unit: true,
-        unitPriceCents: true, discountPercentMicro: true,
-        incomeAccountId: true, expenseAccountId: true,
-        taxCodeId: true, purchaseTaxCodeId: true,
-      },
-    }),
-    db.company.findUniqueOrThrow({
-      where: { id: company.id },
-      select: {
-        name: true, legalName: true, addressLine1: true, addressLine2: true, city: true, province: true,
-        postalCode: true, businessNumber: true, gstNumber: true, qstNumber: true, pstNumber: true,
-        email: true, phone: true, website: true, invoiceFooter: true, logoUrl: true,
-      },
-    }),
+  const [customerRecords, accounts, allTaxCodes, items, profile] = await Promise.all([
+    listCustomers(company.id, { activeOnly: true }),
+    listAccountsByType(company.id, ["REVENUE", "LIABILITY"]),
+    listTaxCodes(company.id, { activeOnly: true }),
+    listItems(company.id, { activeOnly: true }),
+    getCompanyOrThrow(company.id),
   ]);
+  const taxCodes = allTaxCodes.filter((c) => c.appliesToSales);
 
   // Flattened into the shape the editor party list wants, so the component never
   // has to know the customer table column names.

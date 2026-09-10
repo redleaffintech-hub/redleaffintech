@@ -1,8 +1,10 @@
 import { notFound, redirect } from "next/navigation";
-import { db } from "@/lib/db";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
 import { isoDate } from "@/lib/dates";
+import { invoices as invoicesRepo } from "@/server/db/invoices";
+import { getTaxCodesByIds } from "@/server/db/tax-codes";
+import { listAllocationsForInvoice } from "@/server/db/payment-allocations";
 import { PageHeader } from "@/components/ui";
 import { DocumentForm, type DocumentFormInitial } from "@/components/document-form";
 import { invoiceFormOptions, updateInvoiceAction } from "../../actions";
@@ -13,15 +15,14 @@ export default async function EditInvoicePage({ params }: { params: Promise<{ id
   const { company } = await requireCapability(CAPABILITIES.INVOICES);
   const { id } = await params;
 
-  const invoice = await db.invoice.findFirst({
-    where: { id, companyId: company.id },
-    include: { lines: { orderBy: { lineNo: "asc" } }, allocations: { select: { id: true } } },
-  });
+  const invoice = await invoicesRepo.get(company.id, id);
   if (!invoice) notFound();
+  const allocations = await listAllocationsForInvoice(company.id, invoice.id);
+  const lines = [...invoice.lines].sort((a, b) => a.lineNo - b.lineNo);
 
   // Editable only while nothing is owed against it and it is not void — otherwise
   // the correct route is unapply-then-edit, or a credit note.
-  if (invoice.status === "VOID" || invoice.allocations.length > 0 || invoice.amountPaidCents !== 0) {
+  if (invoice.status === "VOID" || allocations.length > 0 || invoice.amountPaidCents !== 0) {
     redirect(`/sales/invoices/${id}`);
   }
 
@@ -30,13 +31,10 @@ export default async function EditInvoicePage({ params }: { params: Promise<{ id
   // A line may point at a tax code that has since been deactivated; keep it
   // selectable so editing an old invoice cannot silently drop it.
   const missingCodeIds = [
-    ...new Set(invoice.lines.map((l) => l.taxCodeId).filter((x): x is string => Boolean(x))),
+    ...new Set(lines.map((l) => l.taxCodeId).filter((x): x is string => Boolean(x))),
   ].filter((codeId) => !options.taxCodes.some((c) => c.id === codeId));
   const extraCodes = missingCodeIds.length
-    ? await db.taxCode.findMany({
-        where: { id: { in: missingCodeIds }, companyId: company.id },
-        include: { components: true },
-      })
+    ? [...(await getTaxCodesByIds(company.id, missingCodeIds)).values()]
     : [];
 
   const hasShipTo = Boolean(invoice.shipToLine1 || invoice.shipToCity || invoice.shipToProvince);
@@ -67,7 +65,7 @@ export default async function EditInvoicePage({ params }: { params: Promise<{ id
           postalCode: invoice.shipToPostalCode ?? "",
         }
       : null,
-    lines: invoice.lines.map((line) => ({
+    lines: lines.map((line) => ({
       description: line.description,
       quantity: String(line.quantityMilli / 1000),
       unitPrice: (line.unitPriceCents / 100).toFixed(2),

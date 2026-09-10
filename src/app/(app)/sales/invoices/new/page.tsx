@@ -1,7 +1,6 @@
-import { db } from "@/lib/db";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
-import { peekNumber } from "@/server/documents/numbering";
+import { peekSequence } from "@/server/db/companies";
 import { PageHeader } from "@/components/ui";
 import { DocumentForm } from "@/components/document-form";
 import { createInvoiceAction, invoiceFormOptions } from "../actions";
@@ -11,7 +10,7 @@ export const metadata = { title: "New invoice" };
 export default async function NewInvoicePage() {
   const { company } = await requireCapability(CAPABILITIES.INVOICES);
   const options = await invoiceFormOptions();
-  const suggestedNumber = await peekNumber(db, company.id, "invoice");
+  const suggestedNumber = await peekSequence(company.id, "invoice");
 
   return (
     <>
