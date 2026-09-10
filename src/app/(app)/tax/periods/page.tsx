@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { db } from "@/lib/db";
+import { listTaxPeriods } from "@/server/db/tax-periods";
+import { listAllTaxEntries } from "@/server/db/tax-entries";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES, can } from "@/lib/permissions";
 import { addMonths, endOfMonth, formatDate, today } from "@/lib/dates";
@@ -13,34 +14,25 @@ export default async function TaxPeriodsPage() {
   const { company, role } = await requireCapability(CAPABILITIES.TAX_FILING);
   const editable = can(role, CAPABILITIES.TAX_FILING);
 
-  const periods = await db.taxPeriod.findMany({
-    where: { companyId: company.id },
-    orderBy: { startDate: "desc" },
-  });
+  const [periods, entries] = await Promise.all([
+    listTaxPeriods(company.id),
+    listAllTaxEntries(company.id),
+  ]);
 
   // One pass over the subledger gives every period its net figure, rather than
   // running the full return working paper once per row.
-  const [collected, recoverable, counts] = await Promise.all([
-    db.taxEntry.groupBy({
-      by: ["taxPeriodId"],
-      where: { companyId: company.id, direction: "SALE" },
-      _sum: { taxCents: true },
-    }),
-    db.taxEntry.groupBy({
-      by: ["taxPeriodId"],
-      where: { companyId: company.id, direction: "PURCHASE" },
-      _sum: { recoverableCents: true },
-    }),
-    db.taxEntry.groupBy({
-      by: ["taxPeriodId"],
-      where: { companyId: company.id },
-      _count: { _all: true },
-    }),
-  ]);
-
-  const collectedById = new Map(collected.map((row) => [row.taxPeriodId, row._sum.taxCents ?? 0]));
-  const recoverableById = new Map(recoverable.map((row) => [row.taxPeriodId, row._sum.recoverableCents ?? 0]));
-  const countById = new Map(counts.map((row) => [row.taxPeriodId, row._count._all]));
+  const collectedById = new Map<string, number>();
+  const recoverableById = new Map<string, number>();
+  const countById = new Map<string, number>();
+  for (const e of entries) {
+    if (!e.taxPeriodId) continue;
+    countById.set(e.taxPeriodId, (countById.get(e.taxPeriodId) ?? 0) + 1);
+    if (e.direction === "SALE") {
+      collectedById.set(e.taxPeriodId, (collectedById.get(e.taxPeriodId) ?? 0) + e.taxCents);
+    } else if (e.direction === "PURCHASE") {
+      recoverableById.set(e.taxPeriodId, (recoverableById.get(e.taxPeriodId) ?? 0) + e.recoverableCents);
+    }
+  }
 
   const current = periods.find((period) => period.startDate <= today() && period.endDate >= today());
   const overdue = periods.filter(

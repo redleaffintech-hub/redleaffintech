@@ -1,9 +1,10 @@
 import Link from "next/link";
-import { db } from "@/lib/db";
+import { listTaxPeriods } from "@/server/db/tax-periods";
+import { listTaxCodes } from "@/server/db/tax-codes";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES, can } from "@/lib/permissions";
-import { taxPeriodReturn } from "@/server/reports/tax";
-import { addDays, addMonths, endOfMonth, formatDate, today } from "@/lib/dates";
+import { taxPeriodReturn } from "@/server/reports/tax-fs";
+import { addMonths, endOfMonth, formatDate, today } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
 import { taxRegistrationLines } from "@/lib/tax-registration";
 import { Badge, Callout, Card, CardHeader, LinkButton, Money, PageHeader, StatusBadge, Table, Td, Th, Tr } from "@/components/ui";
@@ -17,11 +18,7 @@ export default async function TaxCentrePage({ searchParams }: PageProps<"/tax">)
   const registrations = taxRegistrationLines(company);
   const params = await searchParams;
 
-  const periods = await db.taxPeriod.findMany({
-    where: { companyId: company.id },
-    orderBy: { startDate: "desc" },
-    take: 12,
-  });
+  const periods = (await listTaxPeriods(company.id)).slice(0, 12);
 
   const selectedId =
     typeof params.period === "string"
@@ -32,11 +29,7 @@ export default async function TaxCentrePage({ searchParams }: PageProps<"/tax">)
   const result = selected ? await taxPeriodReturn(company.id, selected.id) : null;
   const dueDate = selected ? endOfMonth(addMonths(selected.endDate, 1)) : null;
 
-  const taxCodes = await db.taxCode.findMany({
-    where: { companyId: company.id, isActive: true },
-    include: { components: true },
-    orderBy: { code: "asc" },
-  });
+  const taxCodes = await listTaxCodes(company.id, { activeOnly: true });
 
   return (
     <>

@@ -71,3 +71,7 @@ export async function updateTaxPeriod(
 ): Promise<void> {
   await col(companyId).doc(id).update(encode(data));
 }
+
+export async function deleteTaxPeriod(companyId: string, id: string): Promise<void> {
+  await col(companyId).doc(id).delete();
+}

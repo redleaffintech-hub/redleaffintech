@@ -1,4 +1,5 @@
-import { db } from "@/lib/db";
+import { listTaxCodes } from "@/server/db/tax-codes";
+import { listAllTaxEntries } from "@/server/db/tax-entries";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES, can } from "@/lib/permissions";
 import { formatDate } from "@/lib/dates";
@@ -12,19 +13,20 @@ export default async function TaxCodesPage() {
   const { company, role } = await requireCapability(CAPABILITIES.TAX_FILING);
   const editable = can(role, CAPABILITIES.TAX_SETTINGS);
 
-  const codes = await db.taxCode.findMany({
-    where: { companyId: company.id },
-    include: { components: { orderBy: { sortOrder: "asc" } } },
-    orderBy: [{ isActive: "desc" }, { code: "asc" }],
-  });
+  const [rawCodes, entries] = await Promise.all([
+    listTaxCodes(company.id),
+    listAllTaxEntries(company.id),
+  ]);
+  const codes = [...rawCodes]
+    .map((c) => ({ ...c, components: [...c.components].sort((a, b) => a.sortOrder - b.sortOrder) }))
+    .sort((a, b) => Number(b.isActive) - Number(a.isActive) || a.code.localeCompare(b.code));
 
   // "In use" is what makes a code un-editable: posted entries snapshot the rate.
-  const usage = await db.taxEntry.groupBy({
-    by: ["taxCodeId"],
-    where: { companyId: company.id },
-    _count: { _all: true },
-  });
-  const usedById = new Map(usage.map((u) => [u.taxCodeId, u._count._all]));
+  const usedById = new Map<string, number>();
+  for (const e of entries) {
+    if (!e.taxCodeId) continue;
+    usedById.set(e.taxCodeId, (usedById.get(e.taxCodeId) ?? 0) + 1);
+  }
 
   return (
     <>

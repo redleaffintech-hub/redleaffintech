@@ -35,6 +35,19 @@ export async function listTaxEntriesForSource(
   return mapDocs(snap, decode);
 }
 
+/** Every tax entry for the company (period/code roll-ups in the Tax Centre). */
+export async function listAllTaxEntries(companyId: string): Promise<TaxEntry[]> {
+  return mapDocs(await col(companyId).get(), decode);
+}
+
+export async function listTaxEntriesForPeriod(
+  companyId: string,
+  taxPeriodId: string,
+): Promise<TaxEntry[]> {
+  const snap = await col(companyId).where("taxPeriodId", "==", taxPeriodId).get();
+  return mapDocs(snap, decode);
+}
+
 export async function listTaxEntriesForJournalEntry(
   companyId: string,
   journalEntryId: string,

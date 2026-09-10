@@ -2,14 +2,23 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { db } from "@/lib/db";
 import { addDays, addMonths, toUtcDay, utcDate } from "@/lib/dates";
 import { PROVINCES, SYSTEM_ACCOUNTS, TAX_KINDS } from "@/lib/enums";
 import { CAPABILITIES } from "@/lib/permissions";
 import { recordAudit, requireCapability } from "@/server/auth/context";
-import { setTaxPeriodStatus } from "@/server/reports/tax";
+import { setTaxPeriodStatus } from "@/server/reports/tax-fs";
 import { createProvincialTaxCodes } from "@/server/setup/provision";
 import { PROVINCIAL_TAX_CODES } from "@/server/setup/templates";
+import {
+  createTaxPeriod,
+  deleteTaxPeriod,
+  getTaxPeriod,
+  listTaxPeriods,
+} from "@/server/db/tax-periods";
+import { listTaxEntriesForPeriod } from "@/server/db/tax-entries";
+import { listTaxCodes, createTaxCode, updateTaxCode, getTaxCode } from "@/server/db/tax-codes";
+import { listAccounts } from "@/server/db/accounts";
+import { newId } from "@/server/db/firestore";
 
 // ── Filing periods ──────────────────────────────────────────────────────────
 
@@ -39,7 +48,7 @@ export async function setTaxPeriodStatusAction(
   const parsed = statusSchema.safeParse({ status, filingReference: filingReference || undefined });
   if (!parsed.success) return { error: "That is not a valid filing status." };
 
-  const period = await db.taxPeriod.findFirst({ where: { id: periodId, companyId: company.id } });
+  const period = await getTaxPeriod(company.id, periodId);
   if (!period) return { error: "Tax period not found in this company." };
   if (period.status === status) return { ok: true };
 
@@ -82,15 +91,22 @@ export async function generateTaxPeriodsAction(formData: FormData) {
   const yearStart = utcDate(year, 1, 1);
   const yearEnd = utcDate(year, 12, 31);
 
-  const overlapping = await db.taxPeriod.count({
-    where: { companyId: company.id, startDate: { lte: yearEnd }, endDate: { gte: yearStart } },
-  });
-  if (overlapping > 0) {
+  const overlapping = (await listTaxPeriods(company.id)).filter(
+    (p) => p.startDate <= yearEnd && p.endDate >= yearStart,
+  );
+  if (overlapping.length > 0) {
     return { error: `${year} already has filing periods. Delete the open ones first if the frequency changed.` };
   }
 
   const monthsPerPeriod = frequency === "MONTHLY" ? 1 : frequency === "QUARTERLY" ? 3 : 12;
-  const data = [];
+  const data: {
+    companyId: string;
+    name: string;
+    startDate: Date;
+    endDate: Date;
+    frequency: string;
+    status: string;
+  }[] = [];
   for (let i = 0; i < 12 / monthsPerPeriod; i++) {
     const startDate = utcDate(year, i * monthsPerPeriod + 1, 1);
     const endDate = addDays(addMonths(startDate, monthsPerPeriod), -1);
@@ -110,7 +126,20 @@ export async function generateTaxPeriodsAction(formData: FormData) {
     });
   }
 
-  await db.taxPeriod.createMany({ data });
+  for (const row of data) {
+    await createTaxPeriod({
+      companyId: row.companyId,
+      name: row.name,
+      startDate: row.startDate,
+      endDate: row.endDate,
+      frequency: row.frequency,
+      status: row.status,
+      filingReference: null,
+      filedAt: null,
+      lockedAt: null,
+      netFiledCents: null,
+    });
+  }
   await recordAudit({
     companyId: company.id,
     userId: user.id,
@@ -127,16 +156,16 @@ export async function generateTaxPeriodsAction(formData: FormData) {
 /** Only an untouched, still-open period may be removed. */
 export async function deleteTaxPeriodAction(periodId: string) {
   const { company, user } = await requireCapability(CAPABILITIES.TAX_FILING);
-  const period = await db.taxPeriod.findFirst({ where: { id: periodId, companyId: company.id } });
+  const period = await getTaxPeriod(company.id, periodId);
   if (!period) return { error: "Tax period not found in this company." };
   if (period.status !== "OPEN") return { error: `${period.name} is ${period.status.toLowerCase()} and cannot be deleted.` };
 
-  const entries = await db.taxEntry.count({ where: { companyId: company.id, taxPeriodId: periodId } });
+  const entries = (await listTaxEntriesForPeriod(company.id, periodId)).length;
   if (entries > 0) {
     return { error: `${period.name} already has ${entries} tax entries posted into it.` };
   }
 
-  await db.taxPeriod.delete({ where: { id: periodId } });
+  await deleteTaxPeriod(company.id, periodId);
   await recordAudit({
     companyId: company.id,
     userId: user.id,
@@ -198,8 +227,8 @@ export async function createTaxCodeAction(formData: FormData) {
   const input = parsed.data;
   const code = input.code.toUpperCase();
 
-  const clash = await db.taxCode.findFirst({ where: { companyId: company.id, code } });
-  if (clash) return { error: `Tax code ${code} already exists.` };
+  const existingCodes = await listTaxCodes(company.id);
+  if (existingCodes.some((c) => c.code === code)) return { error: `Tax code ${code} already exists.` };
 
   // Component rows arrive as parallel kind/rate fields, one set per row.
   const components: { kind: string; rateMicro: number; compound: boolean }[] = [];
@@ -228,10 +257,7 @@ export async function createTaxCodeAction(formData: FormData) {
     }
   }
 
-  const accounts = await db.account.findMany({
-    where: { companyId: company.id, systemKey: { not: null } },
-    select: { id: true, systemKey: true },
-  });
+  const accounts = (await listAccounts(company.id)).filter((a) => a.systemKey);
   const byKey = new Map(accounts.map((a) => [a.systemKey!, a.id]));
 
   for (const component of components) {
@@ -241,33 +267,35 @@ export async function createTaxCodeAction(formData: FormData) {
     }
   }
 
-  await db.taxCode.create({
-    data: {
-      companyId: company.id,
-      code,
-      name: input.name,
-      jurisdiction: input.jurisdiction.toUpperCase(),
-      isZeroRated: input.treatment === "ZERO_RATED",
-      isExempt: input.treatment === "EXEMPT",
-      appliesToSales: input.appliesTo !== "PURCHASES",
-      appliesToPurchases: input.appliesTo !== "SALES",
-      effectiveFrom: toUtcDay(input.effectiveFrom),
-      components: {
-        create: components.map((component, order) => {
-          const keys = ACCOUNT_KEYS[component.kind];
-          return {
-            name: component.kind,
-            kind: component.kind,
-            rateMicro: component.rateMicro,
-            isRecoverable: keys.recoverable !== null,
-            compoundOnPrevious: component.compound,
-            liabilityAccountId: byKey.get(keys.liability) ?? null,
-            recoverableAccountId: keys.recoverable ? (byKey.get(keys.recoverable) ?? null) : null,
-            sortOrder: order,
-          };
-        }),
-      },
-    },
+  await createTaxCode({
+    companyId: company.id,
+    code,
+    name: input.name,
+    description: null,
+    jurisdiction: input.jurisdiction.toUpperCase(),
+    isZeroRated: input.treatment === "ZERO_RATED",
+    isExempt: input.treatment === "EXEMPT",
+    isDefaultSales: false,
+    isDefaultPurchase: false,
+    appliesToSales: input.appliesTo !== "PURCHASES",
+    appliesToPurchases: input.appliesTo !== "SALES",
+    effectiveFrom: toUtcDay(input.effectiveFrom),
+    effectiveTo: null,
+    isActive: true,
+    components: components.map((component, order) => {
+      const keys = ACCOUNT_KEYS[component.kind];
+      return {
+        id: newId(),
+        name: component.kind,
+        kind: component.kind,
+        rateMicro: component.rateMicro,
+        isRecoverable: keys.recoverable !== null,
+        compoundOnPrevious: component.compound,
+        liabilityAccountId: byKey.get(keys.liability) ?? null,
+        recoverableAccountId: keys.recoverable ? (byKey.get(keys.recoverable) ?? null) : null,
+        sortOrder: order,
+      };
+    }),
   });
 
   await recordAudit({
@@ -336,16 +364,17 @@ export async function addProvincialTaxCodesAction(province: string) {
  */
 export async function endDateTaxCodeAction(taxCodeId: string, effectiveTo: string) {
   const { company, user } = await requireCapability(CAPABILITIES.TAX_SETTINGS);
-  const code = await db.taxCode.findFirst({ where: { id: taxCodeId, companyId: company.id } });
+  const code = await getTaxCode(company.id, taxCodeId);
   if (!code) return { error: "Tax code not found in this company." };
   if (!effectiveTo) return { error: "Choose the last day this code applies." };
 
   const end = toUtcDay(effectiveTo);
   if (end < code.effectiveFrom) return { error: "The end date cannot be before the code takes effect." };
 
-  await db.taxCode.update({
-    where: { id: taxCodeId },
-    data: { effectiveTo: end, isDefaultSales: false, isDefaultPurchase: false },
+  await updateTaxCode(company.id, taxCodeId, {
+    effectiveTo: end,
+    isDefaultSales: false,
+    isDefaultPurchase: false,
   });
   await recordAudit({
     companyId: company.id,
@@ -362,13 +391,13 @@ export async function endDateTaxCodeAction(taxCodeId: string, effectiveTo: strin
 
 export async function setTaxCodeActiveAction(taxCodeId: string, isActive: boolean) {
   const { company, user } = await requireCapability(CAPABILITIES.TAX_SETTINGS);
-  const code = await db.taxCode.findFirst({ where: { id: taxCodeId, companyId: company.id } });
+  const code = await getTaxCode(company.id, taxCodeId);
   if (!code) return { error: "Tax code not found in this company." };
   if (!isActive && (code.isDefaultSales || code.isDefaultPurchase)) {
     return { error: `${code.code} is a default code. Make another code the default first.` };
   }
 
-  await db.taxCode.update({ where: { id: taxCodeId }, data: { isActive } });
+  await updateTaxCode(company.id, taxCodeId, { isActive });
   await recordAudit({
     companyId: company.id,
     userId: user.id,
@@ -383,17 +412,18 @@ export async function setTaxCodeActiveAction(taxCodeId: string, isActive: boolea
 
 export async function setDefaultTaxCodeAction(taxCodeId: string, scope: "SALES" | "PURCHASES") {
   const { company, user } = await requireCapability(CAPABILITIES.TAX_SETTINGS);
-  const code = await db.taxCode.findFirst({ where: { id: taxCodeId, companyId: company.id } });
+  const code = await getTaxCode(company.id, taxCodeId);
   if (!code) return { error: "Tax code not found in this company." };
   if (!code.isActive) return { error: `${code.code} is archived and cannot be a default.` };
   if (scope === "SALES" && !code.appliesToSales) return { error: `${code.code} does not apply to sales.` };
   if (scope === "PURCHASES" && !code.appliesToPurchases) return { error: `${code.code} does not apply to purchases.` };
 
   const field = scope === "SALES" ? "isDefaultSales" : "isDefaultPurchase";
-  await db.$transaction([
-    db.taxCode.updateMany({ where: { companyId: company.id }, data: { [field]: false } }),
-    db.taxCode.update({ where: { id: taxCodeId }, data: { [field]: true } }),
-  ]);
+  const all = await listTaxCodes(company.id);
+  for (const c of all) {
+    if (c.id !== taxCodeId && c[field]) await updateTaxCode(company.id, c.id, { [field]: false });
+  }
+  await updateTaxCode(company.id, taxCodeId, { [field]: true });
 
   await recordAudit({
     companyId: company.id,
