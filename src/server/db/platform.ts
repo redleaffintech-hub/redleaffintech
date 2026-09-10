@@ -219,6 +219,22 @@ export async function markUserTokenUsed(id: string): Promise<void> {
   await top("userTokens").doc(id).update({ usedAt: encTok({ usedAt: new Date() }).usedAt });
 }
 
+/** Spend (mark used) every unused token a user holds for the given purposes. */
+export async function spendUserTokens(userId: string, purposes: string[]): Promise<void> {
+  const snap = await top("userTokens").where("userId", "==", userId).get();
+  const now = encTok({ usedAt: new Date() }).usedAt;
+  const batch = top("userTokens").firestore.batch();
+  let n = 0;
+  for (const d of snap.docs) {
+    const t = d.data();
+    if (!t.usedAt && purposes.includes(t.purpose)) {
+      batch.update(d.ref, { usedAt: now });
+      n++;
+    }
+  }
+  if (n) await batch.commit();
+}
+
 const { encode: encAttempt, decode: decAttempt } = converter<AuthAttempt>(["createdAt"]);
 export async function recordAuthAttempt(
   input: Omit<AuthAttempt, "id" | "createdAt">,

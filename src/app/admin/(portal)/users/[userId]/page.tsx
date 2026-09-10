@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requirePlatformAdmin } from "@/server/admin/guard";
-import { getUser } from "@/server/admin/users";
+import { getUserForAdmin } from "@/server/admin/users";
 import { STEP_UP_WINDOW_MINUTES } from "@/server/admin/session";
 import { db } from "@/lib/db";
 import { formatDate, formatDateTime, relativeTime } from "@/lib/dates";
@@ -31,7 +31,7 @@ export default async function UserDetailPage({ params }: { params: AdminParams<"
   const actor = await requirePlatformAdmin();
   const { userId } = await params;
 
-  const user = await getUser(userId);
+  const user = await getUserForAdmin(userId);
   if (!user) notFound();
 
   // Which of their memberships is the last active PRIMARY of its company — the

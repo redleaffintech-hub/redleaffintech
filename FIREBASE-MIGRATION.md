@@ -361,8 +361,17 @@ Documented as a deliberate deviation from strict single-transaction atomicity.
     the plan doc — no child tables), `publishPlan` (writes a new `planVersions`
     doc + the `publishedVersionId` pointer), `archivePlan` / `reactivatePlan` /
     `setPlanVisibility` / `reorderPlans` / `deletePlan`. Validation pure.
-  - [ ] **6c‑5 — admin data modules**: `admin/clients.ts`,
-    `admin/subscriptions.ts`, `admin/users.ts`.
+  - [x] **6c‑5 — user + membership admin.** `admin/users.ts` — `listUsers`
+    (all users + memberships fetched and filtered/paginated in memory — no
+    Firestore text search), `getUserForAdmin` (renamed from `getUser`; rich
+    shape with memberships, subscription status, live sessions), `createUser`,
+    `grantMembership` / `changeMembershipRole` / `setMembershipStatus` /
+    `removeMembership` (membershipId = `companyId__userId`; the "last active
+    PRIMARY" guard re-checked against the company's memberships), `issuePasswordReset`
+    (`spendUserTokens` + new token + `revokeSessionsForUser`), `forceSignOut`,
+    `updateUserProfile` (moves the `userEmails` guard doc). Both audit trails
+    (platform + tenant) preserved.
+  - [ ] **6c‑6 — admin data modules**: `admin/clients.ts`, `admin/subscriptions.ts`.
   - [ ] **6d–6h — `src/app/**`**: sales, purchases, accounting/banking/tax,
     company/hr/payroll/inventory, reports/dashboard, admin pages, login + api
     routes + marketing. `reports/exports.ts` folds in here.
