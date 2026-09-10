@@ -1,0 +1,43 @@
+# Firebase App Hosting backend configuration.
+# https://firebase.google.com/docs/app-hosting/configure
+#
+# App Hosting builds the Next.js app and runs it on Cloud Run. It requires the
+# Blaze (pay-as-you-go) billing plan on the Firebase project — there is no free
+# tier for App Hosting. Within Blaze there is a small monthly no-cost allowance;
+# beyond it, billing is per Cloud Run vCPU/memory-second and per GB egress.
+
+runConfig:
+  # Keep one instance warm so an authenticated accounting app is not paying a
+  # cold-start tax on the first request after every idle period. Set to 0 to
+  # trade latency for cost.
+  minInstances: 0
+  maxInstances: 4
+  concurrency: 80
+  cpu: 1
+  memoryMiB: 512
+
+env:
+  # Firebase Admin SDK auto-discovers project + credentials on App Hosting via
+  # Application Default Credentials, so no service-account key is needed here.
+  - variable: FIREBASE_PROJECT_ID
+    value: redleaf-fintech-e4c4d
+    availability:
+      - BUILD
+      - RUNTIME
+
+  # Public site origin — baked into the client bundle at build time.
+  - variable: NEXT_PUBLIC_SITE_URL
+    value: https://redleaf-fintech-e4c4d.web.app
+    availability:
+      - BUILD
+      - RUNTIME
+
+  # Session signing secret. Stored in Cloud Secret Manager, not in this file.
+  # Create with: firebase apphosting:secrets:set SESSION_SECRET
+  - variable: SESSION_SECRET
+    secret: SESSION_SECRET
+
+  - variable: CONTACT_EMAIL
+    value: hello@redleaffintech.com
+    availability:
+      - RUNTIME

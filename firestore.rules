@@ -1,0 +1,20 @@
+rules_version = '2';
+
+// Red Leaf Fintech — Firestore security rules
+//
+// The application NEVER talks to Firestore from the browser. Every read and
+// write goes through Next.js server code using the Firebase Admin SDK, which
+// bypasses these rules entirely. Client access is therefore denied outright.
+//
+// If a future feature genuinely needs direct client reads (e.g. a realtime
+// notification badge), add a narrowly-scoped allow for that one path and
+// nothing else. Do not open blanket tenant access "to make it work" — the
+// tenant boundary is enforced in src/server, not here.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
