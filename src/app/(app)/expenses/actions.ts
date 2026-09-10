@@ -2,11 +2,13 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { db } from "@/lib/db";
 import { toCents } from "@/lib/money";
 import { CAPABILITIES } from "@/lib/permissions";
 import { requireCapability, requireCompany } from "@/server/auth/context";
-import { createExpense } from "@/server/documents/expenses";
+import { createExpense } from "@/server/documents/expenses-fs";
+import { listAccounts } from "@/server/db/accounts";
+import { listTaxCodes } from "@/server/db/tax-codes";
+import { listVendors } from "@/server/db/vendors";
 
 const schema = z.object({
   date: z.string(),
@@ -58,27 +60,21 @@ export async function createExpenseAction(formData: FormData) {
 
 export async function expenseFormOptions() {
   const { company } = await requireCompany();
-  const [paymentAccounts, expenseAccounts, taxCodes, vendors] = await Promise.all([
-    db.account.findMany({
-      where: { companyId: company.id, isActive: true, subtype: { in: ["BANK", "CASH", "CREDIT_CARD"] } },
-      orderBy: { code: "asc" },
-      select: { id: true, code: true, name: true, subtype: true },
-    }),
-    db.account.findMany({
-      where: { companyId: company.id, isActive: true, type: { in: ["EXPENSE", "ASSET"] } },
-      orderBy: { code: "asc" },
-      select: { id: true, code: true, name: true, type: true },
-    }),
-    db.taxCode.findMany({
-      where: { companyId: company.id, isActive: true, appliesToPurchases: true },
-      orderBy: { code: "asc" },
-      include: { components: true },
-    }),
-    db.vendor.findMany({
-      where: { companyId: company.id, isActive: true },
-      orderBy: { name: "asc" },
-      select: { id: true, name: true, taxCodeId: true },
-    }),
+  const [accounts, allTaxCodes, vendorRows] = await Promise.all([
+    listAccounts(company.id),
+    listTaxCodes(company.id, { activeOnly: true }),
+    listVendors(company.id, { activeOnly: true }),
   ]);
+  const active = accounts.filter((a) => a.isActive).sort((a, b) => a.code.localeCompare(b.code));
+  const paymentAccounts = active
+    .filter((a) => ["BANK", "CASH", "CREDIT_CARD"].includes(a.subtype))
+    .map((a) => ({ id: a.id, code: a.code, name: a.name, subtype: a.subtype }));
+  const expenseAccounts = active
+    .filter((a) => ["EXPENSE", "ASSET"].includes(a.type))
+    .map((a) => ({ id: a.id, code: a.code, name: a.name, type: a.type }));
+  const taxCodes = allTaxCodes
+    .filter((c) => c.appliesToPurchases)
+    .sort((a, b) => a.code.localeCompare(b.code));
+  const vendors = vendorRows.map((v) => ({ id: v.id, name: v.name, taxCodeId: v.taxCodeId }));
   return { paymentAccounts, expenseAccounts, taxCodes, vendors };
 }

@@ -1,11 +1,12 @@
 import Link from "next/link";
-import { db } from "@/lib/db";
-import { contains } from "@/lib/search";
+import { expenses as expensesRepo } from "@/server/db/expenses";
+import { getVendor } from "@/server/db/vendors";
+import { listAccounts } from "@/server/db/accounts";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
 import { fiscalYearOf, fiscalYearRange, isoDate, toUtcDay, today, formatDate } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
-import { Badge, Card, EmptyState, LinkButton, Money, PageHeader, StatusBadge, Table, Td, Th, Tr } from "@/components/ui";
+import { Card, EmptyState, LinkButton, Money, PageHeader, StatusBadge, Table, Td, Th, Tr } from "@/components/ui";
 import { FilterBar, RangePicker } from "@/components/filter-bar";
 import { Icon } from "@/components/shell/icons";
 
@@ -22,29 +23,44 @@ export default async function ExpensesPage({ searchParams }: PageProps<"/expense
   const status = typeof params.status === "string" ? params.status : "";
   const query = typeof params.q === "string" ? params.q : "";
 
-  const [expenses, counts] = await Promise.all([
-    db.expense.findMany({
-      where: {
-        companyId: company.id,
-        date: { gte: from, lte: to },
-        ...(status ? { status } : {}),
-        ...(query ? { OR: [{ number: contains(query) }, { payeeName: contains(query) }, { memo: contains(query) }] } : {}),
-      },
-      include: {
-        vendor: { select: { id: true, name: true } },
-        lines: { include: { account: { select: { code: true, name: true } } } },
-      },
-      orderBy: { date: "desc" },
-      take: 150,
-    }),
-    db.expense.groupBy({
-      by: ["status"],
-      where: { companyId: company.id, date: { gte: from, lte: to } },
-      _count: true,
-    }),
+  const q = query.toLowerCase();
+  const [allExpenses, accounts] = await Promise.all([
+    expensesRepo.list(company.id, { orderBy: "date", direction: "desc" }),
+    listAccounts(company.id),
   ]);
+  const accountById = new Map(accounts.map((a) => [a.id, a]));
 
-  const countOf = (s: string) => counts.find((c) => c.status === s)?._count ?? 0;
+  const inPeriod = allExpenses.filter((e) => e.date >= from && e.date <= to);
+  const statusCount = new Map<string, number>();
+  for (const e of inPeriod) statusCount.set(e.status, (statusCount.get(e.status) ?? 0) + 1);
+  const countOf = (s: string) => statusCount.get(s) ?? 0;
+
+  const filtered = inPeriod
+    .filter((e) => !status || e.status === status)
+    .filter(
+      (e) =>
+        !q ||
+        e.number.toLowerCase().includes(q) ||
+        (e.payeeName ?? "").toLowerCase().includes(q) ||
+        (e.memo ?? "").toLowerCase().includes(q),
+    )
+    .slice(0, 150);
+
+  const vendorNames = new Map<string, string>();
+  await Promise.all(
+    [...new Set(filtered.map((e) => e.vendorId).filter((x): x is string => Boolean(x)))].map(async (id) => {
+      vendorNames.set(id, (await getVendor(company.id, id))?.name ?? "—");
+    }),
+  );
+
+  const expenses = filtered.map((e) => ({
+    ...e,
+    vendor: e.vendorId ? { id: e.vendorId, name: vendorNames.get(e.vendorId) ?? "—" } : null,
+    lines: e.lines.map((l) => ({
+      ...l,
+      account: accountById.get(l.accountId) ?? { code: "", name: "" },
+    })),
+  }));
   const totalCents = expenses.filter((e) => e.status !== "VOID").reduce((s, e) => s + e.totalCents, 0);
   const taxCents = expenses.filter((e) => e.status !== "VOID").reduce((s, e) => s + e.taxCents, 0);
 
