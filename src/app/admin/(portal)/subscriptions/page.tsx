@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { requirePlatformAdmin } from "@/server/admin/guard";
-import { db } from "@/lib/db";
+import { subscriptions as subscriptionsRepo } from "@/server/db/platform";
+import { listAllCompanies } from "@/server/db/companies";
+import { listMembershipsForCompany } from "@/server/db/company-users";
 import { sellablePlans } from "@/server/plans/catalogue";
 import { formatDate } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
@@ -24,10 +26,10 @@ const first = (value: string | string[] | undefined) => (Array.isArray(value) ? 
 const PER_PAGE = 25;
 
 const SORTS = {
-  updated: { label: "Recently changed", orderBy: { updatedAt: "desc" } },
-  trial: { label: "Trial ending soonest", orderBy: { trialEndsAt: "asc" } },
-  renewal: { label: "Renewing soonest", orderBy: { currentPeriodEnd: "asc" } },
-  created: { label: "Newest first", orderBy: { createdAt: "desc" } },
+  updated: { label: "Recently changed", field: "updatedAt" as const, dir: "desc" as const },
+  trial: { label: "Trial ending soonest", field: "trialEndsAt" as const, dir: "asc" as const },
+  renewal: { label: "Renewing soonest", field: "currentPeriodEnd" as const, dir: "asc" as const },
+  created: { label: "Newest first", field: "createdAt" as const, dir: "desc" as const },
 } as const;
 
 type Sort = keyof typeof SORTS;
@@ -44,47 +46,46 @@ export default async function SubscriptionsPage({ searchParams }: { searchParams
   const sort: Sort = sortParam in SORTS ? sortParam : "updated";
   const page = Math.max(Number(first(params.page) ?? 1) || 1, 1);
 
-  const where: Record<string, unknown> = {};
-  if (status) where.status = status;
-  if (attention) where.status = { in: ATTENTION_STATUSES };
-  if (plan) where.plan = plan;
-  if (q) where.company = { name: { contains: q, mode: "insensitive" } };
-
-  const [total, rows, plans, seatCounts] = await Promise.all([
-    db.subscription.count({ where }),
-    db.subscription.findMany({
-      where,
-      orderBy: SORTS[sort].orderBy as never,
-      skip: (page - 1) * PER_PAGE,
-      take: PER_PAGE,
-      select: {
-        id: true,
-        companyId: true,
-        plan: true,
-        status: true,
-        billingCycle: true,
-        currency: true,
-        priceCents: true,
-        seats: true,
-        seatsOverridden: true,
-        trialEndsAt: true,
-        currentPeriodStart: true,
-        currentPeriodEnd: true,
-        cancelAt: true,
-        providerRef: true,
-        startedAt: true,
-        company: { select: { name: true } },
-      },
-    }),
+  const qLc = q.toLowerCase();
+  const [allSubs, plans, companies] = await Promise.all([
+    subscriptionsRepo.list(),
     sellablePlans(),
-    db.companyUser.groupBy({
-      by: ["companyId"],
-      where: { status: { in: ["ACTIVE", "INVITED"] } },
-      _count: { _all: true },
-    }),
+    listAllCompanies(),
   ]);
+  const companyById = new Map(companies.map((c) => [c.id, c]));
 
-  const usage = new Map(seatCounts.map((row) => [row.companyId, row._count._all]));
+  const filtered = allSubs
+    .filter((s) => {
+      if (attention) return ATTENTION_STATUSES.includes(s.status as never);
+      return !status || s.status === status;
+    })
+    .filter((s) => !plan || s.plan === plan)
+    .filter((s) => !q || (companyById.get(s.companyId)?.name ?? "").toLowerCase().includes(qLc));
+
+  const { field, dir } = SORTS[sort];
+  filtered.sort((a, b) => {
+    const av = (a as unknown as Record<string, unknown>)[field];
+    const bv = (b as unknown as Record<string, unknown>)[field];
+    const at = av instanceof Date ? av.getTime() : av == null ? (dir === "asc" ? Infinity : -Infinity) : 0;
+    const bt = bv instanceof Date ? bv.getTime() : bv == null ? (dir === "asc" ? Infinity : -Infinity) : 0;
+    return dir === "asc" ? at - bt : bt - at;
+  });
+
+  const total = filtered.length;
+  const rawRows = filtered.slice((page - 1) * PER_PAGE, page * PER_PAGE);
+
+  const usage = new Map<string, number>();
+  await Promise.all(
+    [...new Set(rawRows.map((r) => r.companyId))].map(async (cid) => {
+      const members = await listMembershipsForCompany(cid);
+      usage.set(cid, members.filter((m) => ["ACTIVE", "INVITED"].includes(m.status)).length);
+    }),
+  );
+
+  const rows = rawRows.map((s) => ({
+    ...s,
+    company: { name: companyById.get(s.companyId)?.name ?? "—" },
+  }));
 
   return (
     <>

@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { db } from "@/lib/db";
+import { regionalTaxRates } from "@/server/db/platform";
 import { requirePlatformAdmin } from "@/server/admin/guard";
 import { AdminCard, AdminPageHeader } from "@/components/admin/ui";
 import type { AdminParams } from "@/lib/admin-constants";
@@ -15,7 +15,7 @@ export default async function EditRegionalTaxRatePage({ params }: { params: Admi
   const actor = await requirePlatformAdmin();
   const { id } = await params;
 
-  const rate = await db.regionalTaxRate.findUnique({ where: { id } });
+  const rate = await regionalTaxRates.get(id);
   if (!rate) notFound();
 
   // A rate that has come into force since this link was shown is not

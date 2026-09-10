@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { db } from "@/lib/db";
+import { subscriptions as subscriptionsRepo } from "@/server/db/platform";
 import {
   addNote,
   assignPlan,
@@ -24,10 +24,7 @@ import { bool, date, int, optionalStr, runAdminAction, str } from "@/server/admi
  */
 
 async function refresh(subscriptionId: string) {
-  const subscription = await db.subscription.findUnique({
-    where: { id: subscriptionId },
-    select: { companyId: true },
-  });
+  const subscription = await subscriptionsRepo.get(subscriptionId);
   revalidatePath(`/admin/subscriptions/${subscriptionId}`);
   revalidatePath("/admin/subscriptions");
   revalidatePath("/admin");

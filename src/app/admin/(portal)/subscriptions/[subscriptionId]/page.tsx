@@ -1,9 +1,16 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requirePlatformAdmin } from "@/server/admin/guard";
-import { seatsUsed as countSeats, SUBSCRIPTION_DETAIL_SELECT } from "@/server/admin/subscriptions";
+import { seatsUsed as countSeats } from "@/server/admin/subscriptions";
 import { sellablePlans } from "@/server/plans/catalogue";
-import { db } from "@/lib/db";
+import {
+  subscriptions as subscriptionsRepo,
+  plans as plansRepo,
+  planVersions as planVersionsRepo,
+  listSubscriptionEvents,
+  listSubscriptionNotes,
+} from "@/server/db/platform";
+import { getCompany } from "@/server/db/companies";
 import { formatDate, formatDateTime } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
 import { CYCLE_BILLED_AS, CYCLE_LABELS, type BillingCycle } from "@/lib/plans";
@@ -22,11 +29,9 @@ import type { AdminParams } from "@/lib/admin-constants";
 
 export async function generateMetadata({ params }: { params: AdminParams<"subscriptionId"> }) {
   const { subscriptionId } = await params;
-  const subscription = await db.subscription.findUnique({
-    where: { id: subscriptionId },
-    select: { company: { select: { name: true } } },
-  });
-  return { title: subscription ? `${subscription.company.name} subscription` : "Subscription" };
+  const subscription = await subscriptionsRepo.get(subscriptionId);
+  const company = subscription ? await getCompany(subscription.companyId) : null;
+  return { title: company ? `${company.name} subscription` : "Subscription" };
 }
 
 /**
@@ -44,20 +49,34 @@ export default async function SubscriptionDetailPage({
   const actor = await requirePlatformAdmin();
   const { subscriptionId } = await params;
 
-  const subscription = await db.subscription.findUnique({
-    where: { id: subscriptionId },
-    select: {
-      ...SUBSCRIPTION_DETAIL_SELECT,
-      company: { select: { id: true, name: true, isReadOnly: true } },
-      planRecord: { select: { id: true, code: true, name: true, seats: true } },
-      planVersion: { select: { version: true, publishedAt: true } },
-      events: { orderBy: { createdAt: "desc" }, take: 25 },
-      notes: { orderBy: { createdAt: "desc" }, take: 20 },
-    },
-  });
-  if (!subscription) notFound();
+  const raw = await subscriptionsRepo.get(subscriptionId);
+  if (!raw) notFound();
 
-  const [seatsUsed, plans] = await Promise.all([countSeats(subscription.companyId), sellablePlans()]);
+  const [companyRecord, planRecord, planVersion, events, notes, seatsUsed, plans] = await Promise.all([
+    getCompany(raw.companyId),
+    raw.planId ? plansRepo.get(raw.planId) : Promise.resolve(null),
+    raw.planVersionId ? planVersionsRepo.get(raw.planVersionId) : Promise.resolve(null),
+    listSubscriptionEvents(raw.id),
+    listSubscriptionNotes(raw.id),
+    countSeats(raw.companyId),
+    sellablePlans(),
+  ]);
+  const subscription = {
+    ...raw,
+    company: {
+      id: raw.companyId,
+      name: companyRecord?.name ?? "—",
+      isReadOnly: companyRecord?.isReadOnly ?? false,
+    },
+    planRecord: planRecord
+      ? { id: planRecord.id, code: planRecord.code, name: planRecord.name, seats: planRecord.seats }
+      : null,
+    planVersion: planVersion
+      ? { version: planVersion.version, publishedAt: planVersion.publishedAt }
+      : null,
+    events: [...events].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()).slice(0, 25),
+    notes: [...notes].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()).slice(0, 20),
+  };
 
   const livePlan = plans.find((plan) => plan.code === subscription.plan);
   const livePrice = livePlan?.prices[subscription.billingCycle as BillingCycle]?.cycleAmountCents ?? null;

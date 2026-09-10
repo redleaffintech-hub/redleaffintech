@@ -1,8 +1,8 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { db } from "@/lib/db";
 import { PROVINCES } from "@/lib/enums";
+import { regionalTaxRates } from "@/server/db/platform";
 import { recordPlatformAudit } from "@/server/admin/audit";
 import { bool, date, optionalStr, runAdminAction, str } from "@/server/admin/run-action";
 import {
@@ -85,19 +85,17 @@ export async function createRateAction(formData: FormData) {
     const reason = optionalStr(formData, "reason") ?? null;
     if (!reason) return { error: "A reason is required to publish a rate change." };
 
-    const created = await db.regionalTaxRate.create({
-      data: {
-        province: input.province,
-        federalType: input.federalType,
-        federalRateMicro: input.federalRateMicro,
-        provincialType: input.provincialType,
-        provincialRateMicro: input.provincialRateMicro,
-        effectiveFrom: input.effectiveFrom,
-        effectiveTo: input.effectiveTo,
-        isActive: true,
-        createdById: actor.id,
-        reason,
-      },
+    const created = await regionalTaxRates.create({
+      province: input.province,
+      federalType: input.federalType,
+      federalRateMicro: input.federalRateMicro,
+      provincialType: input.provincialType,
+      provincialRateMicro: input.provincialRateMicro,
+      effectiveFrom: input.effectiveFrom,
+      effectiveTo: input.effectiveTo,
+      isActive: true,
+      createdById: actor.id,
+      reason,
     });
 
     await recordPlatformAudit({
@@ -121,7 +119,7 @@ export async function updateRateAction(formData: FormData) {
     const id = str(formData, "id");
     if (!id) return { error: "Missing rate id." };
 
-    const existing = await db.regionalTaxRate.findUnique({ where: { id } });
+    const existing = await regionalTaxRates.get(id);
     if (!existing) return { error: "That rate no longer exists." };
 
     // The only real control in this whole action: re-checked against the
@@ -147,19 +145,17 @@ export async function updateRateAction(formData: FormData) {
     const reason = optionalStr(formData, "reason") ?? null;
     if (!reason) return { error: "A reason is required to publish a rate change." };
 
-    const updated = await db.regionalTaxRate.update({
-      where: { id },
-      data: {
-        province: input.province,
-        federalType: input.federalType,
-        federalRateMicro: input.federalRateMicro,
-        provincialType: input.provincialType,
-        provincialRateMicro: input.provincialRateMicro,
-        effectiveFrom: input.effectiveFrom,
-        effectiveTo: input.effectiveTo,
-        reason,
-      },
+    await regionalTaxRates.update(id, {
+      province: input.province,
+      federalType: input.federalType,
+      federalRateMicro: input.federalRateMicro,
+      provincialType: input.provincialType,
+      provincialRateMicro: input.provincialRateMicro,
+      effectiveFrom: input.effectiveFrom,
+      effectiveTo: input.effectiveTo,
+      reason,
     });
+    const updated = (await regionalTaxRates.get(id)) ?? existing;
 
     await recordPlatformAudit({
       actorUserId: actor.id,
@@ -188,11 +184,12 @@ export async function endRateAction(formData: FormData) {
     if (!effectiveTo) return { error: "Choose the date this rate stops applying." };
     if (!reason) return { error: "Give a reason for ending this rate." };
 
-    const existing = await db.regionalTaxRate.findUnique({ where: { id } });
+    const existing = await regionalTaxRates.get(id);
     if (!existing) return { error: "That rate no longer exists." };
     if (effectiveTo <= existing.effectiveFrom) return { error: "The end date must be after the rate's effective date." };
 
-    const updated = await db.regionalTaxRate.update({ where: { id }, data: { effectiveTo, reason } });
+    await regionalTaxRates.update(id, { effectiveTo, reason });
+    const updated = (await regionalTaxRates.get(id)) ?? existing;
 
     await recordPlatformAudit({
       actorUserId: actor.id,
@@ -218,10 +215,11 @@ export async function setRateActiveAction(formData: FormData) {
     const reason = optionalStr(formData, "reason") ?? null;
     if (!id) return { error: "Missing rate id." };
 
-    const existing = await db.regionalTaxRate.findUnique({ where: { id } });
+    const existing = await regionalTaxRates.get(id);
     if (!existing) return { error: "That rate no longer exists." };
 
-    const updated = await db.regionalTaxRate.update({ where: { id }, data: { isActive } });
+    await regionalTaxRates.update(id, { isActive });
+    const updated = (await regionalTaxRates.get(id)) ?? existing;
 
     await recordPlatformAudit({
       actorUserId: actor.id,

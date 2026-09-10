@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { db } from "@/lib/db";
+import { regionalTaxRates } from "@/server/db/platform";
 import { requirePlatformAdmin } from "@/server/admin/guard";
 import { PROVINCES } from "@/lib/enums";
 import { formatDate, formatDateTime } from "@/lib/dates";
@@ -27,9 +27,10 @@ function rateLabel(micro: number): string {
  */
 export default async function RegionalTaxRatesPage() {
   const actor = await requirePlatformAdmin();
-  const rates = await db.regionalTaxRate.findMany({
-    orderBy: [{ province: "asc" }, { effectiveFrom: "desc" }],
-  });
+  const rates = (await regionalTaxRates.list()).sort(
+    (a, b) =>
+      a.province.localeCompare(b.province) || b.effectiveFrom.getTime() - a.effectiveFrom.getTime(),
+  );
 
   const now = new Date();
   const currentCount = rates.filter(

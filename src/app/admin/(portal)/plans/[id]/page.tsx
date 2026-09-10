@@ -3,7 +3,8 @@ import { notFound } from "next/navigation";
 import { requirePlatformAdmin } from "@/server/admin/guard";
 import { getPlanForAdmin } from "@/server/plans/admin";
 import { planShapeFromRow } from "@/server/plans/catalogue";
-import { db } from "@/lib/db";
+import { plans as plansRepo, planVersions as planVersionsRepo, subscriptions as subscriptionsRepo } from "@/server/db/platform";
+import { getCompany } from "@/server/db/companies";
 import { formatDate, formatDateTime } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
 import {
@@ -23,7 +24,7 @@ import type { AdminParams } from "@/lib/admin-constants";
 
 export async function generateMetadata({ params }: { params: AdminParams<"id"> }) {
   const { id } = await params;
-  const plan = await db.plan.findUnique({ where: { id }, select: { name: true } });
+  const plan = await plansRepo.get(id);
   return { title: plan?.name ?? "Plan" };
 }
 
@@ -49,20 +50,26 @@ export default async function PlanDetailPage({ params }: { params: AdminParams<"
     : null;
   const published = publishedVersion ? safeParse(publishedVersion.snapshot) : null;
 
-  const subscriptions = await db.subscription.findMany({
-    where: { planId: plan.id },
-    orderBy: { createdAt: "desc" },
-    take: 10,
-    select: {
-      id: true,
-      status: true,
-      billingCycle: true,
-      priceCents: true,
-      currency: true,
-      company: { select: { id: true, name: true } },
-      planVersion: { select: { version: true } },
-    },
-  });
+  const rawSubs = (await subscriptionsRepo.list({ where: [["planId", "==", plan.id]] }))
+    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+    .slice(0, 10);
+  const subscriptions = await Promise.all(
+    rawSubs.map(async (s) => {
+      const [company, planVersion] = await Promise.all([
+        s.companyId ? getCompany(s.companyId) : Promise.resolve(null),
+        s.planVersionId ? planVersionsRepo.get(s.planVersionId) : Promise.resolve(null),
+      ]);
+      return {
+        id: s.id,
+        status: s.status,
+        billingCycle: s.billingCycle,
+        priceCents: s.priceCents,
+        currency: s.currency,
+        company: { id: s.companyId, name: company?.name ?? "—" },
+        planVersion: planVersion ? { version: planVersion.version } : null,
+      };
+    }),
+  );
 
   const differences = published ? diff(published, working) : [];
 

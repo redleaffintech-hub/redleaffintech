@@ -199,6 +199,17 @@ export async function updateSession(token: string, data: Partial<Session>): Prom
 export async function revokeSessionByToken(token: string): Promise<void> {
   await top("sessions").doc(token).set({ revokedAt: encSess({ revokedAt: new Date() }).revokedAt }, { merge: true });
 }
+export async function listSessionsForUser(
+  userId: string,
+  opts: { scope?: string; activeOnly?: boolean } = {},
+): Promise<Session[]> {
+  let q: FirebaseFirestore.Query = top("sessions").where("userId", "==", userId);
+  if (opts.scope) q = q.where("scope", "==", opts.scope);
+  const snap = await q.get();
+  let rows = mapDocs(snap, decSess);
+  if (opts.activeOnly) rows = rows.filter((s) => !s.revokedAt && s.expiresAt > new Date());
+  return rows.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+}
 export async function revokeSessionsForUser(userId: string, scope?: string): Promise<number> {
   let q: FirebaseFirestore.Query = top("sessions").where("userId", "==", userId);
   if (scope) q = q.where("scope", "==", scope);

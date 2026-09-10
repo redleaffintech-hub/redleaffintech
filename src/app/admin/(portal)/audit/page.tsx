@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { requirePlatformAdmin } from "@/server/admin/guard";
 import { AUDIT_ACTION_LABELS, SENSITIVE_ACTIONS } from "@/server/admin/audit";
-import { db } from "@/lib/db";
+import { listPlatformAudit } from "@/server/db/platform";
 import { formatDateTime } from "@/lib/dates";
 import { AdminCard, AdminPageHeader, Pagination } from "@/components/admin/ui";
 import { adminInputClass } from "@/components/admin/forms";
@@ -32,20 +32,13 @@ export default async function AuditPage({ searchParams }: { searchParams: AdminS
   const actor = first(params.actor) ?? "";
   const page = Math.max(Number(first(params.page) ?? 1) || 1, 1);
 
-  const where: Record<string, unknown> = {};
-  if (action) where.action = action;
-  if (entityId) where.entityId = entityId;
-  if (actor) where.actorEmail = { contains: actor, mode: "insensitive" };
-
-  const [total, entries] = await Promise.all([
-    db.platformAuditLog.count({ where }),
-    db.platformAuditLog.findMany({
-      where,
-      orderBy: { createdAt: "desc" },
-      skip: (page - 1) * PER_PAGE,
-      take: PER_PAGE,
-    }),
-  ]);
+  const actorLc = actor.toLowerCase();
+  const matched = (await listPlatformAudit({ limit: 5000 }))
+    .filter((e) => !action || e.action === action)
+    .filter((e) => !entityId || e.entityId === entityId)
+    .filter((e) => !actor || (e.actorEmail ?? "").toLowerCase().includes(actorLc));
+  const total = matched.length;
+  const entries = matched.slice((page - 1) * PER_PAGE, page * PER_PAGE);
 
   const actions = Object.keys(AUDIT_ACTION_LABELS).sort((a, b) =>
     AUDIT_ACTION_LABELS[a].localeCompare(AUDIT_ACTION_LABELS[b]),

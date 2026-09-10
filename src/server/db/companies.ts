@@ -75,6 +75,12 @@ export async function listCompanies(ids: string[]): Promise<Company[]> {
   return snaps.filter((s) => s.exists).map((s) => decode(s.data()!, s.id));
 }
 
+/** Every company (platform admin lists). */
+export async function listAllCompanies(): Promise<Company[]> {
+  const snap = await db.collection("companies").get();
+  return snap.docs.map((d) => decode(d.data(), d.id));
+}
+
 export async function updateCompany(
   id: string,
   data: Partial<Company>,

@@ -1,6 +1,10 @@
-import { db } from "@/lib/db";
 import { requireCompany } from "@/server/auth/context";
-import { checkLedgerIntegrity } from "@/server/accounting/ledger";
+import { checkLedgerIntegrity } from "@/server/accounting/ledger-fs";
+import { listBankTransactions } from "@/server/db/banking";
+import { invoices as invoicesRepo } from "@/server/db/invoices";
+import { bills as billsRepo } from "@/server/db/bills";
+import { notifications as notificationsRepo } from "@/server/db/supporting";
+import { listFiscalPeriods } from "@/server/db/fiscal-periods";
 import { accessLevel, CAPABILITIES, type AccessLevel } from "@/lib/permissions";
 import { MainNav } from "@/components/shell/main-nav";
 import { Topbar } from "@/components/shell/topbar";
@@ -10,22 +14,25 @@ import { today, formatMonthLong } from "@/lib/dates";
 export default async function AppLayout({ children }: LayoutProps<"/">) {
   const { user, company, role, memberships } = await requireCompany();
 
-  const [bankQueue, overdue, approvals, notifications, integrity, currentPeriod] = await Promise.all([
-    db.bankTransaction.count({ where: { companyId: company.id, status: "UNMATCHED" } }),
-    db.invoice.count({ where: { companyId: company.id, status: "OVERDUE" } }),
-    db.bill.count({ where: { companyId: company.id, approvalStatus: "PENDING" } }),
-    db.notification.findMany({
-      where: { companyId: company.id, isRead: false },
-      orderBy: { createdAt: "desc" },
-      take: 8,
-      select: { id: true, title: true, body: true, severity: true, link: true },
-    }),
-    checkLedgerIntegrity(db, company.id),
-    db.fiscalPeriod.findFirst({
-      where: { companyId: company.id, startDate: { lte: today() }, endDate: { gte: today() } },
-      select: { name: true, status: true },
-    }),
+  const [bankTxns, allInvoices, allBills, allNotifications, integrity, periods] = await Promise.all([
+    listBankTransactions(company.id, { status: "UNMATCHED" }),
+    invoicesRepo.list(company.id),
+    billsRepo.list(company.id),
+    notificationsRepo.list(company.id),
+    checkLedgerIntegrity(company.id),
+    listFiscalPeriods(company.id),
   ]);
+  const bankQueue = bankTxns.length;
+  const overdue = allInvoices.filter((i) => i.status === "OVERDUE").length;
+  const approvals = allBills.filter((b) => b.approvalStatus === "PENDING").length;
+  const notifications = allNotifications
+    .filter((n) => !n.isRead)
+    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+    .slice(0, 8)
+    .map((n) => ({ id: n.id, title: n.title, body: n.body, severity: n.severity, link: n.link }));
+  const now = today();
+  const currentPeriod =
+    periods.find((p) => p.startDate <= now && p.endDate >= now) ?? null;
 
   // Resolve the whole capability map once so the sidebar can hide what this
   // role cannot see. The server still enforces it on every page.
