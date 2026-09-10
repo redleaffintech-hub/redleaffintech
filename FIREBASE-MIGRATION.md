@@ -272,10 +272,20 @@ Documented as a deliberate deviation from strict single-transaction atomicity.
   fiscalCalendarChanges + `dueRecurringTemplates`). `makeDocRepo` gained
   `embedLines` / `touchUpdatedAt` options for models without those columns.
   Indexes added. tsc + eslint clean.
-- [ ] **Phase 5e — the domain logic on top of 5d's repos:** bank import +
-  rule-matching + categorise→journal, monthly reconciliation, payroll pay-run
-  posting, recurring-template generation, fiscal-calendar change; plus
-  `reports/exports.ts` (CSV) and the plan/subscription/firm read paths.
+- [x] **Phase 5e — payroll, fiscal-calendar, bank categorise.**
+  `payroll/pay-runs-fs.ts` (create / update / delete / post / void — one
+  balanced journal, net pay recomputed server-side). `accounting/
+  fiscal-calendar-fs.ts` (`planFiscalYearChange` reads-only; `applyFiscalYear
+  Change` gathers every read up front then writes the period deletes/creates +
+  company update in one transaction; `resolveFiscalYearRange`).
+  `banking/categorize-fs.ts` (`categorizeTransaction` → journal with tax,
+  `unmatchTransaction` → reverse). Recurring-template *generation* has no
+  implementation in the Prisma app (just the model + a dashboard count), so
+  nothing to port.
+- [ ] **Phase 5f — the rest of banking** (OFX/CSV import, rule auto-apply,
+  match-to-invoice/bill, transfer detect/confirm, monthly reconciliation),
+  `reports/exports.ts` (CSV), and the firm / plan / subscription read+write
+  paths the app and admin portal use.
 - [ ] **Phase 5c — banking & reconciliation, HR, payroll, recurring, projects,
   budgets, attachments, notifications.**
 - [ ] **Phase 6 — rewire call sites**: every `src/app/**/actions.ts`, page and
