@@ -1,5 +1,6 @@
-import { db } from "@/lib/db";
-import { contains } from "@/lib/search";
+import { listCustomers } from "@/server/db/customers";
+import { listInvoicesForCustomer } from "@/server/db/invoices";
+import { getTaxCodesByIds } from "@/server/db/tax-codes";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
 import { Card, LinkButton, PageHeader } from "@/components/ui";
@@ -15,18 +16,23 @@ export default async function CustomersPage({ searchParams }: PageProps<"/sales/
   const query = typeof params.q === "string" ? params.q : "";
   const filter = typeof params.status === "string" ? params.status : "";
 
-  const customers = await db.customer.findMany({
-    where: {
-      companyId: company.id,
-      ...(filter === "ACTIVE" ? { isActive: true } : filter === "ARCHIVED" ? { isActive: false } : {}),
-      ...(query ? { OR: [{ name: contains(query) }, { email: contains(query) }] } : {}),
-    },
-    include: {
-      taxCode: { select: { code: true } },
-      invoices: { select: { totalCents: true, balanceCents: true, status: true } },
-    },
-    orderBy: { name: "asc" },
-  });
+  const q = query.toLowerCase();
+  const all = (await listCustomers(company.id)).filter(
+    (c) =>
+      (filter === "ACTIVE" ? c.isActive : filter === "ARCHIVED" ? !c.isActive : true) &&
+      (!q || c.name.toLowerCase().includes(q) || (c.email ?? "").toLowerCase().includes(q)),
+  );
+  const taxCodes = await getTaxCodesByIds(
+    company.id,
+    all.map((c) => c.taxCodeId).filter((id): id is string => Boolean(id)),
+  );
+  const customers = await Promise.all(
+    all.map(async (c) => ({
+      ...c,
+      taxCodeLabel: c.taxCodeId ? taxCodes.get(c.taxCodeId)?.code ?? null : null,
+      invoices: await listInvoicesForCustomer(company.id, c.id),
+    })),
+  );
 
   const rows: PartyRow[] = customers.map((customer) => ({
     id: customer.id,
@@ -37,10 +43,12 @@ export default async function CustomersPage({ searchParams }: PageProps<"/sales/
     province: customer.province,
     paymentTermsDays: customer.paymentTermsDays,
     isActive: customer.isActive,
-    taxCodeLabel: customer.taxCode?.code ?? null,
+    taxCodeLabel: customer.taxCodeLabel,
     openDocuments: customer.invoices.filter((i) => i.balanceCents > 0).length,
     outstandingCents: customer.invoices.reduce((s, i) => s + i.balanceCents, 0),
-    lifetimeCents: customer.invoices.filter((i) => i.status !== "VOID" && i.status !== "DRAFT").reduce((s, i) => s + i.totalCents, 0),
+    lifetimeCents: customer.invoices
+      .filter((i) => i.status !== "VOID" && i.status !== "DRAFT")
+      .reduce((s, i) => s + i.totalCents, 0),
   }));
 
   return (

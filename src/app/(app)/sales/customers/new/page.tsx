@@ -1,4 +1,4 @@
-import { db } from "@/lib/db";
+import { listTaxCodes } from "@/server/db/tax-codes";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
 import { Card, PageHeader } from "@/components/ui";
@@ -9,11 +9,9 @@ export const metadata = { title: "New customer" };
 export default async function NewCustomerPage() {
   const { company } = await requireCapability(CAPABILITIES.INVOICES);
 
-  const taxCodes = await db.taxCode.findMany({
-    where: { companyId: company.id, isActive: true, appliesToSales: true },
-    orderBy: { code: "asc" },
-    select: { id: true, code: true, name: true },
-  });
+  const taxCodes = (await listTaxCodes(company.id, { activeOnly: true }))
+    .filter((c) => c.appliesToSales)
+    .map((c) => ({ id: c.id, code: c.code, name: c.name }));
 
   return (
     <>

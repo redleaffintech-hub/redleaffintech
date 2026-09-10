@@ -2,10 +2,17 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { db } from "@/lib/db";
 import { PROVINCES } from "@/lib/enums";
 import { CAPABILITIES } from "@/lib/permissions";
 import { recordAudit, requireCapability } from "@/server/auth/context";
+import {
+  createCustomer,
+  getCustomer,
+  listCustomers,
+  updateCustomer,
+} from "@/server/db/customers";
+import { getTaxCode } from "@/server/db/tax-codes";
+import type { Customer } from "@/server/db/types";
 
 const provinceCodes = PROVINCES.map((p) => p.code);
 
@@ -83,40 +90,32 @@ export async function createCustomerAction(payload: string) {
 
   // Names are how a user identifies a customer in a dropdown; two identical ones
   // are almost always a duplicate rather than two real companies.
-  const clash = await db.customer.findFirst({
-    where: { companyId: company.id, name: { equals: input.name, mode: "insensitive" } },
-    select: { id: true, name: true },
-  });
+  const lower = input.name.toLowerCase();
+  const clash = (await listCustomers(company.id)).find((c) => c.name.toLowerCase() === lower);
   if (clash) return { error: `${clash.name} already exists as a customer.` };
 
-  if (input.taxCodeId) {
-    const code = await db.taxCode.findFirst({
-      where: { id: input.taxCodeId, companyId: company.id },
-      select: { id: true },
-    });
-    if (!code) return { error: "That tax code does not exist in this company." };
+  if (input.taxCodeId && !(await getTaxCode(company.id, input.taxCodeId))) {
+    return { error: "That tax code does not exist in this company." };
   }
 
-  const customer = await db.customer.create({
-    data: {
-      companyId: company.id,
-      name: input.name,
-      email: input.email || null,
-      phone: input.phone ?? null,
-      taxCodeId: input.taxCodeId ?? null,
-      paymentTermsDays: input.paymentTermsDays,
-      addressLine1: input.addressLine1 ?? null,
-      addressLine2: input.addressLine2 ?? null,
-      city: input.city ?? null,
-      province: input.province ?? null,
-      postalCode: input.postalCode ?? null,
-      shipToLine1: input.shipToLine1 ?? null,
-      shipToLine2: input.shipToLine2 ?? null,
-      shipToCity: input.shipToCity ?? null,
-      shipToProvince: input.shipToProvince ?? null,
-      shipToPostalCode: input.shipToPostalCode ?? null,
-      notes: input.notes ?? null,
-    },
+  const customer = await createCustomer({
+    companyId: company.id,
+    name: input.name,
+    email: input.email || null,
+    phone: input.phone ?? null,
+    taxCodeId: input.taxCodeId ?? null,
+    paymentTermsDays: input.paymentTermsDays,
+    addressLine1: input.addressLine1 ?? null,
+    addressLine2: input.addressLine2 ?? null,
+    city: input.city ?? null,
+    province: input.province ?? null,
+    postalCode: input.postalCode ?? null,
+    shipToLine1: input.shipToLine1 ?? null,
+    shipToLine2: input.shipToLine2 ?? null,
+    shipToCity: input.shipToCity ?? null,
+    shipToProvince: input.shipToProvince ?? null,
+    shipToPostalCode: input.shipToPostalCode ?? null,
+    notes: input.notes ?? null,
   });
 
   await recordAudit({
@@ -144,10 +143,7 @@ export async function createCustomerAction(payload: string) {
 export async function updateCustomerAction(customerId: string, payload: string) {
   const { company, user } = await requireCapability(CAPABILITIES.INVOICES);
 
-  const existing = await db.customer.findFirst({
-    where: { id: customerId, companyId: company.id },
-    select: { id: true },
-  });
+  const existing = await getCustomer(company.id, customerId);
   if (!existing) return { error: "That customer does not exist." };
 
   let raw: unknown;
@@ -161,45 +157,36 @@ export async function updateCustomerAction(customerId: string, payload: string) 
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Check the customer details." };
   const input = parsed.data;
 
-  const clash = await db.customer.findFirst({
-    where: {
-      companyId: company.id,
-      name: { equals: input.name, mode: "insensitive" },
-      NOT: { id: customerId },
-    },
-    select: { name: true },
-  });
+  const lower = input.name.toLowerCase();
+  const clash = (await listCustomers(company.id)).find(
+    (c) => c.id !== customerId && c.name.toLowerCase() === lower,
+  );
   if (clash) return { error: `${clash.name} already exists as a customer.` };
 
-  if (input.taxCodeId) {
-    const code = await db.taxCode.findFirst({
-      where: { id: input.taxCodeId, companyId: company.id },
-      select: { id: true },
-    });
-    if (!code) return { error: "That tax code does not exist in this company." };
+  if (input.taxCodeId && !(await getTaxCode(company.id, input.taxCodeId))) {
+    return { error: "That tax code does not exist in this company." };
   }
 
-  const customer = await db.customer.update({
-    where: { id: customerId },
-    data: {
-      name: input.name,
-      email: input.email || null,
-      phone: input.phone ?? null,
-      taxCodeId: input.taxCodeId ?? null,
-      paymentTermsDays: input.paymentTermsDays,
-      addressLine1: input.addressLine1 ?? null,
-      addressLine2: input.addressLine2 ?? null,
-      city: input.city ?? null,
-      province: input.province ?? null,
-      postalCode: input.postalCode ?? null,
-      shipToLine1: input.shipToLine1 ?? null,
-      shipToLine2: input.shipToLine2 ?? null,
-      shipToCity: input.shipToCity ?? null,
-      shipToProvince: input.shipToProvince ?? null,
-      shipToPostalCode: input.shipToPostalCode ?? null,
-      notes: input.notes ?? null,
-    },
-  });
+  const patch = {
+    name: input.name,
+    email: input.email || null,
+    phone: input.phone ?? null,
+    taxCodeId: input.taxCodeId ?? null,
+    paymentTermsDays: input.paymentTermsDays,
+    addressLine1: input.addressLine1 ?? null,
+    addressLine2: input.addressLine2 ?? null,
+    city: input.city ?? null,
+    province: input.province ?? null,
+    postalCode: input.postalCode ?? null,
+    shipToLine1: input.shipToLine1 ?? null,
+    shipToLine2: input.shipToLine2 ?? null,
+    shipToCity: input.shipToCity ?? null,
+    shipToProvince: input.shipToProvince ?? null,
+    shipToPostalCode: input.shipToPostalCode ?? null,
+    notes: input.notes ?? null,
+  };
+  await updateCustomer(company.id, customerId, patch);
+  const customer: Customer = { ...existing, ...patch };
 
   await recordAudit({
     companyId: company.id,
@@ -218,13 +205,11 @@ export async function updateCustomerAction(customerId: string, payload: string) 
   return { ok: true as const, customer: toPartyOption(customer) };
 }
 
-type CustomerRecord = Awaited<ReturnType<typeof db.customer.create>>;
-
 /**
  * The shape `DocumentForm` needs to select a party and seed its addresses.
  * Not exported: a "use server" module may only export async functions.
  */
-function toPartyOption(customer: CustomerRecord) {
+function toPartyOption(customer: Customer) {
   return {
     id: customer.id,
     name: customer.name,

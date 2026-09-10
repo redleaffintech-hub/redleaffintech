@@ -2,10 +2,12 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { db } from "@/lib/db";
 import { PROVINCES } from "@/lib/enums";
 import { CAPABILITIES } from "@/lib/permissions";
 import { recordAudit, requireCapability } from "@/server/auth/context";
+import { createVendor, getVendor, listVendors, updateVendor } from "@/server/db/vendors";
+import { getTaxCode } from "@/server/db/tax-codes";
+import type { Vendor } from "@/server/db/types";
 
 const provinceCodes = PROVINCES.map((p) => p.code);
 
@@ -71,35 +73,27 @@ export async function createVendorAction(payload: string) {
 
   // Names are how a user identifies a vendor in a dropdown; two identical ones
   // are almost always a duplicate rather than two real companies.
-  const clash = await db.vendor.findFirst({
-    where: { companyId: company.id, name: { equals: input.name, mode: "insensitive" } },
-    select: { id: true, name: true },
-  });
+  const lower = input.name.toLowerCase();
+  const clash = (await listVendors(company.id)).find((v) => v.name.toLowerCase() === lower);
   if (clash) return { error: `${clash.name} already exists as a vendor.` };
 
-  if (input.taxCodeId) {
-    const code = await db.taxCode.findFirst({
-      where: { id: input.taxCodeId, companyId: company.id },
-      select: { id: true },
-    });
-    if (!code) return { error: "That tax code does not exist in this company." };
+  if (input.taxCodeId && !(await getTaxCode(company.id, input.taxCodeId))) {
+    return { error: "That tax code does not exist in this company." };
   }
 
-  const vendor = await db.vendor.create({
-    data: {
-      companyId: company.id,
-      name: input.name,
-      email: input.email || null,
-      phone: input.phone ?? null,
-      businessNumber: input.businessNumber ?? null,
-      taxCodeId: input.taxCodeId ?? null,
-      paymentTermsDays: input.paymentTermsDays,
-      addressLine1: input.addressLine1 ?? null,
-      city: input.city ?? null,
-      province: input.province ?? null,
-      postalCode: input.postalCode ?? null,
-      notes: input.notes ?? null,
-    },
+  const vendor = await createVendor({
+    companyId: company.id,
+    name: input.name,
+    email: input.email || null,
+    phone: input.phone ?? null,
+    businessNumber: input.businessNumber ?? null,
+    taxCodeId: input.taxCodeId ?? null,
+    paymentTermsDays: input.paymentTermsDays,
+    addressLine1: input.addressLine1 ?? null,
+    city: input.city ?? null,
+    province: input.province ?? null,
+    postalCode: input.postalCode ?? null,
+    notes: input.notes ?? null,
   });
 
   await recordAudit({
@@ -123,10 +117,7 @@ export async function createVendorAction(payload: string) {
 export async function updateVendorAction(vendorId: string, payload: string) {
   const { company, user } = await requireCapability(CAPABILITIES.BILLS);
 
-  const existing = await db.vendor.findFirst({
-    where: { id: vendorId, companyId: company.id },
-    select: { id: true },
-  });
+  const existing = await getVendor(company.id, vendorId);
   if (!existing) return { error: "That vendor does not exist." };
 
   let raw: unknown;
@@ -140,40 +131,31 @@ export async function updateVendorAction(vendorId: string, payload: string) {
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Check the vendor details." };
   const input = parsed.data;
 
-  const clash = await db.vendor.findFirst({
-    where: {
-      companyId: company.id,
-      name: { equals: input.name, mode: "insensitive" },
-      NOT: { id: vendorId },
-    },
-    select: { name: true },
-  });
+  const lower = input.name.toLowerCase();
+  const clash = (await listVendors(company.id)).find(
+    (v) => v.id !== vendorId && v.name.toLowerCase() === lower,
+  );
   if (clash) return { error: `${clash.name} already exists as a vendor.` };
 
-  if (input.taxCodeId) {
-    const code = await db.taxCode.findFirst({
-      where: { id: input.taxCodeId, companyId: company.id },
-      select: { id: true },
-    });
-    if (!code) return { error: "That tax code does not exist in this company." };
+  if (input.taxCodeId && !(await getTaxCode(company.id, input.taxCodeId))) {
+    return { error: "That tax code does not exist in this company." };
   }
 
-  const vendor = await db.vendor.update({
-    where: { id: vendorId },
-    data: {
-      name: input.name,
-      email: input.email || null,
-      phone: input.phone ?? null,
-      businessNumber: input.businessNumber ?? null,
-      taxCodeId: input.taxCodeId ?? null,
-      paymentTermsDays: input.paymentTermsDays,
-      addressLine1: input.addressLine1 ?? null,
-      city: input.city ?? null,
-      province: input.province ?? null,
-      postalCode: input.postalCode ?? null,
-      notes: input.notes ?? null,
-    },
-  });
+  const patch = {
+    name: input.name,
+    email: input.email || null,
+    phone: input.phone ?? null,
+    businessNumber: input.businessNumber ?? null,
+    taxCodeId: input.taxCodeId ?? null,
+    paymentTermsDays: input.paymentTermsDays,
+    addressLine1: input.addressLine1 ?? null,
+    city: input.city ?? null,
+    province: input.province ?? null,
+    postalCode: input.postalCode ?? null,
+    notes: input.notes ?? null,
+  };
+  await updateVendor(company.id, vendorId, patch);
+  const vendor: Vendor = { ...existing, ...patch };
 
   await recordAudit({
     companyId: company.id,
@@ -192,13 +174,11 @@ export async function updateVendorAction(vendorId: string, payload: string) {
   return { ok: true as const, vendor: toPartyOption(vendor) };
 }
 
-type VendorRecord = Awaited<ReturnType<typeof db.vendor.create>>;
-
 /**
  * The shape `DocumentForm` needs to select a party on a bill. Not exported: a
  * "use server" module may only export async functions.
  */
-function toPartyOption(vendor: VendorRecord) {
+function toPartyOption(vendor: Vendor) {
   return {
     id: vendor.id,
     name: vendor.name,

@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
-import { db } from "@/lib/db";
+import { getVendor } from "@/server/db/vendors";
+import { listTaxCodes } from "@/server/db/tax-codes";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
 import { Card, PageHeader } from "@/components/ui";
@@ -11,14 +12,12 @@ export default async function EditVendorPage({ params }: { params: Promise<{ id:
   const { company } = await requireCapability(CAPABILITIES.BILLS);
   const { id } = await params;
 
-  const vendor = await db.vendor.findFirst({ where: { id, companyId: company.id } });
+  const vendor = await getVendor(company.id, id);
   if (!vendor) notFound();
 
-  const taxCodes = await db.taxCode.findMany({
-    where: { companyId: company.id, isActive: true, appliesToPurchases: true },
-    orderBy: { code: "asc" },
-    select: { id: true, code: true, name: true },
-  });
+  const taxCodes = (await listTaxCodes(company.id, { activeOnly: true }))
+    .filter((c) => c.appliesToPurchases)
+    .map((c) => ({ id: c.id, code: c.code, name: c.name }));
 
   return (
     <>

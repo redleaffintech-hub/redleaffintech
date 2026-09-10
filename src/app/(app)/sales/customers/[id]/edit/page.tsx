@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
-import { db } from "@/lib/db";
+import { getCustomer } from "@/server/db/customers";
+import { listTaxCodes } from "@/server/db/tax-codes";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
 import { Card, PageHeader } from "@/components/ui";
@@ -11,14 +12,12 @@ export default async function EditCustomerPage({ params }: { params: Promise<{ i
   const { company } = await requireCapability(CAPABILITIES.INVOICES);
   const { id } = await params;
 
-  const customer = await db.customer.findFirst({ where: { id, companyId: company.id } });
+  const customer = await getCustomer(company.id, id);
   if (!customer) notFound();
 
-  const taxCodes = await db.taxCode.findMany({
-    where: { companyId: company.id, isActive: true, appliesToSales: true },
-    orderBy: { code: "asc" },
-    select: { id: true, code: true, name: true },
-  });
+  const taxCodes = (await listTaxCodes(company.id, { activeOnly: true }))
+    .filter((c) => c.appliesToSales)
+    .map((c) => ({ id: c.id, code: c.code, name: c.name }));
 
   return (
     <>

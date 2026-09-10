@@ -1,9 +1,13 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { db } from "@/lib/db";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
-import { partyStatement } from "@/server/reports/aging";
+import { partyStatement } from "@/server/reports/aging-fs";
+import { getCompanyOrThrow } from "@/server/db/companies";
+import { getCustomer } from "@/server/db/customers";
+import { getTaxCode } from "@/server/db/tax-codes";
+import { invoices as invoicesRepo, listInvoicesForCustomer } from "@/server/db/invoices";
+import { listPayments } from "@/server/db/payments";
 import { fiscalYearOf, fiscalYearRange, isoDate, toUtcDay, today, formatDate } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
 import { Card, CardHeader, DefinitionList, LinkButton, Money, PageHeader } from "@/components/ui";
@@ -18,46 +22,29 @@ export default async function CustomerDetailPage({ params, searchParams }: PageP
   const { id } = await params;
   const search = await searchParams;
 
-  const customer = await db.customer.findFirst({
-    where: { id, companyId: company.id },
-    include: { taxCode: true, contacts: true },
-  });
-  if (!customer) notFound();
+  const customerDoc = await getCustomer(company.id, id);
+  if (!customerDoc) notFound();
+  const customer = {
+    ...customerDoc,
+    taxCode: customerDoc.taxCodeId ? await getTaxCode(company.id, customerDoc.taxCodeId) : null,
+  };
 
   const defaults = fiscalYearRange(fiscalYearOf(today(), company.fiscalYearStartMonth), company.fiscalYearStartMonth);
   const from = toUtcDay(typeof search.from === "string" ? search.from : isoDate(defaults.start));
   const to = toUtcDay(typeof search.to === "string" ? search.to : isoDate(today()));
 
-  const [statement, invoices, payments, companyProfile, nextOpenInvoice] = await Promise.all([
+  const [statement, allInvoices, allPayments, companyProfile] = await Promise.all([
     partyStatement(company.id, { customerId: customer.id }, from, to),
-    db.invoice.findMany({
-      where: { companyId: company.id, customerId: customer.id },
-      orderBy: { issueDate: "desc" },
-      take: 25,
-    }),
-    db.payment.findMany({
-      where: { companyId: company.id, customerId: customer.id, status: "POSTED" },
-      orderBy: { date: "desc" },
-      take: 10,
-    }),
-    db.company.findUniqueOrThrow({
-      where: { id: company.id },
-      select: {
-        name: true, legalName: true, addressLine1: true, addressLine2: true,
-        city: true, province: true, postalCode: true, phone: true, email: true, website: true,
-      },
-    }),
-    db.invoice.findFirst({
-      where: {
-        companyId: company.id,
-        customerId: customer.id,
-        status: { notIn: ["DRAFT", "VOID"] },
-        balanceCents: { gt: 0 },
-      },
-      orderBy: { dueDate: "asc" },
-      select: { dueDate: true },
-    }),
+    listInvoicesForCustomer(company.id, customer.id),
+    listPayments(company.id, { type: "RECEIPT", customerId: customer.id }),
+    getCompanyOrThrow(company.id),
   ]);
+  void invoicesRepo;
+  const invoices = allInvoices.slice(0, 25);
+  const payments = allPayments.filter((p) => p.status === "POSTED").slice(0, 10);
+  const nextOpenInvoice = allInvoices
+    .filter((i) => !["DRAFT", "VOID"].includes(i.status) && i.balanceCents > 0)
+    .sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime())[0] ?? null;
 
   const outstandingCents = invoices.reduce((s, i) => s + i.balanceCents, 0);
   const lifetimeCents = invoices
@@ -165,10 +152,10 @@ export default async function CustomerDetailPage({ params, searchParams }: PageP
             rows={statement.rows.map((row) => ({
               id: row.id,
               date: row.date,
-              entryNo: row.journalEntry.entryNo,
+              entryNo: row.journalEntry?.entryNo ?? "",
               journalEntryId: row.journalEntryId,
-              reference: row.journalEntry.sourceNumber,
-              description: row.description ?? row.journalEntry.memo,
+              reference: row.journalEntry?.sourceNumber ?? null,
+              description: row.description ?? row.journalEntry?.memo ?? null,
               movementCents: row.movementCents,
               runningBalanceCents: row.runningBalanceCents,
             }))}

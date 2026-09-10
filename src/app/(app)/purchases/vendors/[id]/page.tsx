@@ -1,9 +1,13 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { db } from "@/lib/db";
 import { requireCapability } from "@/server/auth/context";
+import { getVendor } from "@/server/db/vendors";
+import { getTaxCode } from "@/server/db/tax-codes";
+import { listBillsForVendor } from "@/server/db/bills";
+import { listPayments } from "@/server/db/payments";
+import { expenses as expensesRepo } from "@/server/db/expenses";
 import { CAPABILITIES } from "@/lib/permissions";
-import { partyStatement } from "@/server/reports/aging";
+import { partyStatement } from "@/server/reports/aging-fs";
 import { fiscalYearOf, fiscalYearRange, isoDate, toUtcDay, today, formatDate } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
 import { Card, CardHeader, DefinitionList, LinkButton, Money, PageHeader } from "@/components/ui";
@@ -18,22 +22,26 @@ export default async function VendorDetailPage({ params, searchParams }: PagePro
   const { id } = await params;
   const search = await searchParams;
 
-  const vendor = await db.vendor.findFirst({
-    where: { id, companyId: company.id },
-    include: { taxCode: true },
-  });
-  if (!vendor) notFound();
+  const vendorDoc = await getVendor(company.id, id);
+  if (!vendorDoc) notFound();
+  const vendor = {
+    ...vendorDoc,
+    taxCode: vendorDoc.taxCodeId ? await getTaxCode(company.id, vendorDoc.taxCodeId) : null,
+  };
 
   const defaults = fiscalYearRange(fiscalYearOf(today(), company.fiscalYearStartMonth), company.fiscalYearStartMonth);
   const from = toUtcDay(typeof search.from === "string" ? search.from : isoDate(defaults.start));
   const to = toUtcDay(typeof search.to === "string" ? search.to : isoDate(today()));
 
-  const [statement, bills, payments, expenses] = await Promise.all([
+  const [statement, allBills, allPayments, allExpenses] = await Promise.all([
     partyStatement(company.id, { vendorId: vendor.id }, from, to),
-    db.bill.findMany({ where: { companyId: company.id, vendorId: vendor.id }, orderBy: { issueDate: "desc" }, take: 25 }),
-    db.payment.findMany({ where: { companyId: company.id, vendorId: vendor.id, status: "POSTED" }, orderBy: { date: "desc" }, take: 10 }),
-    db.expense.findMany({ where: { companyId: company.id, vendorId: vendor.id }, orderBy: { date: "desc" }, take: 8 }),
+    listBillsForVendor(company.id, vendor.id),
+    listPayments(company.id, { type: "PAYMENT", vendorId: vendor.id }),
+    expensesRepo.list(company.id, { where: [["vendorId", "==", vendor.id]], orderBy: "date", direction: "desc" }),
   ]);
+  const bills = allBills.slice(0, 25);
+  const payments = allPayments.filter((p) => p.status === "POSTED").slice(0, 10);
+  const expenses = allExpenses.slice(0, 8);
 
   const owingCents = bills.reduce((s, b) => s + b.balanceCents, 0);
   const spentCents =
@@ -87,10 +95,10 @@ export default async function VendorDetailPage({ params, searchParams }: PagePro
               rows={statement.rows.map((row) => ({
                 id: row.id,
                 date: row.date,
-                entryNo: row.journalEntry.entryNo,
+                entryNo: row.journalEntry?.entryNo ?? "",
                 journalEntryId: row.journalEntryId,
-                reference: row.journalEntry.sourceNumber,
-                description: row.description ?? row.journalEntry.memo,
+                reference: row.journalEntry?.sourceNumber ?? null,
+                description: row.description ?? row.journalEntry?.memo ?? null,
                 movementCents: row.movementCents,
                 runningBalanceCents: row.runningBalanceCents,
               }))}

@@ -1,5 +1,6 @@
-import { db } from "@/lib/db";
-import { contains } from "@/lib/search";
+import { listVendors } from "@/server/db/vendors";
+import { listBillsForVendor } from "@/server/db/bills";
+import { getTaxCodesByIds } from "@/server/db/tax-codes";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
 import { Card, LinkButton, PageHeader } from "@/components/ui";
@@ -15,18 +16,23 @@ export default async function VendorsPage({ searchParams }: PageProps<"/purchase
   const query = typeof params.q === "string" ? params.q : "";
   const filter = typeof params.status === "string" ? params.status : "";
 
-  const vendors = await db.vendor.findMany({
-    where: {
-      companyId: company.id,
-      ...(filter === "ACTIVE" ? { isActive: true } : filter === "ARCHIVED" ? { isActive: false } : {}),
-      ...(query ? { OR: [{ name: contains(query) }, { email: contains(query) }] } : {}),
-    },
-    include: {
-      taxCode: { select: { code: true } },
-      bills: { select: { totalCents: true, balanceCents: true, status: true } },
-    },
-    orderBy: { name: "asc" },
-  });
+  const q = query.toLowerCase();
+  const all = (await listVendors(company.id)).filter(
+    (v) =>
+      (filter === "ACTIVE" ? v.isActive : filter === "ARCHIVED" ? !v.isActive : true) &&
+      (!q || v.name.toLowerCase().includes(q) || (v.email ?? "").toLowerCase().includes(q)),
+  );
+  const taxCodes = await getTaxCodesByIds(
+    company.id,
+    all.map((v) => v.taxCodeId).filter((id): id is string => Boolean(id)),
+  );
+  const vendors = await Promise.all(
+    all.map(async (v) => ({
+      ...v,
+      taxCodeLabel: v.taxCodeId ? taxCodes.get(v.taxCodeId)?.code ?? null : null,
+      bills: await listBillsForVendor(company.id, v.id),
+    })),
+  );
 
   const rows: PartyRow[] = vendors.map((vendor) => ({
     id: vendor.id,
@@ -37,7 +43,7 @@ export default async function VendorsPage({ searchParams }: PageProps<"/purchase
     province: vendor.province,
     paymentTermsDays: vendor.paymentTermsDays,
     isActive: vendor.isActive,
-    taxCodeLabel: vendor.taxCode?.code ?? null,
+    taxCodeLabel: vendor.taxCodeLabel,
     openDocuments: vendor.bills.filter((b) => b.balanceCents > 0).length,
     outstandingCents: vendor.bills.reduce((s, b) => s + b.balanceCents, 0),
     lifetimeCents: vendor.bills
