@@ -403,6 +403,85 @@ export async function postInvoice(
   });
 }
 
+// ── Edit ────────────────────────────────────────────────────────────────────
+
+export interface InvoiceUpdateInput extends InvoiceInput {
+  invoiceId: string;
+}
+
+/**
+ * Edit an invoice. A draft is rewritten in place. A posted invoice with no
+ * payments/credits is unwound (journal, tax rows and stock movements reversed),
+ * rewritten from the new inputs, and re-posted — same invoice id and number.
+ * Runs as a short sequence of single-purpose transactions (see file header).
+ */
+export async function updateInvoice(input: InvoiceUpdateInput): Promise<Invoice> {
+  const existing = await invoices.get(input.companyId, input.invoiceId);
+  if (!existing) throw new Error("Invoice not found in this company.");
+  if (existing.status === "VOID") {
+    throw new Error(`Invoice ${existing.number} is void. Create a new invoice instead of editing it.`);
+  }
+  const allocs = await listAllocationsForInvoice(input.companyId, input.invoiceId);
+  if (allocs.length > 0 || existing.amountPaidCents !== 0) {
+    throw new Error(`Invoice ${existing.number} has payments or credits applied. Unapply them before editing it.`);
+  }
+
+  const wasPosted = Boolean(existing.journalEntryId);
+  if (wasPosted) {
+    // Unwind: void reverses the journal / tax / stock, then we bring it back to DRAFT.
+    await voidInvoice(input.invoiceId, input.companyId, input.userId);
+  }
+
+  await runTransaction(async (tx) => {
+    const customer = await getCustomerTx(tx, input.companyId, input.customerId);
+    if (!customer) throw new Error("Customer not found in this company.");
+    const issueDate = toUtcDay(input.issueDate);
+    const dueDate = input.dueDate
+      ? toUtcDay(input.dueDate)
+      : addDays(issueDate, customer.paymentTermsDays);
+    const taxCodes = await loadTaxCodesTx(tx, input.companyId, input.lines.map((l) => l.taxCodeId));
+    const doc = computeDocument(input.lines, taxCodes, input.taxInclusive ?? false, issueDate);
+
+    invoices.updateTx(tx, input.companyId, input.invoiceId, {
+      customerId: input.customerId,
+      issueDate,
+      dueDate,
+      memo: input.memo ?? null,
+      terms: input.terms ?? null,
+      poNumber: input.poNumber ?? null,
+      projectId: input.projectId ?? null,
+      taxInclusive: input.taxInclusive ?? false,
+      ...documentAddressColumns(customer, input),
+      subtotalCents: doc.subtotalCents,
+      discountCents: doc.discountCents,
+      taxCents: doc.taxCents,
+      totalCents: doc.totalCents,
+      amountPaidCents: 0,
+      balanceCents: doc.totalCents,
+      writtenOffCents: 0,
+      status: "DRAFT",
+      journalEntryId: null,
+      postedAt: null,
+      voidedAt: null,
+      lines: toDocumentLines(doc),
+    });
+  });
+
+  await recordAudit({
+    companyId: input.companyId,
+    userId: input.userId ?? null,
+    action: "UPDATE",
+    entityType: "Invoice",
+    entityId: input.invoiceId,
+    summary: `Edited invoice ${existing.number}`,
+  });
+
+  if (wasPosted || input.post) {
+    return postInvoice(input.invoiceId, input.companyId, input.userId);
+  }
+  return (await invoices.get(input.companyId, input.invoiceId))!;
+}
+
 // ── Void ────────────────────────────────────────────────────────────────────
 
 export async function voidInvoice(

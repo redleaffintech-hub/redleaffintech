@@ -237,6 +237,82 @@ export async function recordPayment(input: PaymentInput) {
   });
 }
 
+/** Apply an existing unapplied receipt/payment against more documents later. */
+export async function applyPayment(
+  companyId: string,
+  paymentId: string,
+  allocations: AllocationInput[],
+) {
+  return runTransaction(async (tx) => {
+    const payment = await getPaymentTx(tx, companyId, paymentId);
+    if (!payment) throw new Error("Payment not found in this company.");
+
+    const requested = allocations.reduce((s, a) => s + a.amountCents, 0);
+    if (requested > payment.unappliedCents) {
+      throw new Error(`Only $${(payment.unappliedCents / 100).toFixed(2)} of this payment is unapplied.`);
+    }
+
+    // Existing allocations per touched doc, for the status recompute.
+    const invoiceExisting = new Map<string, { amountCents: number; kind: string }[]>();
+    const billExisting = new Map<string, { amountCents: number; kind: string }[]>();
+    for (const a of allocations) {
+      if (a.invoiceId && !invoiceExisting.has(a.invoiceId)) {
+        invoiceExisting.set(
+          a.invoiceId,
+          (await listAllocationsForInvoice(companyId, a.invoiceId)).map((r) => ({
+            amountCents: r.amountCents,
+            kind: r.kind,
+          })),
+        );
+      }
+      if (a.billId && !billExisting.has(a.billId)) {
+        billExisting.set(
+          a.billId,
+          (await listAllocationsForBill(companyId, a.billId)).map((r) => ({
+            amountCents: r.amountCents,
+            kind: r.kind,
+          })),
+        );
+      }
+    }
+
+    const now = new Date();
+    createAllocationsTx(
+      tx,
+      allocations.map((a) => ({
+        companyId,
+        paymentId,
+        invoiceId: a.invoiceId ?? null,
+        billId: a.billId ?? null,
+        creditNoteId: a.creditNoteId ?? null,
+        amountCents: a.amountCents,
+        date: now,
+      })),
+    );
+    updatePaymentTx(tx, companyId, paymentId, {
+      appliedCents: payment.appliedCents + requested,
+      unappliedCents: payment.unappliedCents - requested,
+    });
+
+    for (const a of allocations) {
+      if (a.invoiceId) {
+        await refreshInvoiceStatusTx(tx, companyId, a.invoiceId, [
+          ...(invoiceExisting.get(a.invoiceId) ?? []),
+          { amountCents: a.amountCents, kind: "PAYMENT" },
+        ]);
+      }
+      if (a.billId) {
+        await refreshBillStatusTx(tx, companyId, a.billId, [
+          ...(billExisting.get(a.billId) ?? []),
+          { amountCents: a.amountCents, kind: "PAYMENT" },
+        ]);
+      }
+    }
+
+    return { ...payment, appliedCents: payment.appliedCents + requested };
+  });
+}
+
 export async function voidPayment(companyId: string, paymentId: string, userId?: string | null) {
   return runTransaction(async (tx) => {
     const payment = await getPaymentTx(tx, companyId, paymentId);

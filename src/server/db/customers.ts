@@ -27,14 +27,39 @@ export async function listCustomers(
   return mapDocs(await q.get(), decode);
 }
 
-export async function createCustomer(
-  input: Omit<Customer, "id" | "createdAt" | "updatedAt"> & Partial<Pick<Customer, "id">>,
-): Promise<Customer> {
+export type NewCustomer = { companyId: string; name: string } & Partial<Customer>;
+
+export async function createCustomer(input: NewCustomer): Promise<Customer> {
   const id = input.id ?? newId();
   const now = new Date();
-  const row: Customer = { ...input, id, createdAt: now, updatedAt: now } as Customer;
-  row.contacts ??= [];
-  row.displayName ??= null;
+  const row: Customer = {
+    displayName: null,
+    email: null,
+    phone: null,
+    website: null,
+    addressLine1: null,
+    addressLine2: null,
+    city: null,
+    province: null,
+    postalCode: null,
+    country: "CA",
+    shipToLine1: null,
+    shipToLine2: null,
+    shipToCity: null,
+    shipToProvince: null,
+    shipToPostalCode: null,
+    shipToCountry: null,
+    taxCodeId: null,
+    paymentTermsDays: 15,
+    notes: null,
+    isActive: true,
+    openingBalanceCents: 0,
+    contacts: [],
+    ...input,
+    id,
+    createdAt: now,
+    updatedAt: now,
+  };
   await col(input.companyId).doc(id).set(encode(row));
   return row;
 }

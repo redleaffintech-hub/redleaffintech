@@ -320,6 +320,70 @@ export async function postBill(
   });
 }
 
+// ── Edit ────────────────────────────────────────────────────────────────────
+
+export interface BillUpdateInput extends BillInput {
+  billId: string;
+}
+
+/** Edit a bill — same unwind/rewrite/repost shape as updateInvoice. */
+export async function updateBill(input: BillUpdateInput): Promise<Bill> {
+  const existing = await bills.get(input.companyId, input.billId);
+  if (!existing) throw new Error("Bill not found in this company.");
+  if (existing.status === "VOID") {
+    throw new Error(`Bill ${existing.number} is void. Record a new bill instead of editing it.`);
+  }
+  if (existing.amountPaidCents !== 0) {
+    throw new Error(`Bill ${existing.number} has payments applied. Unapply them before editing it.`);
+  }
+
+  const wasPosted = Boolean(existing.journalEntryId);
+  if (wasPosted) await voidBill(input.billId, input.companyId, input.userId);
+
+  await runTransaction(async (tx) => {
+    const vendor = await getVendorTx(tx, input.companyId, input.vendorId);
+    if (!vendor) throw new Error("Vendor not found in this company.");
+    const issueDate = toUtcDay(input.issueDate);
+    const dueDate = input.dueDate
+      ? toUtcDay(input.dueDate)
+      : addDays(issueDate, vendor.paymentTermsDays);
+    const taxCodes = await loadTaxCodesTx(tx, input.companyId, input.lines.map((l) => l.taxCodeId));
+    const doc = computeDocument(input.lines, taxCodes, input.taxInclusive ?? false, issueDate);
+
+    bills.updateTx(tx, input.companyId, input.billId, {
+      vendorId: input.vendorId,
+      vendorInvoiceNo: input.vendorInvoiceNo ?? null,
+      issueDate,
+      dueDate,
+      memo: input.memo ?? null,
+      projectId: input.projectId ?? null,
+      taxInclusive: input.taxInclusive ?? false,
+      subtotalCents: doc.subtotalCents,
+      taxCents: doc.taxCents,
+      totalCents: doc.totalCents,
+      amountPaidCents: 0,
+      balanceCents: doc.totalCents,
+      status: existing.approvalStatus === "PENDING" ? "AWAITING_APPROVAL" : "DRAFT",
+      journalEntryId: null,
+      postedAt: null,
+      voidedAt: null,
+      lines: toDocumentLines(doc),
+    });
+  });
+
+  await recordAudit({
+    companyId: input.companyId,
+    userId: input.userId ?? null,
+    action: "UPDATE",
+    entityType: "Bill",
+    entityId: input.billId,
+    summary: `Edited bill ${existing.number}`,
+  });
+
+  if (wasPosted || input.post) return postBill(input.billId, input.companyId, input.userId);
+  return (await bills.get(input.companyId, input.billId))!;
+}
+
 // ── Void ────────────────────────────────────────────────────────────────────
 
 export async function voidBill(

@@ -71,12 +71,30 @@ export async function getTrackedItemsTx(
   return map;
 }
 
-export async function createItem(
-  input: Omit<ServiceItem, "id" | "createdAt" | "updatedAt"> & Partial<Pick<ServiceItem, "id">>,
-): Promise<ServiceItem> {
+export type NewItem = { companyId: string; code: string; name: string } & Partial<ServiceItem>;
+
+export async function createItem(input: NewItem): Promise<ServiceItem> {
   const id = input.id ?? newId();
   const now = new Date();
-  const row = { ...input, id, createdAt: now, updatedAt: now } as ServiceItem;
+  const row: ServiceItem = {
+    type: "SERVICE",
+    description: null,
+    unitPriceCents: 0,
+    unit: "hour",
+    discountPercentMicro: 0,
+    incomeAccountId: null,
+    expenseAccountId: null,
+    taxCodeId: null,
+    purchaseTaxCodeId: null,
+    isActive: true,
+    trackInventory: false,
+    quantityOnHandMilli: 0,
+    averageCostCents: 0,
+    ...input,
+    id,
+    createdAt: now,
+    updatedAt: now,
+  };
   await col(input.companyId).firestore.runTransaction(async (tx) => {
     const guardRef = codeGuard(input.companyId, input.code);
     if ((await tx.get(guardRef)).exists) {

@@ -27,14 +27,32 @@ export async function listVendors(
   return mapDocs(await q.get(), decode);
 }
 
-export async function createVendor(
-  input: Omit<Vendor, "id" | "createdAt" | "updatedAt"> & Partial<Pick<Vendor, "id">>,
-): Promise<Vendor> {
+export type NewVendor = { companyId: string; name: string } & Partial<Vendor>;
+
+export async function createVendor(input: NewVendor): Promise<Vendor> {
   const id = input.id ?? newId();
   const now = new Date();
-  const row: Vendor = { ...input, id, createdAt: now, updatedAt: now } as Vendor;
-  row.contacts ??= [];
-  row.displayName ??= null;
+  const row: Vendor = {
+    displayName: null,
+    email: null,
+    phone: null,
+    addressLine1: null,
+    city: null,
+    province: null,
+    postalCode: null,
+    country: "CA",
+    taxCodeId: null,
+    paymentTermsDays: 30,
+    businessNumber: null,
+    notes: null,
+    isActive: true,
+    openingBalanceCents: 0,
+    contacts: [],
+    ...input,
+    id,
+    createdAt: now,
+    updatedAt: now,
+  };
   await col(input.companyId).doc(id).set(encode(row));
   return row;
 }
