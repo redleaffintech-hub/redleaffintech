@@ -1,16 +1,12 @@
 import "server-only";
-import type { Tx } from "@/lib/db";
-import { db } from "@/lib/db";
+
+import { leaveBalanceAdjustments, leaveRequests, leaveTypes } from "@/server/db/hr";
+import { newId } from "@/server/db/firestore";
 
 /**
- * The leave types every new company starts with — the common set a Canadian
- * employer needs on day one. All are editable/archivable afterward from
- * /hr/time-off/leave-types; nothing here is enforced as mandatory.
- *
- * The job-protected statutory leaves (parental, compassionate care, jury duty)
- * are `trackBalance: false` — they are not something an employee accrues and
- * draws down the way vacation or sick time is, they are simply recorded so the
- * business has a dated record of the leave.
+ * The leave types every new company starts with. All editable/archivable from
+ * /hr/time-off/leave-types afterward. Statutory job-protected leaves are
+ * `trackBalance: false` — recorded, not accrued.
  */
 const DEFAULT_LEAVE_TYPES: {
   name: string;
@@ -28,9 +24,20 @@ const DEFAULT_LEAVE_TYPES: {
   { name: "Unpaid leave of absence", category: "UNPAID", isPaid: false, trackBalance: false },
 ];
 
-export async function createDefaultLeaveTypes(tx: Tx, companyId: string) {
-  for (const type of DEFAULT_LEAVE_TYPES) {
-    await tx.leaveType.create({ data: { companyId, ...type } });
+/** Rows for the default leave types, for a caller batching company setup. */
+export function defaultLeaveTypeRows(companyId: string) {
+  return DEFAULT_LEAVE_TYPES.map((t) => ({
+    id: newId(),
+    companyId,
+    ...t,
+    isActive: true,
+    createdAt: new Date(),
+  }));
+}
+
+export async function createDefaultLeaveTypes(companyId: string) {
+  for (const t of DEFAULT_LEAVE_TYPES) {
+    await leaveTypes.create({ companyId, ...t, isActive: true } as Parameters<typeof leaveTypes.create>[0]);
   }
 }
 
@@ -41,37 +48,60 @@ export interface LeaveBalance {
   balanceHours: number;
 }
 
-/**
- * The current balance for one employee/leave type, computed on read as the sum
- * of every ledger adjustment plus every APPROVED request's hours (negative) —
- * never a stored running total, the same way this app never caches a mutable
- * balance anywhere else money or time is tracked (see the party statement and
- * bank reconciliation reports).
- */
-export async function leaveBalance(employeeId: string, leaveTypeId: string): Promise<LeaveBalance> {
-  const [adjustments, approvedRequests] = await Promise.all([
-    db.leaveBalanceAdjustment.findMany({ where: { employeeId, leaveTypeId }, select: { hours: true } }),
-    db.leaveRequest.findMany({ where: { employeeId, leaveTypeId, status: "APPROVED" }, select: { hours: true } }),
+export async function leaveBalance(
+  companyId: string,
+  employeeId: string,
+  leaveTypeId: string,
+): Promise<LeaveBalance> {
+  const [adjustments, approved] = await Promise.all([
+    leaveBalanceAdjustments.list(companyId, {
+      where: [
+        ["employeeId", "==", employeeId],
+        ["leaveTypeId", "==", leaveTypeId],
+      ],
+    }),
+    leaveRequests.list(companyId, {
+      where: [
+        ["employeeId", "==", employeeId],
+        ["leaveTypeId", "==", leaveTypeId],
+        ["status", "==", "APPROVED"],
+      ],
+    }),
   ]);
-
-  const grantedHours = adjustments.reduce((sum, a) => sum + a.hours, 0);
-  const usedHours = approvedRequests.reduce((sum, r) => sum + r.hours, 0);
-
+  const grantedHours = adjustments.reduce((s, a) => s + a.hours, 0);
+  const usedHours = approved.reduce((s, r) => s + r.hours, 0);
   return { leaveTypeId, grantedHours, usedHours, balanceHours: grantedHours - usedHours };
 }
 
-/** Every trackBalance leave type's current balance for one employee, in one round trip. */
-export async function leaveBalancesForEmployee(companyId: string, employeeId: string): Promise<(LeaveBalance & { leaveTypeName: string })[]> {
-  const leaveTypes = await db.leaveType.findMany({ where: { companyId, trackBalance: true }, orderBy: { name: "asc" } });
-
-  const [adjustments, approvedRequests] = await Promise.all([
-    db.leaveBalanceAdjustment.findMany({ where: { employeeId, leaveTypeId: { in: leaveTypes.map((t) => t.id) } } }),
-    db.leaveRequest.findMany({ where: { employeeId, status: "APPROVED", leaveTypeId: { in: leaveTypes.map((t) => t.id) } } }),
+export async function leaveBalancesForEmployee(
+  companyId: string,
+  employeeId: string,
+): Promise<(LeaveBalance & { leaveTypeName: string })[]> {
+  const tracked = (
+    await leaveTypes.list(companyId, { where: [["trackBalance", "==", true]], orderBy: "name" })
+  );
+  const [adjustments, approved] = await Promise.all([
+    leaveBalanceAdjustments.list(companyId, { where: [["employeeId", "==", employeeId]] }),
+    leaveRequests.list(companyId, {
+      where: [
+        ["employeeId", "==", employeeId],
+        ["status", "==", "APPROVED"],
+      ],
+    }),
   ]);
-
-  return leaveTypes.map((type) => {
-    const grantedHours = adjustments.filter((a) => a.leaveTypeId === type.id).reduce((sum, a) => sum + a.hours, 0);
-    const usedHours = approvedRequests.filter((r) => r.leaveTypeId === type.id).reduce((sum, r) => sum + r.hours, 0);
-    return { leaveTypeId: type.id, leaveTypeName: type.name, grantedHours, usedHours, balanceHours: grantedHours - usedHours };
+  return tracked.map((type) => {
+    const grantedHours = adjustments
+      .filter((a) => a.leaveTypeId === type.id)
+      .reduce((s, a) => s + a.hours, 0);
+    const usedHours = approved
+      .filter((r) => r.leaveTypeId === type.id)
+      .reduce((s, r) => s + r.hours, 0);
+    return {
+      leaveTypeId: type.id,
+      leaveTypeName: type.name,
+      grantedHours,
+      usedHours,
+      balanceHours: grantedHours - usedHours,
+    };
   });
 }

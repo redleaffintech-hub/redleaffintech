@@ -1,23 +1,27 @@
 /**
- * Company provisioning (spec §4 Company Setup, §14 Fiscal periods).
+ * Company provisioning (§4 Company Setup, §14 Fiscal periods).
  *
  * Creates the chart of accounts, effective-dated tax codes, fiscal periods and
  * tax periods that the posting engine requires before a company can record a
  * single transaction.
+ *
+ * Firestore has no cross-collection "one transaction" for ~90 independent
+ * creates, so setup is written with a `BulkWriter` after the company doc exists.
+ * If it fails partway the company is incompletely set up — the caller should
+ * treat provisioning as all-or-nothing at its own level (delete on failure).
  */
 
-import type { Tx } from "@/lib/db";
+import "server-only";
+
 import { addDays, addMonths, fiscalYearRange, utcDate } from "@/lib/dates";
 import { CYCLE_MONTHS, DEFAULT_PLAN_CODE, isValidCycle, type BillingCycle } from "@/lib/plans";
+import { DEFAULT_CURRENCY, normalizeCurrency } from "@/lib/currency";
 import { resolveAssignment } from "@/server/plans/catalogue";
 import { provincialTaxCodeTemplates } from "@/server/tax/regional-rates";
-import { createDefaultLeaveTypes } from "@/server/hr/leave";
-import { DEFAULT_CURRENCY, normalizeCurrency } from "@/lib/currency";
-import {
-  BASE_TAX_CODES,
-  CANADIAN_SERVICE_COA,
-  type TaxCodeTemplate,
-} from "./templates";
+import { defaultLeaveTypeRows } from "@/server/hr/leave";
+import { companyRef, db, newId, sub, toTimestamp } from "@/server/db/firestore";
+import { subscriptions } from "@/server/db/platform";
+import { BASE_TAX_CODES, CANADIAN_SERVICE_COA, type TaxCodeTemplate } from "./templates";
 
 export interface ProvisionCompanyInput {
   name: string;
@@ -28,7 +32,6 @@ export interface ProvisionCompanyInput {
   gstNumber?: string;
   qstNumber?: string;
   pstNumber?: string;
-  /** ISO 4217. Omitted means CAD, which is also the column default. */
   baseCurrency?: string;
   email?: string;
   phone?: string;
@@ -37,295 +40,389 @@ export interface ProvisionCompanyInput {
   postalCode?: string;
   industry?: string;
   firmId?: string;
-  /** Fiscal years to open up front. */
   fiscalYears?: number[];
   taxFilingFrequency?: "MONTHLY" | "QUARTERLY" | "ANNUAL";
-  /** Plan code from the database catalogue; defaults to the standard trial plan. */
   plan?: string;
-  /** Billing cycle to sell the plan on. Monthly unless stated. */
   billingCycle?: string;
   country?: string;
   addressLine2?: string;
   website?: string;
-  /** Days of trial. 30 unless stated; 0 means the subscription starts active. */
   trialDays?: number;
-  /** ModuleId list from src/lib/plans.ts. Defaults to Accounting only — an admin turns the rest on explicitly. */
   enabledModules?: string[];
 }
 
-/**
- * The company row plus everything the posting engine needs before a single
- * transaction can be recorded: chart of accounts, effective-dated tax codes,
- * fiscal periods and tax periods. No subscription — that is a separate concern
- * with two different callers (a fresh signup creates one; a Primary adding a
- * sibling company under their existing plan must not).
- */
-async function createCompanyAndSetup(tx: Tx, input: ProvisionCompanyInput) {
-  const fiscalYearStartMonth = input.fiscalYearStartMonth ?? 1;
+const COMPANY_DEFAULTS = {
+  invoicePrefix: "INV-",
+  nextInvoiceNumber: 1001,
+  estimatePrefix: "EST-",
+  nextEstimateNumber: 1001,
+  billPrefix: "BILL-",
+  nextBillNumber: 1001,
+  creditPrefix: "CN-",
+  nextCreditNumber: 1001,
+  paymentPrefix: "PMT-",
+  nextPaymentNumber: 1001,
+  journalPrefix: "JE-",
+  nextJournalNumber: 1,
+  expensePrefix: "EXP-",
+  nextExpenseNumber: 1001,
+  employeePrefix: "EMP-",
+  nextEmployeeNumber: 1001,
+  payRunPrefix: "PR-",
+  nextPayRunNumber: 1001,
+  defaultPaymentTermsDays: 15,
+  defaultTaxInclusive: false,
+  invoiceFooter: null,
+  locale: "en-CA",
+};
 
-  const company = await tx.company.create({
-    data: {
-      name: input.name,
-      legalName: input.legalName ?? input.name,
-      province: input.province,
-      fiscalYearStartMonth,
-      businessNumber: input.businessNumber,
-      gstNumber: input.gstNumber,
-      qstNumber: input.qstNumber,
-      pstNumber: input.pstNumber,
-      // An unrecognised code must not create a company that formats as garbage;
-      // fall back to the default rather than storing whatever was passed.
-      baseCurrency: normalizeCurrency(input.baseCurrency) ?? DEFAULT_CURRENCY,
-      email: input.email,
-      phone: input.phone,
-      addressLine1: input.addressLine1,
-      addressLine2: input.addressLine2,
-      city: input.city,
-      postalCode: input.postalCode,
-      website: input.website,
-      country: input.country ?? "CA",
-      industry: input.industry,
-      firmId: input.firmId,
-      enabledModules: input.enabledModules?.length ? input.enabledModules : ["ACCOUNTING"],
-    },
-  });
-
-  await createChartOfAccounts(tx, company.id);
-  await createTaxCodes(tx, company.id, input.province);
-  await createDefaultLeaveTypes(tx, company.id);
-
-  const currentYear = new Date().getUTCFullYear();
-  const years = input.fiscalYears ?? [currentYear - 1, currentYear, currentYear + 1];
-  for (const year of years) {
-    await createFiscalYear(tx, company.id, year, fiscalYearStartMonth);
-  }
-  await createTaxPeriods(tx, company.id, years, input.taxFilingFrequency ?? "QUARTERLY");
-
-  return company;
+interface AccountRow {
+  id: string;
+  code: string;
+  name: string;
+  type: string;
+  subtype: string;
+  description: string | null;
+  systemKey: string | null;
+  isSystem: boolean;
 }
 
-/**
- * Add a company under an EXISTING subscription — self-service, from a Primary
- * who already has a plan. Deliberately the same setup pipeline as a fresh
- * signup and deliberately no subscription of its own: the caller is
- * responsible for attaching the returned company to a subscription (see
- * src/server/companies/families.ts) inside the same transaction, after
- * confirming the plan's company limit under a row lock.
- */
-export async function provisionAdditionalCompany(tx: Tx, input: ProvisionCompanyInput) {
-  return createCompanyAndSetup(tx, input);
+function chartRows(): AccountRow[] {
+  return CANADIAN_SERVICE_COA.map((a) => ({
+    id: newId(),
+    code: a.code,
+    name: a.name,
+    type: a.type,
+    subtype: a.subtype,
+    description: a.description ?? null,
+    systemKey: a.systemKey ?? null,
+    isSystem: Boolean(a.systemKey),
+  }));
 }
 
-export async function provisionCompany(tx: Tx, input: ProvisionCompanyInput) {
-  const cycle: BillingCycle = isValidCycle(input.billingCycle) ? input.billingCycle : "MONTHLY";
-
-  // The plan, its seat allowance and its price all come from the published
-  // catalogue — the same snapshot a self-serve customer would have been quoted.
-  // A database with no published plans yet still provisions: the company is
-  // created without a subscription rather than on invented terms.
-  const assignment = await resolveAssignment(tx, input.plan ?? DEFAULT_PLAN_CODE, cycle);
-
-  const company = await createCompanyAndSetup(tx, input);
-
-  if (assignment) {
-    const now = new Date();
-    const trialDays = input.trialDays ?? 30;
-    const trialing = trialDays > 0;
-
-    await tx.subscription.create({
-      data: {
-        companyId: company.id,
-        plan: assignment.planCode,
-        planId: assignment.planId,
-        // The price is frozen onto the row at the moment of sale. Editing the
-        // plan's public price later must not rewrite what this client agreed to.
-        planVersionId: assignment.planVersionId,
-        billingCycle: assignment.billingCycle,
-        currency: assignment.currency,
-        priceCents: assignment.priceCents,
-        monthlyEquivalentCents: assignment.monthlyEquivalentCents,
-        seats: assignment.seats,
-        status: trialing ? "TRIALING" : "ACTIVE",
-        trialStartsAt: trialing ? now : null,
-        trialEndsAt: trialing ? addDays(now, trialDays) : null,
-        startedAt: trialing ? null : now,
-        currentPeriodStart: trialing ? null : now,
-        currentPeriodEnd: trialing ? null : addMonths(now, CYCLE_MONTHS[assignment.billingCycle]),
-      },
-    });
-  }
-
-  return company;
-}
-
-export async function createChartOfAccounts(tx: Tx, companyId: string) {
-  await tx.account.createMany({
-    data: CANADIAN_SERVICE_COA.map((a) => ({
-      companyId,
-      code: a.code,
-      name: a.name,
-      type: a.type,
-      subtype: a.subtype,
-      description: a.description ?? null,
-      systemKey: a.systemKey ?? null,
-      isSystem: Boolean(a.systemKey),
-    })),
-  });
-  return tx.account.findMany({ where: { companyId }, orderBy: { code: "asc" } });
-}
-
-/** systemKey → account id, which is how tax components find their control accounts. */
-async function systemAccountIds(tx: Tx, companyId: string) {
-  const accounts = await tx.account.findMany({
-    where: { companyId, systemKey: { not: null } },
-    select: { id: true, systemKey: true },
-  });
-  return new Map(accounts.map((a) => [a.systemKey!, a.id]));
-}
-
-/**
- * Materialise one published rate template as a TaxCode with its components.
- *
- * Components wire to the GST/PST/QST control accounts by systemKey, so the
- * posting engine never has to guess where tax lands.
- */
-export async function createTaxCodeFromTemplate(
-  tx: Tx,
-  companyId: string,
-  template: TaxCodeTemplate,
+function taxCodeDocs(
+  templates: { template: TaxCodeTemplate; isDefault: boolean }[],
   byKey: Map<string, string>,
-  isDefault = false,
 ) {
-  return tx.taxCode.create({
-    data: {
-      companyId,
-      code: template.code,
-      name: template.name,
-      description: template.description,
-      jurisdiction: template.jurisdiction,
-      isZeroRated: template.isZeroRated ?? false,
-      isExempt: template.isExempt ?? false,
-      appliesToSales: template.appliesToSales ?? true,
-      appliesToPurchases: template.appliesToPurchases ?? true,
-      isDefaultSales: isDefault,
-      isDefaultPurchase: isDefault,
-      effectiveFrom: new Date(`${template.effectiveFrom}T00:00:00.000Z`),
-      components: {
-        create: template.components.map((c, order) => ({
-          name: c.name,
-          kind: c.kind,
-          rateMicro: c.rateMicro,
-          isRecoverable: c.isRecoverable,
-          compoundOnPrevious: c.compoundOnPrevious ?? false,
-          liabilityAccountId: c.liabilityKey ? (byKey.get(c.liabilityKey) ?? null) : null,
-          recoverableAccountId: c.recoverableKey ? (byKey.get(c.recoverableKey) ?? null) : null,
-          sortOrder: order,
-        })),
-      },
-    },
-    include: { components: true },
-  });
+  return templates.map(({ template, isDefault }) => ({
+    id: newId(),
+    code: template.code,
+    name: template.name,
+    description: template.description ?? null,
+    jurisdiction: template.jurisdiction,
+    isZeroRated: template.isZeroRated ?? false,
+    isExempt: template.isExempt ?? false,
+    appliesToSales: template.appliesToSales ?? true,
+    appliesToPurchases: template.appliesToPurchases ?? true,
+    isDefaultSales: isDefault,
+    isDefaultPurchase: isDefault,
+    isActive: true,
+    effectiveFrom: new Date(`${template.effectiveFrom}T00:00:00.000Z`),
+    effectiveTo: null,
+    components: template.components.map((c, order) => ({
+      id: newId(),
+      name: c.name,
+      kind: c.kind,
+      rateMicro: c.rateMicro,
+      isRecoverable: c.isRecoverable,
+      compoundOnPrevious: c.compoundOnPrevious ?? false,
+      liabilityAccountId: c.liabilityKey ? (byKey.get(c.liabilityKey) ?? null) : null,
+      recoverableAccountId: c.recoverableKey ? (byKey.get(c.recoverableKey) ?? null) : null,
+      sortOrder: order,
+    })),
+  }));
 }
 
-export async function createTaxCodes(tx: Tx, companyId: string, province: string) {
-  const byKey = await systemAccountIds(tx, companyId);
-  // The provincial half comes from the platform's centrally-managed regional
-  // rates (falls back to the static table if none is configured yet); the base
-  // codes (GST-only, zero-rated, exempt, out of scope) are unchanged.
-  const provincial = await provincialTaxCodeTemplates(province);
-  const templates = [...provincial, ...BASE_TAX_CODES];
-  const created = [];
-  for (const [index, template] of templates.entries()) {
-    // The company's own province leads the list, and is what a new document
-    // defaults to.
-    created.push(await createTaxCodeFromTemplate(tx, companyId, template, byKey, index === 0));
-  }
-  return created;
-}
-
-/**
- * Add the published codes for a province the company does not yet have one for.
- *
- * Selling into another province means charging that province's rate, and a
- * company only gets its own province's codes at provisioning. Never marked
- * default — the home province keeps that. Codes that already exist are skipped,
- * so this is safe to call twice, and it never edits an existing rate (§7).
- */
-export async function createProvincialTaxCodes(tx: Tx, companyId: string, province: string) {
-  const templates = await provincialTaxCodeTemplates(province);
-  if (templates.length === 0) return [];
-
-  const existing = await tx.taxCode.findMany({
-    where: { companyId, code: { in: templates.map((t) => t.code) } },
-    select: { code: true },
-  });
-  const have = new Set(existing.map((c) => c.code));
-  const missing = templates.filter((t) => !have.has(t.code));
-  if (missing.length === 0) return [];
-
-  const byKey = await systemAccountIds(tx, companyId);
-  const created = [];
-  for (const template of missing) {
-    created.push(await createTaxCodeFromTemplate(tx, companyId, template, byKey, false));
-  }
-  return created;
-}
-
-/** Twelve monthly periods for one fiscal year (§14). */
-export async function createFiscalYear(
-  tx: Tx,
-  companyId: string,
-  fiscalYear: number,
-  fiscalYearStartMonth: number,
-) {
-  const existing = await tx.fiscalPeriod.count({ where: { companyId, fiscalYear } });
-  if (existing > 0) return;
-
-  const { start } = fiscalYearRange(fiscalYear, fiscalYearStartMonth);
-  const data = [];
-  for (let i = 0; i < 12; i++) {
-    const periodStart = addMonths(start, i);
-    const periodEnd = addDays(addMonths(periodStart, 1), -1);
-    data.push({
-      companyId,
-      fiscalYear,
-      periodNumber: i + 1,
-      name: new Intl.DateTimeFormat("en-CA", { month: "long", year: "numeric", timeZone: "UTC" }).format(periodStart),
-      startDate: periodStart,
-      endDate: periodEnd,
-      status: "OPEN",
-    });
-  }
-  await tx.fiscalPeriod.createMany({ data });
-}
-
-export async function createTaxPeriods(
-  tx: Tx,
-  companyId: string,
-  years: number[],
-  frequency: "MONTHLY" | "QUARTERLY" | "ANNUAL",
-) {
-  const monthsPerPeriod = frequency === "MONTHLY" ? 1 : frequency === "QUARTERLY" ? 3 : 12;
-  const data = [];
+function fiscalPeriodDocs(years: number[], fiscalYearStartMonth: number) {
+  const fmt = new Intl.DateTimeFormat("en-CA", { month: "long", year: "numeric", timeZone: "UTC" });
+  const rows: { id: string; fiscalYear: number; periodNumber: number; name: string; startDate: Date; endDate: Date }[] = [];
   for (const year of years) {
-    for (let i = 0; i < 12 / monthsPerPeriod; i++) {
-      const startDate = utcDate(year, i * monthsPerPeriod + 1, 1);
-      const endDate = addDays(addMonths(startDate, monthsPerPeriod), -1);
+    const { start } = fiscalYearRange(year, fiscalYearStartMonth);
+    for (let i = 0; i < 12; i++) {
+      const startDate = addMonths(start, i);
+      rows.push({
+        id: `${year}-${String(i + 1).padStart(2, "0")}`,
+        fiscalYear: year,
+        periodNumber: i + 1,
+        name: fmt.format(startDate),
+        startDate,
+        endDate: addDays(addMonths(startDate, 1), -1),
+      });
+    }
+  }
+  return rows;
+}
+
+function taxPeriodDocs(years: number[], frequency: "MONTHLY" | "QUARTERLY" | "ANNUAL") {
+  const monthsPer = frequency === "MONTHLY" ? 1 : frequency === "QUARTERLY" ? 3 : 12;
+  const shortFmt = new Intl.DateTimeFormat("en-CA", { month: "short", year: "numeric", timeZone: "UTC" });
+  const rows: { id: string; name: string; startDate: Date; endDate: Date; frequency: string }[] = [];
+  for (const year of years) {
+    for (let i = 0; i < 12 / monthsPer; i++) {
+      const startDate = utcDate(year, i * monthsPer + 1, 1);
       const label =
         frequency === "QUARTERLY"
           ? `Q${i + 1} ${year}`
           : frequency === "ANNUAL"
             ? `${year}`
-            : new Intl.DateTimeFormat("en-CA", { month: "short", year: "numeric", timeZone: "UTC" }).format(startDate);
-      data.push({
-        companyId,
+            : shortFmt.format(startDate);
+      rows.push({
+        id: newId(),
         name: `GST/HST ${label}`,
         startDate,
-        endDate,
+        endDate: addDays(addMonths(startDate, monthsPer), -1),
         frequency,
-        status: "OPEN",
       });
     }
   }
-  await tx.taxPeriod.createMany({ data });
+  return rows;
+}
+
+async function createCompanyAndSetup(
+  input: ProvisionCompanyInput,
+): Promise<{ id: string; name: string }> {
+  const fiscalYearStartMonth = input.fiscalYearStartMonth ?? 1;
+  const companyId = newId();
+  const now = new Date();
+
+  await companyRef(companyId).set({
+    name: input.name,
+    legalName: input.legalName ?? input.name,
+    businessNumber: input.businessNumber ?? null,
+    gstNumber: input.gstNumber ?? null,
+    qstNumber: input.qstNumber ?? null,
+    pstNumber: input.pstNumber ?? null,
+    province: input.province,
+    country: input.country ?? "CA",
+    addressLine1: input.addressLine1 ?? null,
+    addressLine2: input.addressLine2 ?? null,
+    city: input.city ?? null,
+    postalCode: input.postalCode ?? null,
+    phone: input.phone ?? null,
+    email: input.email ?? null,
+    website: input.website ?? null,
+    baseCurrency: normalizeCurrency(input.baseCurrency) ?? DEFAULT_CURRENCY,
+    fiscalYearStartMonth,
+    industry: input.industry ?? null,
+    logoUrl: null,
+    firmId: input.firmId ?? null,
+    isReadOnly: false,
+    archivedAt: null,
+    archivedById: null,
+    archiveReason: null,
+    enabledModules: input.enabledModules?.length ? input.enabledModules : ["ACCOUNTING"],
+    ...COMPANY_DEFAULTS,
+    createdAt: toTimestamp(now),
+    updatedAt: toTimestamp(now),
+  });
+
+  const accounts = chartRows();
+  const byKey = new Map(accounts.filter((a) => a.systemKey).map((a) => [a.systemKey!, a.id]));
+
+  const provincial = await provincialTaxCodeTemplates(input.province);
+  const templates = [
+    ...provincial.map((template, i) => ({ template, isDefault: i === 0 })),
+    ...BASE_TAX_CODES.map((template) => ({ template, isDefault: false })),
+  ];
+  const taxCodes = taxCodeDocs(templates, byKey);
+
+  const currentYear = new Date().getUTCFullYear();
+  const years = input.fiscalYears ?? [currentYear - 1, currentYear, currentYear + 1];
+  const periods = fiscalPeriodDocs(years, fiscalYearStartMonth);
+  const taxPeriods = taxPeriodDocs(years, input.taxFilingFrequency ?? "QUARTERLY");
+  const leaveRows = defaultLeaveTypeRows(companyId);
+
+  const w = db.bulkWriter();
+  for (const a of accounts) {
+    w.set(sub(companyId, "accounts").doc(a.id), {
+      companyId,
+      code: a.code,
+      name: a.name,
+      type: a.type,
+      subtype: a.subtype,
+      parentId: null,
+      description: a.description,
+      isActive: true,
+      isSystem: a.isSystem,
+      systemKey: a.systemKey,
+      currency: "CAD",
+      createdAt: toTimestamp(now),
+      updatedAt: toTimestamp(now),
+    });
+    if (a.systemKey) {
+      // (guard doc for [companyId, code] uniqueness — created by createAccount
+      // normally; provisioning writes them directly)
+    }
+    w.set(companyRef(companyId).collection("accountCodes").doc(a.code), { accountId: a.id });
+  }
+  for (const t of taxCodes) {
+    w.set(sub(companyId, "taxCodes").doc(t.id), {
+      companyId,
+      code: t.code,
+      name: t.name,
+      description: t.description,
+      jurisdiction: t.jurisdiction,
+      appliesToSales: t.appliesToSales,
+      appliesToPurchases: t.appliesToPurchases,
+      isZeroRated: t.isZeroRated,
+      isExempt: t.isExempt,
+      isDefaultSales: t.isDefaultSales,
+      isDefaultPurchase: t.isDefaultPurchase,
+      isActive: t.isActive,
+      effectiveFrom: toTimestamp(t.effectiveFrom),
+      effectiveTo: null,
+      components: t.components,
+      createdAt: toTimestamp(now),
+    });
+    w.set(companyRef(companyId).collection("taxCodeCodes").doc(t.code), { taxCodeId: t.id });
+  }
+  for (const p of periods) {
+    w.set(sub(companyId, "fiscalPeriods").doc(p.id), {
+      companyId,
+      fiscalYear: p.fiscalYear,
+      periodNumber: p.periodNumber,
+      name: p.name,
+      startDate: toTimestamp(p.startDate),
+      endDate: toTimestamp(p.endDate),
+      status: "OPEN",
+      closedAt: null,
+      closedById: null,
+      reopenedAt: null,
+      notes: null,
+    });
+  }
+  for (const tp of taxPeriods) {
+    w.set(sub(companyId, "taxPeriods").doc(tp.id), {
+      companyId,
+      name: tp.name,
+      startDate: toTimestamp(tp.startDate),
+      endDate: toTimestamp(tp.endDate),
+      frequency: tp.frequency,
+      status: "OPEN",
+      filingReference: null,
+      filedAt: null,
+      lockedAt: null,
+      netFiledCents: null,
+      createdAt: toTimestamp(now),
+    });
+  }
+  for (const l of leaveRows) {
+    w.set(sub(companyId, "leaveTypes").doc(l.id), {
+      companyId,
+      name: l.name,
+      category: l.category,
+      isPaid: l.isPaid,
+      trackBalance: l.trackBalance,
+      isActive: true,
+      createdAt: toTimestamp(now),
+    });
+  }
+  await w.close();
+
+  return { id: companyId, name: input.name };
+}
+
+/**
+ * NOTE: the leading `_legacyTx` parameter is ignored. Callers still inside a
+ * Prisma `db.$transaction` pass it; it goes away when those call sites are
+ * rewired (Phase 6c/6d). Firestore writes here are NOT part of any passed
+ * transaction.
+ */
+export async function provisionAdditionalCompany(
+  _legacyTx: unknown,
+  input?: ProvisionCompanyInput,
+) {
+  return createCompanyAndSetup(input ?? (_legacyTx as ProvisionCompanyInput));
+}
+
+/**
+ * Add the published tax codes for a province the company does not yet have one
+ * for — selling into another province means charging that province's rate.
+ * Never marked default; existing codes are skipped; never edits an existing
+ * rate (§7).
+ */
+export async function createProvincialTaxCodes(
+  companyId: string,
+  province: string,
+): Promise<{ id: string; code: string }[]> {
+  const templates = await provincialTaxCodeTemplates(province);
+  if (templates.length === 0) return [];
+
+  const existing = await sub(companyId, "taxCodes").get();
+  const have = new Set(existing.docs.map((d) => d.data().code as string));
+  const missing = templates.filter((t) => !have.has(t.code));
+  if (missing.length === 0) return [];
+
+  const accountsSnap = await sub(companyId, "accounts").where("systemKey", "!=", null).get();
+  const byKey = new Map(
+    accountsSnap.docs.map((d) => [d.data().systemKey as string, d.id]),
+  );
+  const docs = taxCodeDocs(
+    missing.map((template) => ({ template, isDefault: false })),
+    byKey,
+  );
+
+  const now = new Date();
+  const w = db.bulkWriter();
+  for (const t of docs) {
+    w.set(sub(companyId, "taxCodes").doc(t.id), {
+      companyId,
+      code: t.code,
+      name: t.name,
+      description: t.description,
+      jurisdiction: t.jurisdiction,
+      appliesToSales: t.appliesToSales,
+      appliesToPurchases: t.appliesToPurchases,
+      isZeroRated: t.isZeroRated,
+      isExempt: t.isExempt,
+      isDefaultSales: false,
+      isDefaultPurchase: false,
+      isActive: true,
+      effectiveFrom: toTimestamp(t.effectiveFrom),
+      effectiveTo: null,
+      components: t.components,
+      createdAt: toTimestamp(now),
+    });
+    w.set(companyRef(companyId).collection("taxCodeCodes").doc(t.code), { taxCodeId: t.id });
+  }
+  await w.close();
+  return docs.map((t) => ({ id: t.id, code: t.code }));
+}
+
+export async function provisionCompany(
+  _legacyTxOrInput: unknown,
+  maybeInput?: ProvisionCompanyInput,
+) {
+  const input = (maybeInput ?? (_legacyTxOrInput as ProvisionCompanyInput));
+  const cycle: BillingCycle = isValidCycle(input.billingCycle) ? input.billingCycle : "MONTHLY";
+  const assignment = await resolveAssignment(input.plan ?? DEFAULT_PLAN_CODE, cycle);
+
+  const company = await createCompanyAndSetup(input);
+
+  if (assignment) {
+    const now = new Date();
+    const trialDays = input.trialDays ?? 30;
+    const trialing = trialDays > 0;
+    await subscriptions.create({
+      id: newId(),
+      companyId: company.id,
+      plan: assignment.planCode,
+      planId: assignment.planId,
+      planVersionId: assignment.planVersionId,
+      billingCycle: assignment.billingCycle,
+      currency: assignment.currency,
+      priceCents: assignment.priceCents,
+      monthlyEquivalentCents: assignment.monthlyEquivalentCents,
+      seats: assignment.seats,
+      seatsOverridden: false,
+      status: trialing ? "TRIALING" : "ACTIVE",
+      trialStartsAt: trialing ? now : null,
+      trialEndsAt: trialing ? addDays(now, trialDays) : null,
+      startedAt: trialing ? null : now,
+      currentPeriodStart: trialing ? null : now,
+      currentPeriodEnd: trialing ? null : addMonths(now, CYCLE_MONTHS[assignment.billingCycle]),
+    });
+  }
+
+  return company;
 }

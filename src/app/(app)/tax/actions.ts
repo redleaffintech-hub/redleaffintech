@@ -307,7 +307,7 @@ export async function addProvincialTaxCodesAction(province: string) {
   }
 
   try {
-    const created = await db.$transaction((tx) => createProvincialTaxCodes(tx, company.id, code));
+    const created = await createProvincialTaxCodes(company.id, code);
     if (created.length === 0) return { error: `The codes for ${code} already exist.` };
 
     await recordAudit({

@@ -22,7 +22,8 @@
 
 import "server-only";
 import { cache } from "react";
-import { db, type Tx } from "@/lib/db";
+import { plans as plansRepo, planVersions as planVersionsRepo } from "@/server/db/platform";
+import type { Plan as PlanDoc } from "@/server/db/types";
 import {
   BILLING_CYCLES,
   DEFAULT_PLAN_CODE,
@@ -51,12 +52,35 @@ type PlanWithChildren = {
   modules: { moduleId: string }[];
 };
 
-/** Everything a plan shape needs, in one include. */
+/** Everything a plan shape needs, in one include (kept for the Prisma admin path). */
 export const PLAN_INCLUDE = {
   prices: true,
   features: { orderBy: { sortOrder: "asc" } },
   modules: true,
 } as const;
+
+/** Adapt a stored Firestore Plan doc (features/modules as ordered string[]) to
+ *  the child-relation shape `planShapeFromRow` expects. */
+function toPlanWithChildren(p: PlanDoc): PlanWithChildren {
+  return {
+    id: p.id,
+    code: p.code,
+    name: p.name,
+    description: p.description,
+    forWhom: p.forWhom,
+    currency: p.currency,
+    seats: p.seats,
+    companies: p.companies,
+    storageGb: p.storageGb,
+    support: p.support,
+    sortOrder: p.sortOrder,
+    isPopular: p.isPopular,
+    contactOnly: p.contactOnly,
+    prices: p.prices,
+    features: p.features.map((label, sortOrder) => ({ label, sortOrder })),
+    modules: p.modules.map((moduleId) => ({ moduleId })),
+  };
+}
 
 const EMPTY_PRICE: PlanPriceView = { cycleAmountCents: 0, monthlyEquivalentCents: 0 };
 
@@ -127,25 +151,19 @@ interface CatalogueOptions {
 }
 
 async function loadPublished(options: CatalogueOptions = {}): Promise<PublicPlan[]> {
-  const plans = await db.plan.findMany({
-    where: {
-      status: "PUBLISHED",
-      archivedAt: null,
-      publishedVersionId: { not: null },
-      ...(options.publicOnly ? { isPublic: true } : {}),
-    },
-    orderBy: { sortOrder: "asc" },
-    select: { id: true, sortOrder: true, publishedVersionId: true },
-  });
+  const all = await plansRepo.list({ where: [["status", "==", "PUBLISHED"]], orderBy: "sortOrder" });
+  const plans = all.filter(
+    (p) =>
+      p.archivedAt == null &&
+      p.publishedVersionId != null &&
+      (!options.publicOnly || p.isPublic),
+  );
 
-  const versionIds = plans.map((plan) => plan.publishedVersionId!).filter(Boolean);
+  const versionIds = plans.map((p) => p.publishedVersionId!).filter(Boolean);
   if (versionIds.length === 0) return [];
 
-  const versions = await db.planVersion.findMany({
-    where: { id: { in: versionIds } },
-    select: { id: true, version: true, snapshot: true },
-  });
-  const byId = new Map(versions.map((version) => [version.id, version]));
+  const versions = await Promise.all(versionIds.map((id) => planVersionsRepo.get(id)));
+  const byId = new Map(versions.filter((v) => v).map((v) => [v!.id, v!]));
 
   return plans
     .map((plan) => {
@@ -231,30 +249,25 @@ export function assignmentFromPlan(plan: PublicPlan, cycle: BillingCycle): PlanA
  * can still be created on a catalogue that has been reorganised.
  */
 export async function resolveAssignment(
-  tx: Tx,
   code: string | undefined,
   cycle: BillingCycle = "MONTHLY",
 ): Promise<PlanAssignment | null> {
   const wanted = (code ?? DEFAULT_PLAN_CODE).toUpperCase();
 
-  const candidates = await tx.plan.findMany({
-    where: { status: "PUBLISHED", archivedAt: null, publishedVersionId: { not: null } },
-    orderBy: { sortOrder: "asc" },
-    include: PLAN_INCLUDE,
-  });
+  const candidates = (
+    await plansRepo.list({ where: [["status", "==", "PUBLISHED"]], orderBy: "sortOrder" })
+  ).filter((p) => p.archivedAt == null && p.publishedVersionId != null);
   if (candidates.length === 0) return null;
 
-  const row = candidates.find((plan) => plan.code === wanted) ?? candidates[0];
+  const row = candidates.find((p) => p.code === wanted) ?? candidates[0];
 
-  // Price from the published snapshot, not from the working copy — provisioning
-  // must charge what was published, exactly like every other sale.
   const version = row.publishedVersionId
-    ? await tx.planVersion.findUnique({ where: { id: row.publishedVersionId } })
+    ? await planVersionsRepo.get(row.publishedVersionId)
     : null;
   const shape =
     version && parseSnapshot(version.snapshot, version.id, version.version)
       ? parseSnapshot(version.snapshot, version.id, version.version)!
-      : planShapeFromRow(row);
+      : planShapeFromRow(toPlanWithChildren(row));
 
   return assignmentFromPlan(shape, cycle);
 }

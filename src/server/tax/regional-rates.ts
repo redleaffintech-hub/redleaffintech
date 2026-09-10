@@ -1,6 +1,6 @@
 import "server-only";
 
-import { db } from "@/lib/db";
+import { regionalTaxRates } from "@/server/db/platform";
 import { PROVINCES } from "@/lib/enums";
 import { SYSTEM_ACCOUNTS as SA } from "@/lib/enums";
 import type { TaxCodeTemplate, TaxComponentTemplate } from "@/server/setup/templates";
@@ -57,21 +57,27 @@ export function combinedRateMicro(rate: Pick<RegionalTaxRate, "federalRateMicro"
 }
 
 /** The regime in force for a province on a given date, or null if none is configured. */
-export async function currentRegionalTaxRate(province: string, asOf: Date = new Date()): Promise<RegionalTaxRate | null> {
-  return db.regionalTaxRate.findFirst({
-    where: {
-      province,
-      isActive: true,
-      effectiveFrom: { lte: asOf },
-      OR: [{ effectiveTo: null }, { effectiveTo: { gte: asOf } }],
-    },
-    orderBy: { effectiveFrom: "desc" },
-  });
+export async function currentRegionalTaxRate(
+  province: string,
+  asOf: Date = new Date(),
+): Promise<RegionalTaxRate | null> {
+  const rows = await regionalTaxRateHistory(province);
+  return (
+    rows.find(
+      (r) =>
+        r.isActive && r.effectiveFrom <= asOf && (r.effectiveTo === null || r.effectiveTo >= asOf),
+    ) ?? null
+  );
 }
 
 /** Full timeline for a province, most recent first — "view rate history". */
 export async function regionalTaxRateHistory(province: string): Promise<RegionalTaxRate[]> {
-  return db.regionalTaxRate.findMany({ where: { province }, orderBy: { effectiveFrom: "desc" } });
+  const rows = await regionalTaxRates.list({
+    where: [["province", "==", province]],
+    orderBy: "effectiveFrom",
+    direction: "desc",
+  });
+  return rows as unknown as RegionalTaxRate[];
 }
 
 // ── Validation ───────────────────────────────────────────────────────────────
@@ -133,9 +139,9 @@ export async function findOverlappingRate(
   input: Pick<RegionalRateInput, "province" | "effectiveFrom" | "effectiveTo">,
   excludeId?: string,
 ): Promise<RegionalTaxRate | null> {
-  const candidates = await db.regionalTaxRate.findMany({
-    where: { province: input.province, ...(excludeId ? { NOT: { id: excludeId } } : {}) },
-  });
+  const candidates = (
+    await regionalTaxRates.list({ where: [["province", "==", input.province]] })
+  ).filter((r) => !excludeId || r.id !== excludeId) as unknown as RegionalTaxRate[];
   const newStart = input.effectiveFrom.getTime();
   const newEnd = input.effectiveTo ? input.effectiveTo.getTime() : Infinity;
   for (const existing of candidates) {

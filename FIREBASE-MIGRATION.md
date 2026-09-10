@@ -323,10 +323,21 @@ Documented as a deliberate deviation from strict single-transaction atomicity.
     `src/server/auth/context.ts` (`getCurrentUser`, `requireCompany` and the
     tenant/role/module/capability guards on the repos), `db/platform.ts` sessions
     rekeyed to the token. `password.ts` is pure bcrypt — untouched. tsc clean.
-  - [ ] **6b — setup/provision** (company + chart of accounts + tax codes +
-    fiscal year in one transaction) and `src/server/companies`, `firm`,
-    `hr/leave`, `tax/regional-rates`, `plans/*`.
-  - [ ] **6c — admin portal** server layer (`src/server/admin/*`).
+  - [x] **6b — company setup + shared server modules.**
+    `setup/provision.ts` rewritten: company doc + chart of accounts (+ code
+    guards) + effective-dated tax codes (components embedded) + fiscal periods
+    + tax periods + default leave types via one `BulkWriter` after the company
+    doc exists; `+ createProvincialTaxCodes`. `hr/leave.ts` (default leave
+    types, `leaveBalance` / `leaveBalancesForEmployee` on the hr repos).
+    `tax/regional-rates.ts` (the 3 DB reads on the `regionalTaxRates` repo;
+    templating pure and unchanged). `plans/catalogue.ts` (`loadPublished` /
+    `resolveAssignment` on `plans` / `planVersions`; a `toPlanWithChildren`
+    adapter so `planShapeFromRow` is untouched). `provision*` keeps a leading
+    ignored `_legacyTx` param until `companies/actions.ts` and `admin/clients.ts`
+    are rewired (6c/6d). `tsconfig` excludes `prisma` / `scripts` / `src/generated`
+    (all deleted at cutover). tsc clean.
+  - [ ] **6c — admin portal** server layer (`src/server/admin/*`, `plans/admin.ts`,
+    `firm/portfolio.ts`, `companies/families.ts`).
   - [ ] **6d–6h — `src/app/**`**: sales, purchases, accounting/banking/tax,
     company/hr/payroll/inventory, reports/dashboard, admin pages, login + api
     routes + marketing. `reports/exports.ts` folds in here.
