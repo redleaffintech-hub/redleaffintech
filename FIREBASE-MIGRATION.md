@@ -350,8 +350,13 @@ Documented as a deliberate deviation from strict single-transaction atomicity.
     promote / suspend / remove — the "one active admin always remains" guard
     keeps its atomicity via `runTransaction` reading the active-admin query then
     updating; step-up auth unchanged).
-  - [ ] **6c‑3 — admin data modules**: `admin/clients.ts`, `admin/subscriptions.ts`,
-    `admin/users.ts`, `plans/admin.ts`, `firm/portfolio.ts`.
+  - [x] **6c‑3 — firm workspace.** `firm/portfolio.ts` (`requireFirmAccess` /
+    `requireFirmClient` on the accountant memberships; `clientSnapshot` and the
+    9-point `closeChecklist` on the repos + the `-fs` reports —
+    `checkLedgerIntegrity`, `arAging`/`apAging`, `taxControlReconciliation`,
+    uncategorised-holding via `accountRawBalanceAsOf`).
+  - [ ] **6c‑4 — admin data modules**: `admin/clients.ts`, `admin/subscriptions.ts`,
+    `admin/users.ts`, `plans/admin.ts`.
   - [ ] **6d–6h — `src/app/**`**: sales, purchases, accounting/banking/tax,
     company/hr/payroll/inventory, reports/dashboard, admin pages, login + api
     routes + marketing. `reports/exports.ts` folds in here.

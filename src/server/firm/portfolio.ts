@@ -1,25 +1,32 @@
 /**
- * The firm workspace (spec §32 — Firm workspace: client dashboard, review
- * queue, close checklist).
- *
- * An external accountant works across several client files at once. Nothing
- * here widens the tenant boundary: the list of clients is exactly the set of
- * companies where this user holds an ACCOUNTANT membership, and every figure is
- * still read through that company's own id.
+ * The firm workspace (§32). An external accountant works across several client
+ * files. Nothing here widens the tenant boundary: the client list is exactly
+ * the companies where this user holds an ACCOUNTANT membership.
  */
 
 import "server-only";
 import { cache } from "react";
 import { notFound } from "next/navigation";
-import { db } from "@/lib/db";
-import { addMonths, endOfMonth, daysBetween, today } from "@/lib/dates";
+import { addMonths, daysBetween, endOfMonth, today } from "@/lib/dates";
 import { SYSTEM_ACCOUNTS } from "@/lib/enums";
 import { formatMoney } from "@/lib/money";
-import { checkLedgerIntegrity } from "@/server/accounting/ledger";
-import { apAging, arAging } from "@/server/reports/aging";
-import { taxControlReconciliation } from "@/server/reports/tax";
-import { requireUser } from "@/server/auth/context";
 import { DEFAULT_CURRENCY } from "@/lib/currency";
+import { checkLedgerIntegrity } from "@/server/accounting/ledger-fs";
+import { apAging, arAging } from "@/server/reports/aging-fs";
+import { taxControlReconciliation } from "@/server/reports/tax-fs";
+import { accountRawBalanceAsOf } from "@/server/reports/ledger-fs";
+import { requireUser } from "@/server/auth/context";
+import { getCompany } from "@/server/db/companies";
+import { listMembershipsForUser } from "@/server/db/company-users";
+import { getAccountsBySystemKeys } from "@/server/db/accounts";
+import { firms } from "@/server/db/platform";
+import { bills } from "@/server/db/bills";
+import { invoices } from "@/server/db/invoices";
+import { bankAccounts, listBankTransactions } from "@/server/db/banking";
+import { listFiscalPeriods } from "@/server/db/fiscal-periods";
+import { listTaxPeriods } from "@/server/db/tax-periods";
+import { listTaxEntriesInRange } from "@/server/db/tax-entries";
+import { sub } from "@/server/db/firestore";
 
 export interface FirmClient {
   id: string;
@@ -27,49 +34,36 @@ export interface FirmClient {
   province: string;
   fiscalYearStartMonth: number;
   isReadOnly: boolean;
-  /** Each client keeps its own books — never format one in another's currency. */
   baseCurrency: string;
 }
 
-/**
- * Gate for every /firm screen. A user with no accountant engagement has no firm
- * workspace at all — not an empty one.
- */
 export const requireFirmAccess = cache(async () => {
   const user = await requireUser();
 
-  const memberships = await db.companyUser.findMany({
-    where: { userId: user.id, role: "ACCOUNTANT", status: "ACTIVE" },
-    include: {
-      company: {
-        select: {
-          id: true, name: true, province: true, fiscalYearStartMonth: true,
-          isReadOnly: true, baseCurrency: true, firmId: true,
-        },
-      },
-    },
-    orderBy: { company: { name: "asc" } },
-  });
+  const memberships = (
+    await listMembershipsForUser(user.id, { status: "ACTIVE" })
+  ).filter((m) => m.role === "ACCOUNTANT");
   if (memberships.length === 0) notFound();
 
-  const firmId = memberships.find((m) => m.company.firmId)?.company.firmId ?? null;
-  const firm = firmId ? await db.firm.findUnique({ where: { id: firmId }, select: { id: true, name: true } }) : null;
+  const companies = await Promise.all(memberships.map((m) => getCompany(m.companyId)));
+  const clients = companies
+    .filter((c): c is NonNullable<typeof c> => c !== null)
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((c) => ({
+      id: c.id,
+      name: c.name,
+      province: c.province,
+      fiscalYearStartMonth: c.fiscalYearStartMonth,
+      isReadOnly: c.isReadOnly,
+      baseCurrency: c.baseCurrency,
+    })) satisfies FirmClient[];
 
-  return {
-    user,
-    firm,
-    clients: memberships.map((m) => ({
-      id: m.company.id,
-      name: m.company.name,
-      province: m.company.province,
-      fiscalYearStartMonth: m.company.fiscalYearStartMonth,
-      isReadOnly: m.company.isReadOnly,
-      baseCurrency: m.company.baseCurrency,
-    })) satisfies FirmClient[],
-  };
+  const firmId = companies.find((c) => c?.firmId)?.firmId ?? null;
+  const firm = firmId ? await firms.get(firmId) : null;
+
+  return { user, firm: firm ? { id: firm.id, name: firm.name } : null, clients };
 });
 
-/** Confirms one company id is genuinely on this accountant's client list. */
 export async function requireFirmClient(companyId: string | undefined) {
   const { clients, user, firm } = await requireFirmAccess();
   const client = companyId ? clients.find((c) => c.id === companyId) : clients[0];
@@ -104,52 +98,61 @@ export interface ClientSnapshot {
   attention: AttentionItem[];
 }
 
-/**
- * One client's health in a handful of indexed counts. Deliberately cheap: the
- * dashboard runs this for every client on the list, so nothing here walks the
- * ledger line by line.
- */
+async function uncategorizedBalanceCents(companyId: string, asOf: Date) {
+  const accounts = await getAccountsBySystemKeys(companyId, [
+    SYSTEM_ACCOUNTS.UNCATEGORIZED_INCOME,
+    SYSTEM_ACCOUNTS.UNCATEGORIZED_EXPENSE,
+  ]);
+  if (accounts.length === 0) return 0;
+  let total = 0;
+  for (const a of accounts) total += await accountRawBalanceAsOf(companyId, a.id, asOf);
+  return total;
+}
+
+/** Any tax entries dated inside a period? */
+async function periodHasTax(companyId: string, from: Date, to: Date): Promise<boolean> {
+  const rows = await listTaxEntriesInRange(companyId, from, to);
+  return rows.length > 0;
+}
+
 export async function clientSnapshot(client: FirmClient): Promise<ClientSnapshot> {
   const asOf = today();
   const currency = client.baseCurrency;
 
-  const [integrity, bankQueue, billsAwaitingApproval, overdue, lastEntry, periodsBehind, taxPeriod, uncategorized] =
+  const [integrity, bankTxns, pendingBills, openInvoices, entriesSnap, periods, taxPeriods, uncategorized] =
     await Promise.all([
-      checkLedgerIntegrity(db, client.id),
-      db.bankTransaction.count({ where: { companyId: client.id, status: "UNMATCHED" } }),
-      db.bill.count({ where: { companyId: client.id, approvalStatus: "PENDING" } }),
-      db.invoice.aggregate({
-        where: {
-          companyId: client.id,
-          status: { in: ["SENT", "PARTIALLY_PAID", "OVERDUE"] },
-          balanceCents: { gt: 0 },
-          dueDate: { lt: asOf },
-        },
-        _count: { _all: true },
-        _sum: { balanceCents: true },
+      checkLedgerIntegrity(client.id),
+      listBankTransactions(client.id, { status: "UNMATCHED" }),
+      bills.list(client.id, { where: [["approvalStatus", "==", "PENDING"]] }),
+      invoices.list(client.id, {
+        where: [["status", "in", ["SENT", "PARTIALLY_PAID", "OVERDUE"]]],
       }),
-      db.journalEntry.findFirst({
-        where: { companyId: client.id },
-        orderBy: [{ date: "desc" }, { createdAt: "desc" }],
-        select: { date: true },
-      }),
-      // Periods that have ended but are still open — the close backlog.
-      db.fiscalPeriod.count({ where: { companyId: client.id, status: "OPEN", endDate: { lt: asOf } } }),
-      // Only periods with something in them. A registrant does have to file a
-      // nil return, but the calendar routinely runs back before the company
-      // traded, and flagging those empty quarters would bury the real ones.
-      db.taxPeriod.findFirst({
-        where: {
-          companyId: client.id,
-          status: { in: ["OPEN", "REVIEW"] },
-          endDate: { lt: asOf },
-          taxEntries: { some: {} },
-        },
-        orderBy: { endDate: "asc" },
-        select: { id: true, name: true, status: true, endDate: true },
-      }),
-      uncategorizedBalanceCents(client.id),
+      sub(client.id, "journalEntries").orderBy("date", "desc").limit(1).get(),
+      listFiscalPeriods(client.id),
+      listTaxPeriods(client.id),
+      uncategorizedBalanceCents(client.id, asOf),
     ]);
+
+  const bankQueue = bankTxns.length;
+  const billsAwaitingApproval = pendingBills.length;
+  const overdueRows = openInvoices.filter((i) => i.balanceCents > 0 && i.dueDate < asOf);
+  const overdueInvoices = overdueRows.length;
+  const overdueCents = overdueRows.reduce((s, i) => s + i.balanceCents, 0);
+  const periodsBehind = periods.filter((p) => p.status === "OPEN" && p.endDate < asOf).length;
+  const lastEntryDate = entriesSnap.empty
+    ? null
+    : (entriesSnap.docs[0].data().date as FirebaseFirestore.Timestamp).toDate();
+
+  // Earliest OPEN/REVIEW period that has ended and carries tax activity.
+  let taxPeriod: { id: string; name: string; status: string; endDate: Date } | null = null;
+  for (const p of taxPeriods
+    .filter((p) => ["OPEN", "REVIEW"].includes(p.status) && p.endDate < asOf)
+    .sort((a, b) => a.endDate.getTime() - b.endDate.getTime())) {
+    if (await periodHasTax(client.id, p.startDate, p.endDate)) {
+      taxPeriod = { id: p.id, name: p.name, status: p.status, endDate: p.endDate };
+      break;
+    }
+  }
 
   const attention: AttentionItem[] = [];
   const add = (severity: Severity, title: string, detail: string, href: string) =>
@@ -199,11 +202,11 @@ export async function clientSnapshot(client: FirmClient): Promise<ClientSnapshot
   if (periodsBehind > 2) {
     add("info", "Periods left open", `${periodsBehind} finished periods are still open.`, "/accounting/periods");
   }
-  if ((overdue._count._all ?? 0) > 0) {
+  if (overdueInvoices > 0) {
     add(
       "info",
       "Receivables overdue",
-      `${overdue._count._all} invoices past due, ${formatMoney(overdue._sum.balanceCents ?? 0, { currency })} outstanding.`,
+      `${overdueInvoices} invoices past due, ${formatMoney(overdueCents, { currency })} outstanding.`,
       "/reports/ar-aging",
     );
   }
@@ -215,35 +218,14 @@ export async function clientSnapshot(client: FirmClient): Promise<ClientSnapshot
     equationGapCents: integrity.equationGapCents,
     bankQueue,
     billsAwaitingApproval,
-    overdueInvoices: overdue._count._all ?? 0,
-    overdueCents: overdue._sum.balanceCents ?? 0,
+    overdueInvoices,
+    overdueCents,
     uncategorizedCents: uncategorized,
-    lastPostedAt: lastEntry?.date ?? null,
+    lastPostedAt: lastEntryDate,
     openPeriodsBehind: periodsBehind,
-    taxPeriod:
-      taxPeriod && dueDate
-        ? { id: taxPeriod.id, name: taxPeriod.name, status: taxPeriod.status, dueDate, daysToDue }
-        : null,
-  attention,
+    taxPeriod: taxPeriod && dueDate ? { ...taxPeriod, dueDate, daysToDue } : null,
+    attention,
   };
-}
-
-/** Net balance sitting in the two uncategorised holding accounts. */
-async function uncategorizedBalanceCents(companyId: string) {
-  const accounts = await db.account.findMany({
-    where: {
-      companyId,
-      systemKey: { in: [SYSTEM_ACCOUNTS.UNCATEGORIZED_INCOME, SYSTEM_ACCOUNTS.UNCATEGORIZED_EXPENSE] },
-    },
-    select: { id: true },
-  });
-  if (accounts.length === 0) return 0;
-
-  const totals = await db.journalLine.aggregate({
-    where: { companyId, accountId: { in: accounts.map((a) => a.id) } },
-    _sum: { debitCents: true, creditCents: true },
-  });
-  return (totals._sum.debitCents ?? 0) - (totals._sum.creditCents ?? 0);
 }
 
 // ── Close checklist ─────────────────────────────────────────────────────────
@@ -262,47 +244,56 @@ export interface CloseChecklist {
   readyToClose: boolean;
 }
 
-/**
- * What has to be true before a month is closed. Each check is the same
- * reconciliation the reports themselves perform, so a green checklist and a
- * clean set of statements can never disagree.
- */
-export async function closeChecklist(companyId: string, periodId?: string): Promise<CloseChecklist | null> {
+export async function closeChecklist(
+  companyId: string,
+  periodId?: string,
+): Promise<CloseChecklist | null> {
   const asOf = today();
-  // Only an id is passed in, so the currency has to be fetched: a firm's
-  // clients do not necessarily share one.
-  const currency =
-    (await db.company.findUnique({ where: { id: companyId }, select: { baseCurrency: true } }))?.baseCurrency ??
-    DEFAULT_CURRENCY;
+  const currency = (await getCompany(companyId))?.baseCurrency ?? DEFAULT_CURRENCY;
+
+  const periods = await listFiscalPeriods(companyId);
   const period = periodId
-    ? await db.fiscalPeriod.findFirst({ where: { id: periodId, companyId } })
-    : await db.fiscalPeriod.findFirst({
-        where: { companyId, status: "OPEN", endDate: { lt: asOf } },
-        orderBy: { startDate: "asc" },
-      });
+    ? periods.find((p) => p.id === periodId) ?? null
+    : periods
+        .filter((p) => p.status === "OPEN" && p.endDate < asOf)
+        .sort((a, b) => a.startDate.getTime() - b.startDate.getTime())[0] ?? null;
   if (!period) return null;
 
   const range = { from: period.startDate, to: period.endDate };
 
-  const [integrity, ar, ap, tax, unmatched, bankAccounts, draftEntries, uncategorized] = await Promise.all([
-    checkLedgerIntegrity(db, companyId),
+  const [integrity, ar, ap, tax, bankTxns, accts, drafts, uncategorized] = await Promise.all([
+    checkLedgerIntegrity(companyId),
     arAging(companyId, period.endDate),
     apAging(companyId, period.endDate),
     taxControlReconciliation(companyId, range),
-    db.bankTransaction.count({
-      where: { companyId, status: "UNMATCHED", date: { gte: period.startDate, lte: period.endDate } },
+    listBankTransactions(companyId, {
+      status: "UNMATCHED",
+      from: period.startDate,
+      to: period.endDate,
     }),
-    db.bankAccount.findMany({ where: { companyId, isActive: true }, select: { id: true, name: true } }),
-    db.journalEntry.count({ where: { companyId, status: "DRAFT", date: { gte: period.startDate, lte: period.endDate } } }),
-    uncategorizedBalanceCents(companyId),
+    bankAccounts.list(companyId, { where: [["isActive", "==", true]] }),
+    sub(companyId, "journalEntries")
+      .where("status", "==", "DRAFT")
+      .where("date", ">=", period.startDate)
+      .where("date", "<=", period.endDate)
+      .get(),
+    uncategorizedBalanceCents(companyId, period.endDate),
   ]);
+  const unmatched = bankTxns.length;
+  const draftEntries = drafts.size;
 
-  const reconciledThrough = await db.bankReconciliation.findMany({
-    where: { companyId, status: "COMPLETED", statementEndDate: { gte: period.endDate } },
-    select: { bankAccountId: true },
-  });
-  const reconciledIds = new Set(reconciledThrough.map((r) => r.bankAccountId));
-  const unreconciled = bankAccounts.filter((account) => !reconciledIds.has(account.id));
+  const reconciledThrough = await sub(companyId, "bankReconciliations")
+    .where("status", "==", "COMPLETED")
+    .get();
+  const reconciledIds = new Set(
+    reconciledThrough.docs
+      .filter((d) => {
+        const end = (d.data().statementEndDate as FirebaseFirestore.Timestamp)?.toDate?.();
+        return end && end >= period.endDate;
+      })
+      .map((d) => d.data().bankAccountId as string),
+  );
+  const unreconciled = accts.filter((a) => !reconciledIds.has(a.id));
 
   const checks: CloseCheck[] = [
     {
@@ -338,12 +329,12 @@ export async function closeChecklist(companyId: string, periodId?: string): Prom
       key: "bank-rec",
       label: "Every bank account is reconciled",
       detail:
-        bankAccounts.length === 0
+        accts.length === 0
           ? "No bank accounts on this file."
           : unreconciled.length === 0
             ? "All accounts reconciled through the period end."
             : `Not reconciled: ${unreconciled.map((a) => a.name).join(", ")}.`,
-      state: bankAccounts.length === 0 ? "attention" : unreconciled.length === 0 ? "pass" : "fail",
+      state: accts.length === 0 ? "attention" : unreconciled.length === 0 ? "pass" : "fail",
       href: "/banking/reconcile",
     },
     {
@@ -402,6 +393,6 @@ export async function closeChecklist(companyId: string, periodId?: string): Prom
       fiscalYear: period.fiscalYear,
     },
     checks,
-    readyToClose: checks.every((check) => check.state !== "fail"),
+    readyToClose: checks.every((c) => c.state !== "fail"),
   };
 }
