@@ -254,8 +254,17 @@ Documented as a deliberate deviation from strict single-transaction atomicity.
   classification copied verbatim. `reports/aging-fs.ts` (AR/AP aging with
   as-of-date balances, unapplied receipts + open credit notes, control-account
   reconciliation). Indexes added.
-- [ ] **Phase 5c — tax reports** (`taxSummary`/`taxDetail`), `dashboard-fs.ts`,
-  `closeChecklist`, `partyStatement`, CSV export (`reports/exports.ts`).
+- [x] **Phase 5c — tax reports, dashboard, close checklist, statements.**
+  `reports/tax-fs.ts` (`taxSummary`, `taxDetail`, `taxControlReconciliation`,
+  `taxPeriodReturn`, `setTaxPeriodStatus` — GL movement from `sumsInRange`, line
+  101 straight off the REVENUE accounts). `reports/dashboard-fs.ts`
+  (`dashboardData` + `currentTaxPosition`; `bankQueue` / `unpaidRecurring` read
+  the not-yet-migrated banking/recurring collections and are simply 0 until
+  Phase 5d). `accounting/journals-fs.ts` gains `closeChecklist`.
+  `reports/aging-fs.ts` gains `partyStatement`. `getAccountsBySystemKeys` added.
+- [ ] **Phase 5d — CSV export** (`reports/exports.ts`), and the standalone
+  modules: banking & reconciliation, HR, payroll, recurring, projects, budgets,
+  attachments, notifications, subscriptions/plans read paths used by the app.
 - [ ] **Phase 5c — banking & reconciliation, HR, payroll, recurring, projects,
   budgets, attachments, notifications.**
 - [ ] **Phase 6 — rewire call sites**: every `src/app/**/actions.ts`, page and

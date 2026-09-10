@@ -16,7 +16,11 @@ import { getCompanyOrThrow } from "@/server/db/companies";
 import { balancesInRange } from "@/server/db/account-balances";
 import { setFiscalYearStatus, updateFiscalPeriodTx } from "@/server/db/fiscal-periods";
 import { findClosingEntryTx } from "@/server/db/journal-entries";
-import { runTransaction, sub } from "@/server/db/firestore";
+import { listTaxEntriesInRange } from "@/server/db/tax-entries";
+import { bills } from "@/server/db/bills";
+import { invoices } from "@/server/db/invoices";
+import { runTransaction, sub, toTimestamp } from "@/server/db/firestore";
+import { sumsInRange } from "@/server/reports/ledger-fs";
 import { getSystemAccount, naturalBalance, postJournal, PostingError } from "./ledger-fs";
 
 export interface ManualJournalInput {
@@ -50,6 +54,85 @@ export async function postManualJournal(input: ManualJournalInput) {
       lines: input.lines,
     }),
   );
+}
+
+// ── Pre-close checklist (§14) ───────────────────────────────────────────────
+
+export interface CloseChecklistItem {
+  key: string;
+  label: string;
+  status: "PASS" | "WARN" | "FAIL";
+  detail: string;
+}
+
+export async function closeChecklist(
+  companyId: string,
+  periodStart: Date,
+  periodEnd: Date,
+): Promise<CloseChecklistItem[]> {
+  const items: CloseChecklistItem[] = [];
+
+  const sums = await sumsInRange(companyId, periodStart, periodEnd);
+  let debit = 0;
+  let credit = 0;
+  for (const s of sums.values()) {
+    debit += s.debitCents;
+    credit += s.creditCents;
+  }
+  const gap = debit - credit;
+  items.push({
+    key: "balanced",
+    label: "Journal entries balance",
+    status: gap === 0 ? "PASS" : "FAIL",
+    detail: gap === 0 ? "Debits equal credits for the period." : `Out of balance by ${(gap / 100).toFixed(2)}.`,
+  });
+
+  const uncategorized = (
+    await sub(companyId, "bankTransactions")
+      .where("status", "==", "UNMATCHED")
+      .where("date", ">=", toTimestamp(periodStart))
+      .where("date", "<=", toTimestamp(periodEnd))
+      .get()
+  ).size;
+  items.push({
+    key: "bank_queue",
+    label: "Bank transactions categorised",
+    status: uncategorized === 0 ? "PASS" : "FAIL",
+    detail:
+      uncategorized === 0
+        ? "Nothing left in the review queue."
+        : `${uncategorized} transaction(s) still uncategorised.`,
+  });
+
+  const draftInvoices = (
+    await invoices.list(companyId, { where: [["status", "==", "DRAFT"]] })
+  ).filter((i) => i.issueDate >= periodStart && i.issueDate <= periodEnd).length;
+  const draftBills = (
+    await bills.list(companyId, { where: [["status", "in", ["DRAFT", "AWAITING_APPROVAL"]]] })
+  ).filter((b) => b.issueDate >= periodStart && b.issueDate <= periodEnd).length;
+  items.push({
+    key: "drafts",
+    label: "No unposted documents",
+    status: draftInvoices + draftBills === 0 ? "PASS" : "WARN",
+    detail:
+      draftInvoices + draftBills === 0
+        ? "Every invoice and bill in the period is posted."
+        : `${draftInvoices} draft invoice(s), ${draftBills} unposted bill(s).`,
+  });
+
+  const entries = await listTaxEntriesInRange(companyId, periodStart, periodEnd);
+  const collected = entries.filter((e) => e.direction === "SALE").reduce((s, e) => s + e.taxCents, 0);
+  const paid = entries
+    .filter((e) => e.direction === "PURCHASE")
+    .reduce((s, e) => s + e.recoverableCents, 0);
+  items.push({
+    key: "tax",
+    label: "Sales tax reviewed",
+    status: "WARN",
+    detail: `Net tax for the period is ${((collected - paid) / 100).toFixed(2)}. Review Tax Centre before filing.`,
+  });
+
+  return items;
 }
 
 // ── Period close (§14) ──────────────────────────────────────────────────────

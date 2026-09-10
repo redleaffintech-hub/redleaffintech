@@ -11,6 +11,8 @@ import "server-only";
 import { SYSTEM_ACCOUNTS } from "@/lib/enums";
 import { daysBetween } from "@/lib/dates";
 import { getSystemAccount } from "@/server/db/accounts";
+import { sub, toTimestamp } from "@/server/db/firestore";
+import { getEntry } from "@/server/db/journal-entries";
 import { invoices } from "@/server/db/invoices";
 import { bills } from "@/server/db/bills";
 import { creditNotes } from "@/server/db/credit-notes";
@@ -314,4 +316,95 @@ export function bucketLabels(buckets: readonly number[]): string[] {
   }
   labels.push(`${previous + 1}+ days`);
   return labels;
+}
+
+/** Customer or vendor statement: opening, activity, payments, closing (§12). */
+export async function partyStatement(
+  companyId: string,
+  party: { customerId?: string; vendorId?: string },
+  from: Date,
+  to: Date,
+) {
+  const isCustomer = Boolean(party.customerId);
+  const partyId = party.customerId ?? party.vendorId!;
+  const control = isCustomer
+    ? SYSTEM_ACCOUNTS.ACCOUNTS_RECEIVABLE
+    : SYSTEM_ACCOUNTS.ACCOUNTS_PAYABLE;
+  const account = await getSystemAccount(companyId, control);
+  if (!account) throw new Error("Control account not configured.");
+  const partyField = isCustomer ? "customerId" : "vendorId";
+
+  const [beforeSnap, inRangeSnap] = await Promise.all([
+    sub(companyId, "journalLines")
+      .where("accountId", "==", account.id)
+      .where("date", "<", toTimestamp(from))
+      .get(),
+    sub(companyId, "journalLines")
+      .where("accountId", "==", account.id)
+      .where("date", ">=", toTimestamp(from))
+      .where("date", "<=", toTimestamp(to))
+      .get(),
+  ]);
+
+  const sign = (d: number, c: number) => (isCustomer ? d - c : c - d);
+
+  interface PsLine {
+    id: string;
+    journalEntryId: string;
+    lineNo: number;
+    date: Date;
+    debitCents: number;
+    creditCents: number;
+    description: string | null;
+  }
+  const forParty = (raw: FirebaseFirestore.DocumentData) => raw[partyField] === partyId;
+  const toLine = (d: FirebaseFirestore.QueryDocumentSnapshot): PsLine => {
+    const raw = d.data();
+    return {
+      id: d.id,
+      journalEntryId: raw.journalEntryId,
+      lineNo: raw.lineNo ?? 0,
+      date: (raw.date as FirebaseFirestore.Timestamp).toDate(),
+      debitCents: raw.debitCents ?? 0,
+      creditCents: raw.creditCents ?? 0,
+      description: raw.description ?? null,
+    };
+  };
+
+  const openingCents = beforeSnap.docs
+    .filter((d) => forParty(d.data()))
+    .map(toLine)
+    .reduce((s, l) => s + sign(l.debitCents, l.creditCents), 0);
+
+  const lines = inRangeSnap.docs
+    .filter((d) => forParty(d.data()))
+    .map(toLine)
+    .sort((a, b) => a.date.getTime() - b.date.getTime() || a.lineNo - b.lineNo);
+
+  let running = openingCents;
+  const rows = [];
+  for (const line of lines) {
+    const movement = sign(line.debitCents, line.creditCents);
+    running += movement;
+    const entry = await getEntry(companyId, line.journalEntryId);
+    rows.push({
+      ...line,
+      journalEntry: entry
+        ? {
+            entryNo: entry.entryNo,
+            sourceType: entry.sourceType,
+            sourceNumber: entry.sourceNumber,
+            memo: entry.memo,
+          }
+        : null,
+      movementCents: movement,
+      runningBalanceCents: running,
+    });
+  }
+
+  const entity = isCustomer
+    ? await getCustomer(companyId, partyId)
+    : await getVendor(companyId, partyId);
+
+  return { entity, openingCents, rows, closingCents: running, from, to };
 }

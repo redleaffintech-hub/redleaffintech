@@ -120,6 +120,16 @@ export async function getSystemAccountTx(
   return snap.empty ? null : decode(snap.docs[0].data(), snap.docs[0].id);
 }
 
+/** Every account carrying one of the given system keys (max 30). */
+export async function getAccountsBySystemKeys(
+  companyId: string,
+  keys: string[],
+): Promise<Account[]> {
+  if (keys.length === 0) return [];
+  const snap = await col(companyId).where("systemKey", "in", keys.slice(0, 30)).get();
+  return mapDocs(snap, decode);
+}
+
 // ── Writes ───────────────────────────────────────────────────────────────────
 
 export interface NewAccount {
