@@ -312,14 +312,28 @@ Documented as a deliberate deviation from strict single-transaction atomicity.
   Phase 6 rewire.
 - [ ] **Phase 5c — banking & reconciliation, HR, payroll, recurring, projects,
   budgets, attachments, notifications.**
-- [ ] **Phase 6 — rewire call sites**: every `src/app/**/actions.ts`, page and
-  `src/server/**` module off `@/lib/db` and onto the repos / `-fs` engines.
-- [ ] **Phase 7 — auth** (§5): Firebase Auth, session cookies, guards, MFA.
-- [ ] **Phase 8 — platform admin**: plans, subscriptions, audit, regional rates.
-- [ ] **Phase 9 — data migration script**: read every table from Neon,
+- **Phase 6 — rewire call sites** off `@/lib/db` / `src/generated/prisma` onto
+  the repos and `-fs` engines. Auth stays custom (JWT cookie + `sessions/{token}`
+  doc) rather than adopting Firebase Auth — the existing bcrypt/MFA/scope/
+  rate‑limit design is kept, only its datastore changes. Files with an `-fs`
+  twin get their importers repointed; files without one (auth, admin, plans,
+  firm, companies, setup, exports) are edited in place.
+  - [x] **6a — auth foundation.** `src/server/auth/session.ts` (JWT + cookie
+    unchanged; `sessions/{token}`, `updateUser` for lastLoginAt),
+    `src/server/auth/context.ts` (`getCurrentUser`, `requireCompany` and the
+    tenant/role/module/capability guards on the repos), `db/platform.ts` sessions
+    rekeyed to the token. `password.ts` is pure bcrypt — untouched. tsc clean.
+  - [ ] **6b — setup/provision** (company + chart of accounts + tax codes +
+    fiscal year in one transaction) and `src/server/companies`, `firm`,
+    `hr/leave`, `tax/regional-rates`, `plans/*`.
+  - [ ] **6c — admin portal** server layer (`src/server/admin/*`).
+  - [ ] **6d–6h — `src/app/**`**: sales, purchases, accounting/banking/tax,
+    company/hr/payroll/inventory, reports/dashboard, admin pages, login + api
+    routes + marketing. `reports/exports.ts` folds in here.
+- [ ] **Phase 7 — data migration script**: read every table from Neon,
   transform, write to Firestore preserving ids; rebuild `accountPeriodBalances`;
   verify row counts and a trial balance per company matches pre/post.
-- [ ] **Phase 10 — cutover**: enable Blaze, deploy App Hosting backend, smoke
+- [ ] **Phase 8 — cutover**: enable Blaze, deploy App Hosting backend, smoke
   test, move DNS, remove Prisma/`prisma/`, `@prisma/*`, `pg`, `src/lib/db.ts`,
   `src/generated/prisma`, `netlify.toml`, `render.yaml`.
 

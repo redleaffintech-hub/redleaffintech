@@ -167,6 +167,8 @@ export async function currentRegionalRate(
 }
 
 // ── Auth substrate ─────────────────────────────────────────────────────────
+//
+// `sessions/{token}` — the opaque session token IS the doc id (a uuid, unique).
 const { decode: decSess, encode: encSess } = converter<Session>([
   "mfaVerifiedAt",
   "lastSeenAt",
@@ -175,16 +177,21 @@ const { decode: decSess, encode: encSess } = converter<Session>([
   "createdAt",
 ]);
 export async function getSessionByToken(token: string): Promise<Session | null> {
-  const snap = await top("sessions").where("token", "==", token).limit(1).get();
-  return snap.empty ? null : decSess(snap.docs[0].data(), snap.docs[0].id);
+  const snap = await top("sessions").doc(token).get();
+  return snap.exists ? decSess(snap.data()!, snap.id) : null;
 }
-export async function createSession(input: Omit<Session, "id" | "createdAt">): Promise<Session> {
-  const row = { ...input, id: newId(), createdAt: new Date() } as Session;
-  await top("sessions").doc(row.id).set(encSess(row));
+export async function createSession(
+  input: Omit<Session, "id" | "createdAt"> & { token: string },
+): Promise<Session> {
+  const row = { ...input, id: input.token, createdAt: new Date() } as Session;
+  await top("sessions").doc(input.token).set(encSess(row));
   return row;
 }
-export async function updateSession(id: string, data: Partial<Session>): Promise<void> {
-  await top("sessions").doc(id).update(encSess(data));
+export async function updateSession(token: string, data: Partial<Session>): Promise<void> {
+  await top("sessions").doc(token).update(encSess(data));
+}
+export async function revokeSessionByToken(token: string): Promise<void> {
+  await top("sessions").doc(token).set({ revokedAt: encSess({ revokedAt: new Date() }).revokedAt }, { merge: true });
 }
 export async function revokeSessionsForUser(userId: string, scope?: string): Promise<void> {
   let q: FirebaseFirestore.Query = top("sessions").where("userId", "==", userId);
