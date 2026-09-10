@@ -70,3 +70,9 @@ deno.lock
 
 # Firebase CLI debug output.
 firebase-debug.log
+
+# Firebase emulator artifacts
+firestore-debug.log
+ui-debug.log
+firestore-export/
+.firebase/
