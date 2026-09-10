@@ -1,21 +1,32 @@
 /**
- * Client-company administration: searching the book of business, and
- * provisioning a new client end to end.
+ * Client-company administration: searching the book of business, provisioning a
+ * new client, editing, freezing, module access, and deletion.
  *
- * Provisioning is the delicate one. A client account is not one row — it is a
- * company, a user, a membership, a subscription, a chart of accounts, a set of
- * effective-dated tax codes, fiscal periods and tax periods. A half-created
- * client is worse than none at all: it looks real, it appears in every list, and
- * the first thing it does when someone signs in is fail to post. So the whole
- * thing runs in one transaction and either exists completely or not at all.
+ * DEVIATION: Firestore has no cross-collection transaction, so `createClient`
+ * runs `provisionCompany` (itself a BulkWriter batch) then the user / membership
+ * / seat-override writes in sequence. A failure after the company exists leaves
+ * an incomplete client — the caller (or a support follow-up) deletes it. And
+ * there is no `onDelete: Cascade`; `deleteClient` uses `recursiveDelete` on the
+ * company doc plus explicit sweeps of the top-level companyUsers / subscription.
  */
 
 import "server-only";
-import { db } from "@/lib/db";
 import { normalizeCurrency, DEFAULT_CURRENCY } from "@/lib/currency";
 import { hashPassword } from "@/server/auth/password";
-import { provisionCompany } from "@/server/setup/provision";
 import { isValidCycle } from "@/lib/plans";
+import { provisionCompany } from "@/server/setup/provision";
+import { getCompany, updateCompany } from "@/server/db/companies";
+import { createUser as createUserDoc, getUserByEmail, updateUser } from "@/server/db/users";
+import {
+  listMembershipsForCompany,
+  upsertMembership,
+} from "@/server/db/company-users";
+import {
+  firms,
+  getSubscriptionForCompany,
+  subscriptions as subsRepo,
+} from "@/server/db/platform";
+import { companyRef, db, top } from "@/server/db/firestore";
 import { AUDIT_ACTIONS, recordPlatformAudit } from "./audit";
 import { generateTemporaryPassword } from "./crypto";
 import type { AdminActor } from "./guard";
@@ -31,15 +42,15 @@ export function normalizeEmail(value: string): string {
   return value.trim().toLowerCase();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Listing
-// ─────────────────────────────────────────────────────────────────────────────
+const ts = (t: FirebaseFirestore.Timestamp | null | undefined) => t?.toDate?.() ?? null;
+
+// ── Listing ────────────────────────────────────────────────────────────────
 
 export const CLIENT_SORTS = {
-  created: { label: "Newest first", orderBy: { createdAt: "desc" } },
-  name: { label: "Company name", orderBy: { name: "asc" } },
-  trial: { label: "Trial ending soonest", orderBy: { subscription: { trialEndsAt: "asc" } } },
-  renewal: { label: "Renewing soonest", orderBy: { subscription: { currentPeriodEnd: "asc" } } },
+  created: { label: "Newest first" },
+  name: { label: "Company name" },
+  trial: { label: "Trial ending soonest" },
+  renewal: { label: "Renewing soonest" },
 } as const;
 
 export type ClientSort = keyof typeof CLIENT_SORTS;
@@ -51,93 +62,6 @@ export interface ClientFilters {
   sort?: ClientSort;
   page?: number;
   perPage?: number;
-}
-
-/**
- * Search across the company *and* the people in it.
- *
- * Matching a primary user's name or email matters more than it sounds: support
- * requests arrive as "a chap called Dev emailed about his file", never as a
- * company's registered legal name.
- */
-function clientWhere(filters: ClientFilters) {
-  const q = filters.q?.trim();
-  const where: Record<string, unknown> = {};
-
-  if (q) {
-    where.OR = [
-      { name: { contains: q, mode: "insensitive" } },
-      { legalName: { contains: q, mode: "insensitive" } },
-      { email: { contains: q, mode: "insensitive" } },
-      { businessNumber: { contains: q, mode: "insensitive" } },
-      { users: { some: { user: { email: { contains: q, mode: "insensitive" } } } } },
-      { users: { some: { user: { name: { contains: q, mode: "insensitive" } } } } },
-    ];
-  }
-
-  const subscription: Record<string, unknown> = {};
-  if (filters.plan) subscription.plan = filters.plan;
-  if (filters.status) subscription.status = filters.status;
-  if (Object.keys(subscription).length > 0) where.subscription = subscription;
-
-  return where;
-}
-
-/**
- * One query shape, one place.
- *
- * The select is written inline inside this function rather than hoisted to a
- * shared `as const` object: Prisma infers the result type from the literal at
- * the call site, and a hoisted constant either widens `true` to `boolean` (and
- * loses the inference) or is deeply readonly (and stops matching the generated
- * argument types). Both list callers go through here instead.
- */
-function selectClients(args: {
-  where: Record<string, unknown>;
-  orderBy: unknown;
-  skip?: number;
-  take: number;
-}) {
-  return db.company.findMany({
-    where: args.where,
-    orderBy: args.orderBy as never,
-    skip: args.skip,
-    take: args.take,
-    select: {
-      id: true,
-      name: true,
-      legalName: true,
-      email: true,
-      phone: true,
-      province: true,
-      country: true,
-      baseCurrency: true,
-      isReadOnly: true,
-      createdAt: true,
-      subscription: {
-        select: {
-          id: true,
-          plan: true,
-          status: true,
-          billingCycle: true,
-          seats: true,
-          seatsOverridden: true,
-          trialEndsAt: true,
-          currentPeriodEnd: true,
-          priceCents: true,
-          currency: true,
-        },
-      },
-      users: {
-        where: { status: { in: ["ACTIVE", "INVITED"] } },
-        select: {
-          role: true,
-          status: true,
-          user: { select: { id: true, name: true, email: true } },
-        },
-      },
-    },
-  });
 }
 
 export interface ClientRow {
@@ -167,51 +91,107 @@ export interface ClientRow {
   userCount: number;
 }
 
-function toClientRow(company: {
-  id: string;
-  name: string;
-  legalName: string | null;
-  email: string | null;
-  phone: string | null;
-  province: string;
-  country: string;
-  baseCurrency: string;
-  isReadOnly: boolean;
-  createdAt: Date;
-  subscription: ClientRow["subscription"];
-  users: { role: string; status: string; user: { id: string; name: string; email: string } }[];
-}): ClientRow {
-  const primary = company.users.find((member) => member.role === "PRIMARY");
-  return {
-    id: company.id,
-    name: company.name,
-    legalName: company.legalName,
-    email: company.email,
-    phone: company.phone,
-    province: company.province,
-    country: company.country,
-    baseCurrency: company.baseCurrency,
-    isReadOnly: company.isReadOnly,
-    createdAt: company.createdAt,
-    subscription: company.subscription,
-    primaryUser: primary ? primary.user : null,
-    userCount: company.users.length,
-  };
+async function allClientRows(): Promise<ClientRow[]> {
+  const [companySnap, cuSnap, userSnap, subs] = await Promise.all([
+    db.collection("companies").get(),
+    top("companyUsers").get(),
+    top("users").get(),
+    subsRepo.list(),
+  ]);
+  const userById = new Map(
+    userSnap.docs.map((d) => [d.id, { id: d.id, name: d.data().name as string, email: d.data().email as string }]),
+  );
+  const subByCompany = new Map(subs.map((s) => [s.companyId, s]));
+  const membersByCompany = new Map<string, { role: string; status: string; userId: string }[]>();
+  for (const d of cuSnap.docs) {
+    const c = d.data();
+    if (!["ACTIVE", "INVITED"].includes(c.status)) continue;
+    const list = membersByCompany.get(c.companyId) ?? [];
+    list.push({ role: c.role, status: c.status, userId: c.userId });
+    membersByCompany.set(c.companyId, list);
+  }
+
+  return companySnap.docs.map((d) => {
+    const x = d.data();
+    const s = subByCompany.get(d.id) ?? null;
+    const members = membersByCompany.get(d.id) ?? [];
+    const primary = members.find((m) => m.role === "PRIMARY");
+    return {
+      id: d.id,
+      name: x.name,
+      legalName: x.legalName ?? null,
+      email: x.email ?? null,
+      phone: x.phone ?? null,
+      province: x.province,
+      country: x.country,
+      baseCurrency: x.baseCurrency,
+      isReadOnly: x.isReadOnly ?? false,
+      createdAt: ts(x.createdAt) ?? new Date(0),
+      subscription: s
+        ? {
+            id: s.id,
+            plan: s.plan,
+            status: s.status,
+            billingCycle: s.billingCycle,
+            seats: s.seats,
+            seatsOverridden: s.seatsOverridden,
+            trialEndsAt: s.trialEndsAt,
+            currentPeriodEnd: s.currentPeriodEnd,
+            priceCents: s.priceCents,
+            currency: s.currency,
+          }
+        : null,
+      primaryUser: primary ? userById.get(primary.userId) ?? null : null,
+      userCount: members.length,
+    };
+  });
+}
+
+function applyFilters(rows: ClientRow[], filters: ClientFilters): ClientRow[] {
+  let out = rows;
+  const q = filters.q?.trim().toLowerCase();
+  if (q) {
+    out = out.filter(
+      (r) =>
+        r.name.toLowerCase().includes(q) ||
+        (r.legalName ?? "").toLowerCase().includes(q) ||
+        (r.email ?? "").toLowerCase().includes(q) ||
+        (r.primaryUser?.email ?? "").toLowerCase().includes(q) ||
+        (r.primaryUser?.name ?? "").toLowerCase().includes(q),
+    );
+  }
+  if (filters.plan) out = out.filter((r) => r.subscription?.plan === filters.plan);
+  if (filters.status) out = out.filter((r) => r.subscription?.status === filters.status);
+
+  const sort = filters.sort ?? "created";
+  out = [...out].sort((a, b) => {
+    switch (sort) {
+      case "name":
+        return a.name.localeCompare(b.name);
+      case "trial":
+        return (
+          (a.subscription?.trialEndsAt?.getTime() ?? Infinity) -
+          (b.subscription?.trialEndsAt?.getTime() ?? Infinity)
+        );
+      case "renewal":
+        return (
+          (a.subscription?.currentPeriodEnd?.getTime() ?? Infinity) -
+          (b.subscription?.currentPeriodEnd?.getTime() ?? Infinity)
+        );
+      default:
+        return b.createdAt.getTime() - a.createdAt.getTime();
+    }
+  });
+  return out;
 }
 
 export async function listClients(filters: ClientFilters) {
   const perPage = Math.min(Math.max(filters.perPage ?? 25, 5), 100);
   const page = Math.max(filters.page ?? 1, 1);
-  const where = clientWhere(filters);
-  const sort = CLIENT_SORTS[filters.sort ?? "created"] ?? CLIENT_SORTS.created;
-
-  const [total, companies] = await Promise.all([
-    db.company.count({ where }),
-    selectClients({ where, orderBy: sort.orderBy, skip: (page - 1) * perPage, take: perPage }),
-  ]);
-
+  const filtered = applyFilters(await allClientRows(), filters);
+  const total = filtered.length;
   return {
-    rows: companies.map(toClientRow),
+    rows: filtered.slice((page - 1) * perPage, page * perPage),
     total,
     page,
     perPage,
@@ -219,64 +199,58 @@ export async function listClients(filters: ClientFilters) {
   };
 }
 
-/** The same query without pagination, for the CSV export. Capped so one click cannot pull the whole database. */
 export async function listClientsForExport(filters: ClientFilters, cap = 5000) {
-  const sort = CLIENT_SORTS[filters.sort ?? "created"] ?? CLIENT_SORTS.created;
-  const companies = await selectClients({ where: clientWhere(filters), orderBy: sort.orderBy, take: cap });
-  return companies.map(toClientRow);
+  return applyFilters(await allClientRows(), filters).slice(0, cap);
 }
 
 export async function getClient(companyId: string) {
-  return db.company.findUnique({
-    where: { id: companyId },
-    select: {
-      id: true,
-      name: true,
-      legalName: true,
-      businessNumber: true,
-      gstNumber: true,
-      qstNumber: true,
-      pstNumber: true,
-      email: true,
-      phone: true,
-      website: true,
-      addressLine1: true,
-      addressLine2: true,
-      city: true,
-      postalCode: true,
-      province: true,
-      country: true,
-      baseCurrency: true,
-      locale: true,
-      industry: true,
-      fiscalYearStartMonth: true,
-      isReadOnly: true,
-      enabledModules: true,
-      createdAt: true,
-      updatedAt: true,
-      firm: { select: { id: true, name: true } },
-      subscription: true,
-      users: {
-        orderBy: { createdAt: "asc" },
-        select: {
-          id: true,
-          role: true,
-          status: true,
-          createdAt: true,
-          invitedAt: true,
-          acceptedAt: true,
-          user: {
-            select: { id: true, name: true, email: true, lastLoginAt: true, mustChangePassword: true },
-          },
-        },
-      },
-    },
-  });
+  const company = await getCompany(companyId);
+  if (!company) return null;
+
+  const [firm, subscription, memberships] = await Promise.all([
+    company.firmId ? firms.get(company.firmId) : Promise.resolve(null),
+    getSubscriptionForCompany(companyId),
+    listMembershipsForCompany(companyId),
+  ]);
+  const users = await Promise.all(
+    memberships
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+      .map(async (m) => {
+        const u = await getUserByIdLite(m.userId);
+        return {
+          id: `${companyId}__${m.userId}`,
+          role: m.role,
+          status: m.status,
+          createdAt: m.createdAt,
+          invitedAt: m.invitedAt,
+          acceptedAt: m.acceptedAt,
+          user: u,
+        };
+      }),
+  );
+
+  return {
+    ...company,
+    firm: firm ? { id: firm.id, name: firm.name } : null,
+    subscription,
+    users,
+  };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Provisioning
-// ─────────────────────────────────────────────────────────────────────────────
+async function getUserByIdLite(userId: string) {
+  const d = await top("users").doc(userId).get();
+  if (!d.exists) return { id: userId, name: "—", email: "—", lastLoginAt: null, mustChangePassword: false };
+  const x = d.data()!;
+  return {
+    id: userId,
+    name: x.name as string,
+    email: x.email as string,
+    lastLoginAt: ts(x.lastLoginAt),
+    mustChangePassword: (x.mustChangePassword as boolean) ?? false,
+  };
+}
+
+// ── Provisioning ───────────────────────────────────────────────────────────
 
 export interface CreateClientInput {
   name: string;
@@ -288,38 +262,28 @@ export interface CreateClientInput {
   baseCurrency?: string;
   fiscalYearStartMonth?: number;
   industry?: string;
-
   primaryUserName: string;
   primaryUserEmail: string;
-
   planCode: string;
   billingCycle: string;
   status?: string;
   trialDays?: number;
   seatOverride?: number | null;
   seatOverrideReason?: string | null;
-  /** ModuleId list from src/lib/plans.ts — independent of what the plan itself includes. */
   enabledModules?: string[];
 }
 
 export interface CreateClientResult {
   companyId: string;
   userId: string;
-  /** Present only when a brand-new user was created and needs a first password. */
   temporaryPassword: string | null;
   attachedExistingUser: boolean;
 }
 
-/**
- * Provision a complete client account.
- *
- * An existing email is attached rather than duplicated — the same person can be
- * the primary user of several companies, and creating a second User row for them
- * would give them two logins and split their history. That is the single most
- * likely mistake in this workflow, so it is handled explicitly rather than left
- * to a unique-constraint error.
- */
-export async function createClient(actor: AdminActor, input: CreateClientInput): Promise<CreateClientResult> {
+export async function createClient(
+  actor: AdminActor,
+  input: CreateClientInput,
+): Promise<CreateClientResult> {
   const name = input.name.trim();
   if (!name) throw new ClientError("The company needs a name.");
 
@@ -327,7 +291,6 @@ export async function createClient(actor: AdminActor, input: CreateClientInput):
   if (!primaryEmail.includes("@")) throw new ClientError("Enter a valid email for the primary user.");
   const primaryName = input.primaryUserName.trim();
   if (!primaryName) throw new ClientError("The primary user needs a name.");
-
   if (!isValidCycle(input.billingCycle)) throw new ClientError("Choose a billing cycle.");
 
   const currency = normalizeCurrency(input.baseCurrency) ?? DEFAULT_CURRENCY;
@@ -344,92 +307,65 @@ export async function createClient(actor: AdminActor, input: CreateClientInput):
     }
   }
 
-  const existingUser = await db.user.findUnique({
-    where: { email: primaryEmail },
-    select: { id: true, name: true },
-  });
-
-  // Generated before the transaction so the hashing cost (bcrypt, deliberately
-  // slow) does not sit inside it holding a connection open.
+  const existingUser = await getUserByEmail(primaryEmail);
   const temporaryPassword = existingUser ? null : generateTemporaryPassword();
   const passwordHash = temporaryPassword ? await hashPassword(temporaryPassword) : null;
 
-  const result = await db.$transaction(
-    async (tx) => {
-      const company = await provisionCompany(tx, {
-        name,
-        legalName: input.legalName?.trim() || name,
-        province: input.province,
-        country: input.country ?? "CA",
-        baseCurrency: currency,
-        fiscalYearStartMonth,
-        email: input.email?.trim() || undefined,
-        phone: input.phone?.trim() || undefined,
-        industry: input.industry?.trim() || undefined,
-        plan: input.planCode,
-        billingCycle: input.billingCycle,
-        trialDays: input.trialDays,
-        enabledModules: input.enabledModules,
+  const company = await provisionCompany(null, {
+    name,
+    legalName: input.legalName?.trim() || name,
+    province: input.province,
+    country: input.country ?? "CA",
+    baseCurrency: currency,
+    fiscalYearStartMonth,
+    email: input.email?.trim() || undefined,
+    phone: input.phone?.trim() || undefined,
+    industry: input.industry?.trim() || undefined,
+    plan: input.planCode,
+    billingCycle: input.billingCycle,
+    trialDays: input.trialDays,
+    enabledModules: input.enabledModules,
+  });
+
+  const user =
+    existingUser ??
+    (await createUserDoc({
+      email: primaryEmail,
+      name: primaryName,
+      passwordHash: passwordHash!,
+      mustChangePassword: true,
+    }));
+
+  await upsertMembership({
+    companyId: company.id,
+    userId: user.id,
+    role: "PRIMARY",
+    status: "ACTIVE",
+    acceptedAt: existingUser ? new Date() : null,
+    invitedAt: new Date(),
+  });
+
+  if (!existingUser) await updateUser(user.id, { activeCompanyId: company.id });
+
+  if (input.seatOverride != null) {
+    const sub = await getSubscriptionForCompany(company.id);
+    if (sub) {
+      await subsRepo.update(sub.id, {
+        seats: input.seatOverride,
+        seatsOverridden: true,
+        seatOverrideReason: input.seatOverrideReason!.trim(),
+        seatOverrideAt: new Date(),
+        seatOverrideById: actor.id,
       });
-
-      const user =
-        existingUser ??
-        (await tx.user.create({
-          data: {
-            email: primaryEmail,
-            name: primaryName,
-            passwordHash: passwordHash!,
-            // The generated password is a way in, not a password they chose.
-            mustChangePassword: true,
-          },
-          select: { id: true, name: true },
-        }));
-
-      await tx.companyUser.create({
-        data: {
-          companyId: company.id,
-          userId: user.id,
-          role: "PRIMARY",
-          status: "ACTIVE",
-          acceptedAt: existingUser ? new Date() : null,
-          invitedAt: new Date(),
-        },
-      });
-
-      // A user with no active company lands on /onboarding; give the freshly
-      // created one somewhere to be, without disturbing an existing user's
-      // current company.
-      if (!existingUser) {
-        await tx.user.update({ where: { id: user.id }, data: { activeCompanyId: company.id } });
-      }
-
-      if (input.seatOverride != null) {
-        await tx.subscription.updateMany({
-          where: { companyId: company.id },
-          data: {
-            seats: input.seatOverride,
-            seatsOverridden: true,
-            seatOverrideReason: input.seatOverrideReason!.trim(),
-            seatOverrideAt: new Date(),
-            seatOverrideById: actor.id,
-          },
-        });
-      }
-
-      return { companyId: company.id, userId: user.id };
-    },
-    // Provisioning writes a chart of accounts, tax codes and three fiscal years
-    // of periods. The default 5s transaction budget is not enough on a cold
-    // connection, and a timeout here leaves nothing behind but wasted effort.
-    { timeout: 30_000, maxWait: 10_000 },
-  );
+    }
+  }
 
   await recordPlatformAudit({
     actorUserId: actor.id,
     actorEmail: actor.email,
     action: AUDIT_ACTIONS.CLIENT_CREATED,
     entityType: "Company",
-    entityId: result.companyId,
+    entityId: company.id,
     summary: `Client "${name}" provisioned on ${input.planCode} with ${primaryEmail} as primary user`,
     after: {
       company: { name, province: input.province, baseCurrency: currency },
@@ -441,15 +377,14 @@ export async function createClient(actor: AdminActor, input: CreateClientInput):
   });
 
   return {
-    ...result,
+    companyId: company.id,
+    userId: user.id,
     temporaryPassword,
     attachedExistingUser: Boolean(existingUser),
   };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Editing
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Editing ────────────────────────────────────────────────────────────────
 
 export interface UpdateClientInput {
   companyId: string;
@@ -470,25 +405,7 @@ export interface UpdateClientInput {
 }
 
 export async function updateClient(actor: AdminActor, input: UpdateClientInput) {
-  const before = await db.company.findUnique({
-    where: { id: input.companyId },
-    select: {
-      name: true,
-      legalName: true,
-      email: true,
-      phone: true,
-      website: true,
-      addressLine1: true,
-      addressLine2: true,
-      city: true,
-      postalCode: true,
-      province: true,
-      country: true,
-      baseCurrency: true,
-      industry: true,
-      businessNumber: true,
-    },
-  });
+  const before = await getCompany(input.companyId);
   if (!before) throw new ClientError("That client no longer exists.");
 
   const name = input.name.trim();
@@ -506,14 +423,12 @@ export async function updateClient(actor: AdminActor, input: UpdateClientInput) 
     postalCode: input.postalCode?.trim() || null,
     province: input.province,
     country: input.country?.trim() || "CA",
-    // The fiscal-year start is deliberately absent: it becomes read-only once
-    // anything is posted, and the company's own settings screen owns that rule.
     baseCurrency: normalizeCurrency(input.baseCurrency) ?? before.baseCurrency,
     industry: input.industry?.trim() || null,
     businessNumber: input.businessNumber?.trim() || null,
   };
 
-  const after = await db.company.update({ where: { id: input.companyId }, data });
+  await updateCompany(input.companyId, data);
 
   await recordPlatformAudit({
     actorUserId: actor.id,
@@ -521,21 +436,20 @@ export async function updateClient(actor: AdminActor, input: UpdateClientInput) 
     action: AUDIT_ACTIONS.CLIENT_UPDATED,
     entityType: "Company",
     entityId: input.companyId,
-    summary: `Client "${after.name}" updated`,
-    before,
+    summary: `Client "${name}" updated`,
+    before: {
+      name: before.name,
+      legalName: before.legalName,
+      email: before.email,
+      province: before.province,
+      businessNumber: before.businessNumber,
+    },
     after: data,
   });
 
-  return after;
+  return { ...before, ...data };
 }
 
-/**
- * Put a company into (or out of) read-only by hand.
- *
- * Note this is *not* how suspension works — that is a subscription state, and it
- * sets this flag itself. This is the manual lever, for a client under
- * investigation or one that has asked to be frozen.
- */
 export async function setReadOnly(
   actor: AdminActor,
   input: { companyId: string; isReadOnly: boolean; reason: string },
@@ -543,13 +457,10 @@ export async function setReadOnly(
   const reason = input.reason?.trim();
   if (!reason) throw new ClientError("Give a reason — freezing a client's books is not a silent act.");
 
-  const before = await db.company.findUnique({
-    where: { id: input.companyId },
-    select: { name: true, isReadOnly: true },
-  });
+  const before = await getCompany(input.companyId);
   if (!before) throw new ClientError("That client no longer exists.");
 
-  await db.company.update({ where: { id: input.companyId }, data: { isReadOnly: input.isReadOnly } });
+  await updateCompany(input.companyId, { isReadOnly: input.isReadOnly });
 
   await recordPlatformAudit({
     actorUserId: actor.id,
@@ -564,28 +475,15 @@ export async function setReadOnly(
   });
 }
 
-/**
- * Which products this company can use — independent of whatever the assigned
- * Plan's own module list says. Enforced in the app itself: the sidebar hides
- * a group tagged with a module that isn't here, and the HR/Payroll/Inventory
- * route layouts redirect a direct hit on the URL too (requireModule in
- * src/server/auth/context.ts).
- */
 export async function setClientModules(
   actor: AdminActor,
   input: { companyId: string; enabledModules: string[] },
 ) {
-  const before = await db.company.findUnique({
-    where: { id: input.companyId },
-    select: { name: true, enabledModules: true },
-  });
+  const before = await getCompany(input.companyId);
   if (!before) throw new ClientError("That client no longer exists.");
 
-  // Accounting is what the dashboard, company settings and login itself sit
-  // under — turning it off would lock the client out of their own file.
   const enabledModules = Array.from(new Set(["ACCOUNTING", ...input.enabledModules]));
-
-  await db.company.update({ where: { id: input.companyId }, data: { enabledModules } });
+  await updateCompany(input.companyId, { enabledModules });
 
   await recordPlatformAudit({
     actorUserId: actor.id,
@@ -600,45 +498,47 @@ export async function setClientModules(
 }
 
 /**
- * Permanently delete a client company and everything in it.
- *
- * Every Company-scoped table in the schema is declared `onDelete: Cascade`
- * back to Company (checked — there is no straggler that would half-fail this),
- * so a single `company.delete` removes every invoice, journal entry,
- * membership, bank account and audit-log row that belongs to it. What is NOT
- * removed: the `User` rows of anyone who had access — a person's login is
- * their own, and may belong to other companies too. Their membership in THIS
- * company is gone with everything else.
- *
- * Requires the operator to type the company's exact current name, the same
- * confirmation pattern used for a real financial write-off elsewhere in this
- * app — there is no undo once this returns.
+ * Permanently delete a client company and everything in it. Firestore has no
+ * cascade: `recursiveDelete` clears `companies/{id}` and every subcollection,
+ * then the top-level companyUsers / subscription / subscriptionCompanies rows
+ * are swept explicitly. User rows are left — a login belongs to the person.
  */
-export async function deleteClient(actor: AdminActor, input: { companyId: string; confirmName: string }) {
-  const company = await db.company.findUnique({
-    where: { id: input.companyId },
-    select: { id: true, name: true },
-  });
+export async function deleteClient(
+  actor: AdminActor,
+  input: { companyId: string; confirmName: string },
+) {
+  const company = await getCompany(input.companyId);
   if (!company) throw new ClientError("That client no longer exists.");
-
   if (input.confirmName.trim() !== company.name) {
     throw new ClientError(`Type "${company.name}" exactly to confirm — deleting a client cannot be undone.`);
   }
 
-  const [userCount, invoiceCount, journalCount] = await Promise.all([
-    db.companyUser.count({ where: { companyId: company.id } }),
-    db.invoice.count({ where: { companyId: company.id } }),
-    db.journalEntry.count({ where: { companyId: company.id } }),
+  const [members, invoiceSnap, journalSnap] = await Promise.all([
+    listMembershipsForCompany(input.companyId),
+    companyRef(input.companyId).collection("invoices").get(),
+    companyRef(input.companyId).collection("journalEntries").get(),
   ]);
+  const userCount = members.length;
+  const invoiceCount = invoiceSnap.size;
+  const journalCount = journalSnap.size;
 
-  await db.company.delete({ where: { id: company.id } });
+  await db.recursiveDelete(companyRef(input.companyId));
+
+  const batch = db.batch();
+  for (const m of members) {
+    batch.delete(top("companyUsers").doc(`${input.companyId}__${m.userId}`));
+  }
+  const sub = await getSubscriptionForCompany(input.companyId);
+  if (sub) batch.delete(top("subscriptions").doc(sub.id));
+  batch.delete(top("subscriptionCompanies").doc(input.companyId));
+  await batch.commit();
 
   await recordPlatformAudit({
     actorUserId: actor.id,
     actorEmail: actor.email,
     action: AUDIT_ACTIONS.CLIENT_DELETED,
     entityType: "Company",
-    entityId: company.id,
+    entityId: input.companyId,
     summary: `${company.name} permanently deleted (${userCount} membership(s), ${invoiceCount} invoice(s), ${journalCount} journal entr${journalCount === 1 ? "y" : "ies"})`,
     before: { name: company.name, userCount, invoiceCount, journalCount },
   });

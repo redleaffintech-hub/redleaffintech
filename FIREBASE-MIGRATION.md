@@ -371,7 +371,17 @@ Documented as a deliberate deviation from strict single-transaction atomicity.
     (`spendUserTokens` + new token + `revokeSessionsForUser`), `forceSignOut`,
     `updateUserProfile` (moves the `userEmails` guard doc). Both audit trails
     (platform + tenant) preserved.
-  - [ ] **6c‑6 — admin data modules**: `admin/clients.ts`, `admin/subscriptions.ts`.
+  - [x] **6c‑6 — client-company admin.** `admin/clients.ts` — `listClients` /
+    `listClientsForExport` (companies + subscriptions + companyUsers + users
+    joined and filtered/sorted/paged in memory), `getClient`, `createClient`
+    (`provisionCompany` then user / membership / seat-override in sequence — no
+    cross-collection transaction; an incomplete client is deleted rather than
+    rolled back), `updateClient` / `setReadOnly` / `setClientModules`,
+    `deleteClient` (**`recursiveDelete` on `companies/{id}`** — Firestore has no
+    `onDelete: Cascade` — plus explicit sweeps of the top-level companyUsers /
+    subscription / subscriptionCompanies).
+  - [ ] **6c‑7 — `admin/subscriptions.ts`** (plan changes, trial extensions,
+    seat overrides, cancellations, the lifecycle state machine).
   - [ ] **6d–6h — `src/app/**`**: sales, purchases, accounting/banking/tax,
     company/hr/payroll/inventory, reports/dashboard, admin pages, login + api
     routes + marketing. `reports/exports.ts` folds in here.
