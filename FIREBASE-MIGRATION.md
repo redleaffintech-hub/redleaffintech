@@ -344,9 +344,14 @@ Documented as a deliberate deviation from strict single-transaction atomicity.
     `companies/families.ts` (`subscriptionForCompany`, `companyFamily`,
     `companyLimit`, `attachCompanyToSubscription` — no `SELECT … FOR UPDATE`;
     tolerant shims for the not‑yet‑rewired `companies/actions.ts`).
-  - [ ] **6c‑2 — admin data modules**: `admin/clients.ts`, `admin/subscriptions.ts`,
-    `admin/users.ts`, `admin/administrators.ts`, `admin/metrics.ts`,
-    `plans/admin.ts`, `firm/portfolio.ts`.
+  - [x] **6c‑2 — admin metrics + administrators.** `admin/metrics.ts`
+    (`platformMetrics` — each cross-tenant collection read whole and grouped in
+    memory; no client ledger touched). `admin/administrators.ts` (list / count /
+    promote / suspend / remove — the "one active admin always remains" guard
+    keeps its atomicity via `runTransaction` reading the active-admin query then
+    updating; step-up auth unchanged).
+  - [ ] **6c‑3 — admin data modules**: `admin/clients.ts`, `admin/subscriptions.ts`,
+    `admin/users.ts`, `plans/admin.ts`, `firm/portfolio.ts`.
   - [ ] **6d–6h — `src/app/**`**: sales, purchases, accounting/banking/tax,
     company/hr/payroll/inventory, reports/dashboard, admin pages, login + api
     routes + marketing. `reports/exports.ts` folds in here.

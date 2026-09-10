@@ -1,24 +1,13 @@
 /**
- * Platform-administrator management.
- *
- * This is the most dangerous screen in the product: it is the one that can lock
- * Red Leaf out of its own console, or quietly hand the console to someone else.
- * Three protections apply to every mutation here and nowhere else:
- *
- *   1. **Step-up authentication.** Holding a valid session is not enough — the
- *      operator must prove themselves again, right now, with their MFA code if
- *      they have one enrolled or their password if they do not.
- *   2. **At least one active administrator always remains.** Enforced inside the
- *      same transaction as the change, so two operators demoting each other
- *      concurrently cannot both succeed.
- *   3. **Nobody removes their own last access.** An operator who wants out asks
- *      a colleague, which guarantees a second person knows the console changed
- *      hands.
+ * Platform-administrator management — the screen that can lock Red Leaf out of
+ * its own console. Every mutation: step-up auth, "one active admin always
+ * remains" (checked atomically), and nobody removes their own last access.
  */
 
 import "server-only";
-import { db } from "@/lib/db";
 import { verifyPassword } from "@/server/auth/password";
+import { getUser } from "@/server/db/users";
+import { runTransaction, top } from "@/server/db/firestore";
 import { AUDIT_ACTIONS, recordPlatformAudit } from "./audit";
 import { decryptSecret } from "./crypto";
 import { verifyTotp } from "./totp";
@@ -32,49 +21,46 @@ export class AdministratorError extends Error {
   }
 }
 
+const tsToDate = (t: FirebaseFirestore.Timestamp | null | undefined) => t?.toDate?.() ?? null;
+
 export async function listAdministrators() {
-  return db.user.findMany({
-    where: { isPlatformAdmin: true },
-    orderBy: [{ platformAdminSuspendedAt: "asc" }, { platformAdminSince: "asc" }],
-    select: {
-      id: true,
-      name: true,
-      email: true,
-      mfaEnabled: true,
-      mfaEnrolledAt: true,
-      platformAdminSince: true,
-      platformAdminSuspendedAt: true,
-      lastLoginAt: true,
-      mustChangePassword: true,
-      createdAt: true,
-    },
-  });
+  const snap = await top("users").where("isPlatformAdmin", "==", true).get();
+  return snap.docs
+    .map((d) => {
+      const x = d.data();
+      return {
+        id: d.id,
+        name: x.name as string,
+        email: x.email as string,
+        mfaEnabled: (x.mfaEnabled as boolean) ?? false,
+        mfaEnrolledAt: tsToDate(x.mfaEnrolledAt),
+        platformAdminSince: tsToDate(x.platformAdminSince),
+        platformAdminSuspendedAt: tsToDate(x.platformAdminSuspendedAt),
+        lastLoginAt: tsToDate(x.lastLoginAt),
+        mustChangePassword: (x.mustChangePassword as boolean) ?? false,
+        createdAt: tsToDate(x.createdAt) ?? new Date(0),
+      };
+    })
+    .sort(
+      (a, b) =>
+        Number(Boolean(a.platformAdminSuspendedAt)) - Number(Boolean(b.platformAdminSuspendedAt)) ||
+        (a.platformAdminSince?.getTime() ?? 0) - (b.platformAdminSince?.getTime() ?? 0),
+    );
 }
 
 export async function countActiveAdministrators(): Promise<number> {
-  return db.user.count({ where: { isPlatformAdmin: true, platformAdminSuspendedAt: null } });
+  const snap = await top("users")
+    .where("isPlatformAdmin", "==", true)
+    .where("platformAdminSuspendedAt", "==", null)
+    .get();
+  return snap.size;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Step-up
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Re-authenticate the operator for a high-risk action.
- *
- * With MFA enrolled the code is the proof and the session's step-up clock is
- * reset, so a burst of related changes does not demand a fresh code for each
- * one. Without MFA the password is the proof, and it is checked every time —
- * there is nothing to remember.
- */
 export async function verifyStepUp(
   actor: AdminActor,
   input: { password?: string | null; totpCode?: string | null },
 ): Promise<void> {
-  const user = await db.user.findUnique({
-    where: { id: actor.id },
-    select: { passwordHash: true, mfaEnabled: true, mfaSecret: true },
-  });
+  const user = await getUser(actor.id);
   if (!user) throw new AdministratorError("Your account is no longer available.");
 
   if (user.mfaEnabled) {
@@ -96,10 +82,6 @@ export async function verifyStepUp(
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Granting and withdrawing
-// ─────────────────────────────────────────────────────────────────────────────
-
 export async function promoteToAdministrator(
   actor: AdminActor,
   input: { userId: string; reason: string },
@@ -107,22 +89,16 @@ export async function promoteToAdministrator(
   const reason = input.reason?.trim();
   if (!reason) throw new AdministratorError("Record why this person needs platform access.");
 
-  const user = await db.user.findUnique({
-    where: { id: input.userId },
-    select: { id: true, email: true, name: true, isPlatformAdmin: true, platformAdminSuspendedAt: true },
-  });
+  const user = await getUser(input.userId);
   if (!user) throw new AdministratorError("That user no longer exists.");
   if (user.isPlatformAdmin && !user.platformAdminSuspendedAt) {
     throw new AdministratorError(`${user.email} is already a platform administrator.`);
   }
 
-  await db.user.update({
-    where: { id: user.id },
-    data: {
-      isPlatformAdmin: true,
-      platformAdminSince: new Date(),
-      platformAdminSuspendedAt: null,
-    },
+  await top("users").doc(user.id).update({
+    isPlatformAdmin: true,
+    platformAdminSince: new Date(),
+    platformAdminSuspendedAt: null,
   });
 
   await recordPlatformAudit({
@@ -138,6 +114,27 @@ export async function promoteToAdministrator(
   });
 }
 
+/** Read the "active admins other than `exceptId`" query in a tx, guard, then update. */
+async function withLastAdminGuard(
+  exceptId: string,
+  update: Record<string, unknown>,
+): Promise<void> {
+  await runTransaction(async (tx) => {
+    const snap = await tx.get(
+      top("users")
+        .where("isPlatformAdmin", "==", true)
+        .where("platformAdminSuspendedAt", "==", null),
+    );
+    const remaining = snap.docs.filter((d) => d.id !== exceptId).length;
+    if (remaining < 1) {
+      throw new AdministratorError(
+        "This is the last active platform administrator. Appoint another one first.",
+      );
+    }
+    tx.update(top("users").doc(exceptId), update);
+  });
+}
+
 export async function suspendAdministrator(
   actor: AdminActor,
   input: { userId: string; reason: string },
@@ -145,32 +142,20 @@ export async function suspendAdministrator(
   const reason = input.reason?.trim();
   if (!reason) throw new AdministratorError("Record why this administrator is being suspended.");
   if (input.userId === actor.id) {
-    throw new AdministratorError("Ask another administrator to suspend your access — you cannot lock yourself out.");
+    throw new AdministratorError(
+      "Ask another administrator to suspend your access — you cannot lock yourself out.",
+    );
   }
 
-  const user = await db.user.findUnique({
-    where: { id: input.userId },
-    select: { id: true, email: true, isPlatformAdmin: true, platformAdminSuspendedAt: true },
-  });
-  if (!user || !user.isPlatformAdmin) throw new AdministratorError("That user is not a platform administrator.");
-  if (user.platformAdminSuspendedAt) throw new AdministratorError("That administrator is already suspended.");
+  const user = await getUser(input.userId);
+  if (!user || !user.isPlatformAdmin) {
+    throw new AdministratorError("That user is not a platform administrator.");
+  }
+  if (user.platformAdminSuspendedAt) {
+    throw new AdministratorError("That administrator is already suspended.");
+  }
 
-  await db.$transaction(async (tx) => {
-    // Counting inside the transaction is what makes this safe against two
-    // operators suspending the last two administrators at the same moment.
-    const remaining = await tx.user.count({
-      where: { isPlatformAdmin: true, platformAdminSuspendedAt: null, id: { not: user.id } },
-    });
-    if (remaining < 1) {
-      throw new AdministratorError("This is the last active platform administrator. Appoint another one first.");
-    }
-    await tx.user.update({
-      where: { id: user.id },
-      data: { platformAdminSuspendedAt: new Date() },
-    });
-  });
-
-  // Suspension that leaves a live console session open has not taken effect.
+  await withLastAdminGuard(user.id, { platformAdminSuspendedAt: new Date() });
   await revokeAdminSessions(user.id);
 
   await recordPlatformAudit({
@@ -193,34 +178,21 @@ export async function removeAdministrator(
   const reason = input.reason?.trim();
   if (!reason) throw new AdministratorError("Record why platform access is being removed.");
   if (input.userId === actor.id) {
-    throw new AdministratorError("You cannot remove your own platform access. Ask another administrator.");
+    throw new AdministratorError(
+      "You cannot remove your own platform access. Ask another administrator.",
+    );
   }
 
-  const user = await db.user.findUnique({
-    where: { id: input.userId },
-    select: { id: true, email: true, isPlatformAdmin: true, platformAdminSuspendedAt: true },
-  });
-  if (!user || !user.isPlatformAdmin) throw new AdministratorError("That user is not a platform administrator.");
+  const user = await getUser(input.userId);
+  if (!user || !user.isPlatformAdmin) {
+    throw new AdministratorError("That user is not a platform administrator.");
+  }
 
-  await db.$transaction(async (tx) => {
-    const remaining = await tx.user.count({
-      where: { isPlatformAdmin: true, platformAdminSuspendedAt: null, id: { not: user.id } },
-    });
-    if (remaining < 1) {
-      throw new AdministratorError("This is the last active platform administrator. Appoint another one first.");
-    }
-    await tx.user.update({
-      where: { id: user.id },
-      data: {
-        isPlatformAdmin: false,
-        platformAdminSince: null,
-        platformAdminSuspendedAt: null,
-        // MFA enrolment is left alone: it belongs to the person, not to the
-        // privilege, and they may still use the accounting app.
-      },
-    });
+  await withLastAdminGuard(user.id, {
+    isPlatformAdmin: false,
+    platformAdminSince: null,
+    platformAdminSuspendedAt: null,
   });
-
   await revokeAdminSessions(user.id);
 
   await recordPlatformAudit({

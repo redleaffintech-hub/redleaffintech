@@ -1,21 +1,23 @@
 /**
  * Platform-level metrics for the admin dashboard.
  *
- * Everything here counts *businesses and subscriptions*. Nothing reads a
- * client's ledger: a platform administrator has no business seeing what any
- * company invoiced this month, and the dashboard is the most tempting place to
- * blur that line. Revenue figures below are contracted subscription value from
- * the subscription rows themselves, never anything from a customer's books.
+ * Counts businesses and subscriptions only — never a client's ledger. Revenue is
+ * contracted subscription value from the subscription rows, nothing from a
+ * customer's books.
+ *
+ * Firestore has no GROUP BY, so each collection is read whole and grouped in
+ * memory. This is an infrequent admin page; the row counts are small.
  */
 
 import "server-only";
-import { db } from "@/lib/db";
 import { addDays } from "@/lib/dates";
 import { CYCLE_MONTHS, type BillingCycle } from "@/lib/plans";
 import { SUBSCRIPTION_STATUSES } from "@/lib/subscriptions";
+import { db, top } from "@/server/db/firestore";
+import { subscriptions as subsRepo } from "@/server/db/platform";
+import type { Company, Subscription } from "@/server/db/types";
 
 export interface DashboardRange {
-  /** Days back the "new in period" figures cover. */
   days: number;
 }
 
@@ -26,7 +28,6 @@ export const RANGE_OPTIONS = [
   { days: 365, label: "Last 12 months" },
 ];
 
-/** Trials inside this window are "ending soon" and worth a call. */
 const TRIAL_SOON_DAYS = 7;
 
 export interface PlatformMetrics {
@@ -54,176 +55,158 @@ export interface PlatformMetrics {
   currency: string;
 }
 
-export async function platformMetrics(range: DashboardRange = { days: 30 }): Promise<PlatformMetrics> {
+async function allCompanies(): Promise<Company[]> {
+  const snap = await db.collection("companies").get();
+  return snap.docs.map((d) => {
+    const x = d.data();
+    return {
+      id: d.id,
+      name: x.name,
+      isReadOnly: x.isReadOnly ?? false,
+      createdAt: (x.createdAt as FirebaseFirestore.Timestamp)?.toDate?.() ?? new Date(0),
+    } as Company;
+  });
+}
+
+export async function platformMetrics(
+  range: DashboardRange = { days: 30 },
+): Promise<PlatformMetrics> {
   const since = addDays(new Date(), -range.days);
   const soon = addDays(new Date(), TRIAL_SOON_DAYS);
 
-  const [
-    totalCompanies,
-    readOnlyCompanies,
-    newCompanies,
-    statusGroups,
-    totalUsers,
-    activeUsers,
-    platformAdmins,
-    trialsEndingSoon,
-    needsAttention,
-    seatRows,
-    subscriptionValues,
-  ] = await Promise.all([
-    db.company.count(),
-    db.company.count({ where: { isReadOnly: true } }),
-    db.company.count({ where: { createdAt: { gte: since } } }),
-    db.subscription.groupBy({ by: ["status"], _count: { _all: true } }),
-    db.user.count(),
-    // "Active" means somebody who actually holds live access to a company —
-    // a user row with no active membership is an account, not a customer.
-    db.user.count({ where: { companyUsers: { some: { status: "ACTIVE" } } } }),
-    db.user.count({ where: { isPlatformAdmin: true, platformAdminSuspendedAt: null } }),
-    db.subscription.findMany({
-      where: { status: "TRIALING", trialEndsAt: { not: null, lte: soon } },
-      orderBy: { trialEndsAt: "asc" },
-      take: 10,
-      select: {
-        id: true,
-        companyId: true,
-        plan: true,
-        trialEndsAt: true,
-        company: { select: { name: true } },
-      },
-    }),
-    db.subscription.findMany({
-      where: { status: { in: ["PAST_DUE", "SUSPENDED"] } },
-      orderBy: { updatedAt: "desc" },
-      take: 10,
-      select: {
-        id: true,
-        companyId: true,
-        plan: true,
-        status: true,
-        pastDueSince: true,
-        suspendedAt: true,
-        company: { select: { name: true } },
-      },
-    }),
-    db.subscription.findMany({
-      where: { status: { in: ["TRIALING", "ACTIVE", "PAST_DUE"] } },
-      select: { plan: true, seats: true, companyId: true },
-    }),
-    db.subscription.findMany({
-      where: { status: { in: ["ACTIVE", "PAST_DUE"] } },
-      select: { priceCents: true, billingCycle: true, currency: true },
-    }),
+  const [companies, users, companyUsers, subs] = await Promise.all([
+    allCompanies(),
+    top("users").get(),
+    top("companyUsers").get(),
+    subsRepo.list(),
   ]);
+  const companyName = new Map(companies.map((c) => [c.id, c.name]));
 
-  // One query for seat usage across every company, rather than one per plan.
-  const usageRows = await db.companyUser.groupBy({
-    by: ["companyId"],
-    where: {
-      status: { in: ["ACTIVE", "INVITED"] },
-      companyId: { in: seatRows.map((row) => row.companyId) },
-    },
-    _count: { _all: true },
-  });
-  const usageByCompany = new Map(usageRows.map((row) => [row.companyId, row._count._all]));
+  const readOnly = companies.filter((c) => c.isReadOnly).length;
+  const newInPeriod = companies.filter((c) => c.createdAt >= since).length;
 
-  const seatsByPlan = new Map<string, { companies: number; seatsAllowed: number; seatsUsed: number }>();
-  for (const row of seatRows) {
-    const entry = seatsByPlan.get(row.plan) ?? { companies: 0, seatsAllowed: 0, seatsUsed: 0 };
-    entry.companies += 1;
-    entry.seatsAllowed += row.seats;
-    entry.seatsUsed += usageByCompany.get(row.companyId) ?? 0;
-    seatsByPlan.set(row.plan, entry);
+  const usersWithActiveMembership = new Set(
+    companyUsers.docs.filter((d) => d.data().status === "ACTIVE").map((d) => d.data().userId as string),
+  );
+  const platformAdmins = users.docs.filter(
+    (d) => d.data().isPlatformAdmin && !d.data().platformAdminSuspendedAt,
+  ).length;
+
+  const statusCount = new Map<string, number>();
+  for (const s of subs) statusCount.set(s.status, (statusCount.get(s.status) ?? 0) + 1);
+
+  const trialsEndingSoon = subs
+    .filter((s) => s.status === "TRIALING" && s.trialEndsAt && s.trialEndsAt <= soon)
+    .sort((a, b) => (a.trialEndsAt!.getTime() - b.trialEndsAt!.getTime()))
+    .slice(0, 10)
+    .map((s) => ({
+      id: s.id,
+      companyId: s.companyId,
+      companyName: companyName.get(s.companyId) ?? "—",
+      plan: s.plan,
+      trialEndsAt: s.trialEndsAt,
+    }));
+
+  const needsAttention = subs
+    .filter((s) => ["PAST_DUE", "SUSPENDED"].includes(s.status))
+    .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
+    .slice(0, 10)
+    .map((s) => ({
+      id: s.id,
+      companyId: s.companyId,
+      companyName: companyName.get(s.companyId) ?? "—",
+      plan: s.plan,
+      status: s.status,
+      since: s.status === "SUSPENDED" ? s.suspendedAt : s.pastDueSince,
+    }));
+
+  // Seats per plan.
+  const seatEligible = subs.filter((s) => ["TRIALING", "ACTIVE", "PAST_DUE"].includes(s.status));
+  const usageByCompany = new Map<string, number>();
+  for (const d of companyUsers.docs) {
+    if (["ACTIVE", "INVITED"].includes(d.data().status)) {
+      const cid = d.data().companyId as string;
+      usageByCompany.set(cid, (usageByCompany.get(cid) ?? 0) + 1);
+    }
+  }
+  const seatsByPlanMap = new Map<
+    string,
+    { companies: number; seatsAllowed: number; seatsUsed: number }
+  >();
+  for (const s of seatEligible) {
+    const e = seatsByPlanMap.get(s.plan) ?? { companies: 0, seatsAllowed: 0, seatsUsed: 0 };
+    e.companies += 1;
+    e.seatsAllowed += s.seats;
+    e.seatsUsed += usageByCompany.get(s.companyId) ?? 0;
+    seatsByPlanMap.set(s.plan, e);
   }
 
   const subscriptions: PlatformMetrics["subscriptions"] = {
     ...(Object.fromEntries(
-      SUBSCRIPTION_STATUSES.map((status) => [
-        status,
-        statusGroups.find((group) => group.status === status)?._count._all ?? 0,
-      ]),
+      SUBSCRIPTION_STATUSES.map((status) => [status, statusCount.get(status) ?? 0]),
     ) as Record<string, number>),
-    total: statusGroups.reduce((sum, group) => sum + group._count._all, 0),
+    total: subs.length,
   };
 
-  // Contracted value, normalised to a monthly figure so three cycles can sit in
-  // one number. Mixed currencies would make this meaningless, so it is reported
-  // in the majority currency and only sums matching rows.
-  const currency = subscriptionValues[0]?.currency ?? "CAD";
-  const contractedMonthlyCents = subscriptionValues
-    .filter((row) => row.currency === currency && row.priceCents)
+  const valued = subs.filter((s) => ["ACTIVE", "PAST_DUE"].includes(s.status));
+  const currency = valued[0]?.currency ?? "CAD";
+  const contractedMonthlyCents = valued
+    .filter((s) => s.currency === currency && s.priceCents)
     .reduce(
-      (sum, row) =>
-        sum + Math.round((row.priceCents ?? 0) / (CYCLE_MONTHS[row.billingCycle as BillingCycle] ?? 1)),
+      (sum, s) =>
+        sum + Math.round((s.priceCents ?? 0) / (CYCLE_MONTHS[s.billingCycle as BillingCycle] ?? 1)),
       0,
     );
 
   return {
     companies: {
-      total: totalCompanies,
-      active: totalCompanies - readOnlyCompanies,
-      readOnly: readOnlyCompanies,
-      newInPeriod: newCompanies,
+      total: companies.length,
+      active: companies.length - readOnly,
+      readOnly,
+      newInPeriod,
     },
     subscriptions,
-    users: { total: totalUsers, active: activeUsers, platformAdmins },
-    trialsEndingSoon: trialsEndingSoon.map((row) => ({
-      id: row.id,
-      companyId: row.companyId,
-      companyName: row.company.name,
-      plan: row.plan,
-      trialEndsAt: row.trialEndsAt,
-    })),
-    needsAttention: needsAttention.map((row) => ({
-      id: row.id,
-      companyId: row.companyId,
-      companyName: row.company.name,
-      plan: row.plan,
-      status: row.status,
-      since: row.status === "SUSPENDED" ? row.suspendedAt : row.pastDueSince,
-    })),
-    seatsByPlan: [...seatsByPlan.entries()]
-      .map(([plan, entry]) => ({ plan, ...entry }))
+    users: {
+      total: users.size,
+      active: usersWithActiveMembership.size,
+      platformAdmins,
+    },
+    trialsEndingSoon,
+    needsAttention,
+    seatsByPlan: [...seatsByPlanMap.entries()]
+      .map(([plan, e]) => ({ plan, ...e }))
       .sort((a, b) => b.companies - a.companies),
-    growth: await growthByMonth(),
+    growth: growthByMonth(companies, subs),
     contractedMonthlyCents,
     currency,
   };
 }
 
-/**
- * Twelve months of client and subscription starts.
- *
- * Grouped in JavaScript rather than SQL: the row counts here are in the
- * hundreds, and a `date_trunc` group-by would tie this to PostgreSQL for no
- * measurable gain at this size.
- */
-async function growthByMonth(): Promise<{ month: string; companies: number; subscriptions: number }[]> {
+function growthByMonth(
+  companies: Company[],
+  subs: Subscription[],
+): { month: string; companies: number; subscriptions: number }[] {
   const from = new Date();
   from.setUTCMonth(from.getUTCMonth() - 11, 1);
   from.setUTCHours(0, 0, 0, 0);
 
-  const [companies, subscriptions] = await Promise.all([
-    db.company.findMany({ where: { createdAt: { gte: from } }, select: { createdAt: true } }),
-    db.subscription.findMany({ where: { createdAt: { gte: from } }, select: { createdAt: true } }),
-  ]);
-
   const months: { month: string; companies: number; subscriptions: number }[] = [];
   const cursor = new Date(from);
-  for (let index = 0; index < 12; index += 1) {
+  for (let i = 0; i < 12; i++) {
     months.push({ month: cursor.toISOString().slice(0, 7), companies: 0, subscriptions: 0 });
     cursor.setUTCMonth(cursor.getUTCMonth() + 1);
   }
-  const byMonth = new Map(months.map((entry) => [entry.month, entry]));
+  const byMonth = new Map(months.map((e) => [e.month, e]));
 
-  for (const row of companies) {
-    const bucket = byMonth.get(row.createdAt.toISOString().slice(0, 7));
-    if (bucket) bucket.companies += 1;
+  for (const c of companies) {
+    if (c.createdAt < from) continue;
+    const b = byMonth.get(c.createdAt.toISOString().slice(0, 7));
+    if (b) b.companies += 1;
   }
-  for (const row of subscriptions) {
-    const bucket = byMonth.get(row.createdAt.toISOString().slice(0, 7));
-    if (bucket) bucket.subscriptions += 1;
+  for (const s of subs) {
+    if (s.createdAt < from) continue;
+    const b = byMonth.get(s.createdAt.toISOString().slice(0, 7));
+    if (b) b.subscriptions += 1;
   }
-
   return months;
 }
