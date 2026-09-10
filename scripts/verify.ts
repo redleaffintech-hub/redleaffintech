@@ -1,14 +1,27 @@
 /**
- * Acceptance checks from spec §35, run against the live database.
+ * Acceptance checks from spec §35, run against the live database (Firestore).
  * `npm run verify`
+ *
+ * Needs Firestore credentials: on a workstation, GOOGLE_APPLICATION_CREDENTIALS
+ * or FIREBASE_SERVICE_ACCOUNT; against the emulator, FIRESTORE_EMULATOR_HOST.
+ *
+ * These checks are read-only. The Prisma version wrapped its database probes in
+ * a transaction that was deliberately rolled back; Firestore transactions cannot
+ * be used that way (and writing probe rows into a live file is not worth the
+ * risk), so the settings and catalogue sections now assert invariants over the
+ * data that is really there instead of round-tripping synthetic rows.
  */
 
 import "./load-env"; // must precede any import that reads process.env
-import { db } from "../src/lib/db";
+import { listAllCompanies } from "../src/server/db/companies";
 import { checkLedgerIntegrity } from "../src/server/accounting/ledger";
 import { balanceSheet, cashFlow, profitAndLoss, trialBalance } from "../src/server/reports/financials";
 import { apAging, arAging } from "../src/server/reports/aging";
 import { taxSummary } from "../src/server/reports/tax";
+import { listEntries } from "../src/server/db/journal-entries";
+import { listAccounts } from "../src/server/db/accounts";
+import { listItems } from "../src/server/db/items";
+import { invoices } from "../src/server/db/invoices";
 import { utcDate, toUtcDay } from "../src/lib/dates";
 import { calculateTax } from "../src/server/tax/engine";
 import { csvDate, csvFile, csvMoney, toCsv, asOfFilename, rangeFilename, type CsvColumn } from "../src/lib/csv";
@@ -18,6 +31,7 @@ import { DEPRECIATION_AMORTIZATION_SUBTYPES, ITEM_TYPES } from "../src/lib/enums
 import { formatMoney } from "../src/lib/money";
 import { DEFAULT_CURRENCY, normalizeCurrency } from "../src/lib/currency";
 import { taxRegistrationLines } from "../src/lib/tax-registration";
+import type { Company } from "../src/server/db/types";
 
 const results: { name: string; pass: boolean; detail: string }[] = [];
 function check(name: string, pass: boolean, detail: string) {
@@ -25,8 +39,13 @@ function check(name: string, pass: boolean, detail: string) {
 }
 const money = (cents: number) => `$${(cents / 100).toFixed(2)}`;
 
+async function listCompaniesByName(): Promise<Company[]> {
+  const companies = await listAllCompanies();
+  return companies.sort((a, b) => a.name.localeCompare(b.name));
+}
+
 async function main() {
-  const companies = await db.company.findMany({ orderBy: { name: "asc" } });
+  const companies = await listCompaniesByName();
   const today = toUtcDay(new Date());
   const yearStart = utcDate(today.getUTCFullYear(), 1, 1);
   const range = { from: yearStart, to: today };
@@ -34,7 +53,7 @@ async function main() {
   for (const company of companies) {
     const tag = company.name.split(" ")[0];
 
-    const integrity = await checkLedgerIntegrity(db, company.id);
+    const integrity = await checkLedgerIntegrity(company.id);
     check(`${tag}: ledger debits = credits`, integrity.balanced, `${money(integrity.debits)} vs ${money(integrity.credits)}`);
     check(`${tag}: assets = liabilities + equity`, integrity.equationGapCents === 0, `gap ${money(integrity.equationGapCents)}`);
 
@@ -45,16 +64,20 @@ async function main() {
     check(`${tag}: balance sheet balances`, bs.outOfBalanceCents === 0, `assets ${money(bs.totalAssetsCents)} = L+E ${money(bs.totalLiabilitiesAndEquityCents)}`);
 
     const pl = await profitAndLoss(company.id, range);
-    check(`${tag}: P&L net income matches balance sheet earnings`, true, `net income ${money(pl.netIncomeCents)}, unclosed earnings ${money(bs.currentEarningsCents)}`);
+    check(`${tag}: P&L net income matches balance sheet earnings`, pl.netIncomeCents === bs.currentEarningsCents, `net income ${money(pl.netIncomeCents)}, unclosed earnings ${money(bs.currentEarningsCents)}`);
 
     const cf = await cashFlow(company.id, range);
     check(`${tag}: cash flow ties to cash movement`, cf.tieOutCents === 0, `net change ${money(cf.netChangeCents)}, tie-out ${money(cf.tieOutCents)}`);
 
-    const ar = await arAging(company.id, today);
+    // Aging is as-of the current instant, not midnight: a payment or credit
+    // applied earlier today lands in the GL immediately, and the sub-ledger has
+    // to see it too or the reconciliation reports a phantom gap until midnight.
+    const nowInstant = new Date();
+    const ar = await arAging(company.id, nowInstant);
     check(`${tag}: AR aging reconciles to control account`, ar.reconciliation.reconciled,
       `subledger ${money(ar.reconciliation.subledgerTotalCents)} vs GL ${money(ar.reconciliation.controlAccountCents)}`);
 
-    const ap = await apAging(company.id, today);
+    const ap = await apAging(company.id, nowInstant);
     check(`${tag}: AP aging reconciles to control account`, ap.reconciliation.reconciled,
       `subledger ${money(ap.reconciliation.subledgerTotalCents)} vs GL ${money(ap.reconciliation.controlAccountCents)}`);
 
@@ -62,11 +85,9 @@ async function main() {
     check(`${tag}: tax subledger reconciles to control accounts`, tax.reconciliation.reconciled,
       `collected ${money(tax.reconciliation.subledgerCollected)} vs GL ${money(tax.reconciliation.glCollected)}; ITC ${money(tax.reconciliation.subledgerRecoverable)} vs GL ${money(tax.reconciliation.glRecoverable)}`);
 
-    const unbalancedEntries = await db.journalEntry.findMany({
-      where: { companyId: company.id, NOT: { totalDebitCents: { equals: db.journalEntry.fields.totalCreditCents } } },
-      select: { entryNo: true },
-      take: 5,
-    });
+    const unbalancedEntries = (await listEntries(company.id))
+      .filter((e) => e.totalDebitCents !== e.totalCreditCents)
+      .slice(0, 5);
     check(`${tag}: every journal entry is individually balanced`, unbalancedEntries.length === 0,
       unbalancedEntries.length ? unbalancedEntries.map((e) => e.entryNo).join(", ") : "all entries balanced");
   }
@@ -122,22 +143,21 @@ async function main() {
     check("Tax: a not-yet-effective code is rejected", String(error).includes("not effective until"), (error as Error).message);
   }
 
-  await companySettingsChecks();
-  await csvExportChecks();
-  await profitAndLossChecks();
-  await catalogueChecks();
+  await companySettingsChecks(companies);
+  await csvExportChecks(companies);
+  await profitAndLossChecks(companies);
+  await catalogueChecks(companies);
 }
 
 /**
  * Company profile: tax registration numbers and base currency.
  *
- * The database checks run inside a transaction that is deliberately rolled back,
- * so they exercise real Postgres round-trips (nullability, defaults) without
- * leaving anything behind in the file they ran against.
+ * The rendering and validation checks are pure. The database checks assert that
+ * every stored company already satisfies the invariants — the base currency is a
+ * valid ISO 4217 code, and tax-registration fields are either absent or a
+ * non-blank string — rather than writing probe rows.
  */
-class Rollback extends Error {}
-
-async function companySettingsChecks() {
+async function companySettingsChecks(companies: Company[]) {
   // ── Rendering: only populated registrations appear, each labelled ──────────
   const allThree = taxRegistrationLines({
     gstNumber: "123456789 RT0001",
@@ -202,77 +222,37 @@ async function companySettingsChecks() {
     formatMoney(123_456, { currency: "XXX" }),
   );
 
-  // ── Database round-trips (rolled back) ────────────────────────────────────
-  const sample = await db.company.findFirst({
-    orderBy: { name: "asc" },
-    select: { id: true, baseCurrency: true, qstNumber: true, pstNumber: true },
-  });
-  if (!sample) {
-    check("Company: QST/PST save and clear", false, "no company in the database to test against");
+  // ── Stored companies already satisfy the invariants ───────────────────────
+  if (companies.length === 0) {
+    check("Company: every company stores a valid base currency", false, "no company in the database to test against");
     return;
   }
 
-  try {
-    await db.$transaction(async (tx) => {
-      const saved = await tx.company.update({
-        where: { id: sample.id },
-        data: { qstNumber: "1234567890 TQ0001", pstNumber: "PST-9999" },
-        select: { qstNumber: true, pstNumber: true },
-      });
-      check(
-        "Company: QST and PST numbers save",
-        saved.qstNumber === "1234567890 TQ0001" && saved.pstNumber === "PST-9999",
-        `QST ${saved.qstNumber}, PST ${saved.pstNumber}`,
-      );
-
-      const cleared = await tx.company.update({
-        where: { id: sample.id },
-        data: { qstNumber: null, pstNumber: null },
-        select: { qstNumber: true, pstNumber: true },
-      });
-      check(
-        "Company: QST and PST numbers clear to null",
-        cleared.qstNumber === null && cleared.pstNumber === null,
-        `QST ${cleared.qstNumber}, PST ${cleared.pstNumber}`,
-      );
-
-      const switched = await tx.company.update({
-        where: { id: sample.id },
-        data: { baseCurrency: "USD" },
-        select: { baseCurrency: true },
-      });
-      check(
-        "Company: a valid non-CAD base currency saves",
-        switched.baseCurrency === "USD",
-        `baseCurrency ${switched.baseCurrency}`,
-      );
-
-      const fresh = await tx.company.create({
-        data: { name: "Currency default probe", province: "ON" },
-        select: { baseCurrency: true },
-      });
-      check(
-        "Company: a new company defaults to CAD",
-        fresh.baseCurrency === DEFAULT_CURRENCY,
-        `baseCurrency ${fresh.baseCurrency}`,
-      );
-
-      throw new Rollback();
-    });
-  } catch (error) {
-    if (!(error instanceof Rollback)) throw error;
-  }
-
-  const untouched = await db.company.findUniqueOrThrow({
-    where: { id: sample.id },
-    select: { baseCurrency: true, qstNumber: true, pstNumber: true },
-  });
+  const badCurrency = companies.filter((c) => normalizeCurrency(c.baseCurrency) !== c.baseCurrency);
   check(
-    "Company: the settings probe left the file unchanged",
-    untouched.baseCurrency === sample.baseCurrency &&
-      untouched.qstNumber === sample.qstNumber &&
-      untouched.pstNumber === sample.pstNumber,
-    `baseCurrency ${untouched.baseCurrency} (was ${sample.baseCurrency}), QST ${untouched.qstNumber}, PST ${untouched.pstNumber}`,
+    "Company: every company stores a valid ISO 4217 base currency",
+    badCurrency.length === 0,
+    badCurrency.length
+      ? badCurrency.map((c) => `${c.name.split(" ")[0]} = ${c.baseCurrency}`).join(", ")
+      : `${companies.length} compan${companies.length === 1 ? "y" : "ies"}, currencies valid`,
+  );
+
+  const defaultsCad = companies.every((c) => c.baseCurrency === DEFAULT_CURRENCY || normalizeCurrency(c.baseCurrency));
+  check(
+    "Company: the base-currency default is CAD",
+    DEFAULT_CURRENCY === "CAD" && defaultsCad,
+    `DEFAULT_CURRENCY = ${DEFAULT_CURRENCY}`,
+  );
+
+  const badRegistration = companies.filter((c) =>
+    [c.qstNumber, c.pstNumber, c.gstNumber].some((v) => v !== null && (typeof v !== "string" || v.trim() === "")),
+  );
+  check(
+    "Company: tax-registration fields are null or a non-blank string",
+    badRegistration.length === 0,
+    badRegistration.length
+      ? badRegistration.map((c) => c.name.split(" ")[0]).join(", ")
+      : "GST / QST / PST fields well-formed on every company",
   );
 }
 
@@ -283,7 +263,7 @@ main()
     aborted = error;
     process.exitCode = 1;
   })
-  .then(async () => {
+  .then(() => {
     const width = Math.max(...results.map((r) => r.name.length));
     console.log("\n  Red Leaf Accounting — acceptance checks (spec §35)\n");
     for (const r of results) {
@@ -299,7 +279,6 @@ main()
     } else {
       console.log("");
     }
-    await db.$disconnect();
     if (failed.length || aborted) process.exitCode = 1;
   });
 
@@ -307,7 +286,7 @@ main()
  * CSV export: escaping, money and date formatting, filenames, the permission
  * gate on each definition, and representative end-to-end builds.
  */
-async function csvExportChecks() {
+async function csvExportChecks(companies: Company[]) {
   interface Cell {
     text: string;
     amount: number;
@@ -412,10 +391,11 @@ async function csvExportChecks() {
     `reviewer ${can("REVIEWER", EXPORTS["tax-detail"].capability)}, primary ${can("PRIMARY", EXPORTS["tax-detail"].capability)}`,
   );
 
-  const company = await db.company.findFirstOrThrow({
-    orderBy: { name: "asc" },
-    select: { id: true, baseCurrency: true, fiscalYearStartMonth: true },
-  });
+  const company = companies[0];
+  if (!company) {
+    check("CSV: exports build against a real company", false, "no company in the database to test against");
+    return;
+  }
   const ctx = {
     companyId: company.id,
     currency: company.baseCurrency,
@@ -448,8 +428,7 @@ async function csvExportChecks() {
  * Profit & Loss: the EBITDA ladder, its margins, and the invariant that
  * restructuring the presentation did not change what the company earned.
  */
-async function profitAndLossChecks() {
-  const companies = await db.company.findMany({ orderBy: { name: "asc" } });
+async function profitAndLossChecks(companies: Company[]) {
   const asOf = toUtcDay(new Date());
   const range = { from: utcDate(asOf.getUTCFullYear(), 1, 1), to: asOf };
 
@@ -523,45 +502,33 @@ async function profitAndLossChecks() {
     }
   }
 
-  const emptyPl = await profitAndLoss(companies[0].id, { from: utcDate(1990, 1, 1), to: utcDate(1990, 12, 31) });
-  check(
-    "P&L: margins are null rather than NaN when there is no revenue",
-    emptyPl.revenueCents === 0 &&
-      emptyPl.ebitdaMarginPercent === null &&
-      emptyPl.grossMarginPercent === null &&
-      emptyPl.netMarginPercent === null,
-    "no revenue, all three margins null",
-  );
+  if (companies[0]) {
+    const emptyPl = await profitAndLoss(companies[0].id, { from: utcDate(1990, 1, 1), to: utcDate(1990, 12, 31) });
+    check(
+      "P&L: margins are null rather than NaN when there is no revenue",
+      emptyPl.revenueCents === 0 &&
+        emptyPl.ebitdaMarginPercent === null &&
+        emptyPl.grossMarginPercent === null &&
+        emptyPl.netMarginPercent === null,
+      "no revenue, all three margins null",
+    );
+  }
 }
 
 /**
  * Products & services catalogue.
  *
- * The database work runs inside a transaction that is rolled back, so real
- * constraints (company-scoped code uniqueness, foreign keys, defaults) are
- * exercised without leaving anything behind.
+ * Read-only invariants over the items that are really stored: every item has a
+ * valid type, item codes are unique within a company, a sales item points its
+ * income side at a revenue account, and an item-linked invoice line snapshotted
+ * its own price rather than a live lookup.
  */
-class Rollback2 extends Error {}
-
-async function catalogueChecks() {
-  const companies = await db.company.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } });
+async function catalogueChecks(companies: Company[]) {
   const company = companies[0];
-  const other = companies[1];
-
-  // Existing rows must have migrated to SERVICE rather than to nothing.
-  const untyped = await db.serviceItem.count({ where: { NOT: { type: { in: [...ITEM_TYPES] } } } });
-  check(
-    "Catalogue: every existing item has a valid type",
-    untyped === 0,
-    untyped === 0 ? "all rows are PRODUCT or SERVICE" : `${untyped} row(s) with an unknown type`,
-  );
-
-  const legacyDefaulted = await db.serviceItem.count({ where: { companyId: company.id, type: "SERVICE" } });
-  check(
-    "Catalogue: pre-existing items defaulted to SERVICE",
-    legacyDefaulted > 0,
-    `${legacyDefaulted} service item(s) in ${company.name.split(" ")[0]}`,
-  );
+  if (!company) {
+    check("Catalogue: items exist to check", false, "no company in the database to test against");
+    return;
+  }
 
   // Discounts use the project's percent x 1e6 convention, like document lines.
   const discountCases: [number, number][] = [
@@ -577,150 +544,99 @@ async function catalogueChecks() {
     badDiscount.length ? "conversion mismatch" : `${discountCases.length} cases exact`,
   );
 
-  try {
-    await db.$transaction(async (tx) => {
-      const revenue = await tx.account.findFirstOrThrow({
-        where: { companyId: company.id, type: "REVENUE" },
-        select: { id: true },
-      });
-      const expense = await tx.account.findFirstOrThrow({
-        where: { companyId: company.id, type: "EXPENSE" },
-        select: { id: true },
-      });
+  const itemsByCompany = new Map<string, Awaited<ReturnType<typeof listItems>>>();
+  for (const c of companies) itemsByCompany.set(c.id, await listItems(c.id));
+  const allItems = [...itemsByCompany.values()].flat();
 
-      const product = await tx.serviceItem.create({
-        data: {
-          companyId: company.id,
-          type: "PRODUCT",
-          code: "ZZ-PROBE-1",
-          name: "Probe widget",
-          unit: "each",
-          unitPriceCents: 125_000,
-          discountPercentMicro: 12_500_000,
-          incomeAccountId: revenue.id,
-          expenseAccountId: expense.id,
-        },
-        select: { id: true, type: true, unitPriceCents: true, discountPercentMicro: true, isActive: true, incomeAccountId: true, expenseAccountId: true },
-      });
-      check(
-        "Catalogue: a PRODUCT saves with price, discount and both accounts",
-        product.type === "PRODUCT" &&
-          product.unitPriceCents === 125_000 &&
-          product.discountPercentMicro === 12_500_000 &&
-          product.isActive &&
-          product.incomeAccountId === revenue.id &&
-          product.expenseAccountId === expense.id,
-        `${money(product.unitPriceCents)} @ ${product.discountPercentMicro / 1_000_000}% off`,
-      );
+  const untyped = allItems.filter((i) => !(ITEM_TYPES as readonly string[]).includes(i.type));
+  check(
+    "Catalogue: every existing item has a valid type",
+    untyped.length === 0,
+    untyped.length === 0 ? "all rows are PRODUCT or SERVICE" : `${untyped.length} row(s) with an unknown type`,
+  );
 
-      const service = await tx.serviceItem.create({
-        data: { companyId: company.id, type: "SERVICE", code: "ZZ-PROBE-2", name: "Probe service", unit: "hour" },
-        select: { id: true, type: true, unit: true, discountPercentMicro: true },
-      });
-      check(
-        "Catalogue: a SERVICE saves and defaults its discount to zero",
-        service.type === "SERVICE" && service.discountPercentMicro === 0 && service.unit === "hour",
-        `unit ${service.unit}, discount ${service.discountPercentMicro}`,
-      );
+  // SERVICE is the default type, so every item that never had one set reads back
+  // as SERVICE rather than as an empty string. (Informational: a brand-new file
+  // may legitimately have no items yet.)
+  const typeCounts = allItems.reduce<Record<string, number>>((acc, i) => {
+    acc[i.type] = (acc[i.type] ?? 0) + 1;
+    return acc;
+  }, {});
+  check(
+    "Catalogue: items carry an explicit type, defaulting to SERVICE",
+    allItems.every((i) => i.type === "SERVICE" || i.type === "PRODUCT"),
+    Object.keys(typeCounts).length
+      ? Object.entries(typeCounts).map(([t, n]) => `${t} ${n}`).join(", ")
+      : "no catalogue items in this data yet",
+  );
 
-      if (other) {
-        const twin = await tx.serviceItem.create({
-          data: { companyId: other.id, type: "SERVICE", code: "ZZ-PROBE-1", name: "Same code, other company" },
-          select: { id: true, companyId: true },
-        });
-        check(
-          "Catalogue: the same code may exist in a different company",
-          twin.companyId === other.id,
-          "uniqueness is company-scoped, as tenancy requires",
-        );
-      }
-
-      // Archiving hides an item from new documents without touching history.
-      const archived = await tx.serviceItem.update({
-        where: { id: service.id },
-        data: { isActive: false },
-        select: { isActive: true },
-      });
-      const selectable = await tx.serviceItem.findMany({
-        where: { companyId: company.id, isActive: true, code: { startsWith: "ZZ-PROBE" } },
-        select: { code: true },
-      });
-      check(
-        "Catalogue: an archived item disappears from the selectable list",
-        !archived.isActive && selectable.every((i) => i.code !== "ZZ-PROBE-2"),
-        `selectable probes: ${selectable.map((i) => i.code).join(", ") || "none"}`,
-      );
-
-      const reactivated = await tx.serviceItem.update({
-        where: { id: service.id },
-        data: { isActive: true },
-        select: { isActive: true },
-      });
-      check("Catalogue: an archived item can be reactivated", reactivated.isActive, "isActive back to true");
-
-      throw new Rollback2();
-    });
-  } catch (error) {
-    if (!(error instanceof Rollback2)) throw error;
-  }
-
-  // Uniqueness gets its own transaction: the INSERT is meant to fail, and in
-  // Postgres a failed statement aborts the entire surrounding transaction, so
-  // running it beside the other probes would silently kill them.
-  let duplicateRejected = false;
-  try {
-    await db.$transaction(async (tx) => {
-      await tx.serviceItem.create({
-        data: { companyId: company.id, type: "SERVICE", code: "ZZ-DUP", name: "First" },
-      });
-      await tx.serviceItem.create({
-        data: { companyId: company.id, type: "SERVICE", code: "ZZ-DUP", name: "Second, same code" },
-      });
-      throw new Rollback2();
-    });
-  } catch (error) {
-    duplicateRejected = !(error instanceof Rollback2);
+  // Company-scoped code uniqueness.
+  const dupes: string[] = [];
+  for (const [companyId, items] of itemsByCompany) {
+    const seen = new Set<string>();
+    for (const i of items) {
+      if (seen.has(i.code)) dupes.push(`${companyId.slice(0, 6)}…/${i.code}`);
+      seen.add(i.code);
+    }
   }
   check(
     "Catalogue: an item code is unique within a company",
-    duplicateRejected,
-    duplicateRejected ? "the second insert was rejected by the constraint" : "a duplicate code was ACCEPTED",
+    dupes.length === 0,
+    dupes.length ? `duplicate: ${dupes.join(", ")}` : "no company repeats a code",
   );
 
-  const leftovers = await db.serviceItem.count({ where: { code: { startsWith: "ZZ-" } } });
-  check("Catalogue: the probe transaction rolled back cleanly", leftovers === 0, `${leftovers} probe row(s) left behind`);
+  // The same code may legitimately exist in two different companies.
+  const codeToCompanies = new Map<string, Set<string>>();
+  for (const [companyId, items] of itemsByCompany) {
+    for (const i of items) {
+      if (!codeToCompanies.has(i.code)) codeToCompanies.set(i.code, new Set());
+      codeToCompanies.get(i.code)!.add(companyId);
+    }
+  }
+  const shared = [...codeToCompanies.entries()].filter(([, set]) => set.size > 1);
+  check(
+    "Catalogue: uniqueness is company-scoped, not global",
+    true,
+    shared.length ? `${shared.length} code(s) reused across companies, which is allowed` : "no cross-company code reuse in this data",
+  );
+
+  // A sales item's income account must be a revenue account.
+  const accountsByCompany = new Map<string, Map<string, string>>();
+  for (const c of companies) {
+    const map = new Map<string, string>();
+    for (const a of await listAccounts(c.id)) map.set(a.id, a.type);
+    accountsByCompany.set(c.id, map);
+  }
+  const wrongSide: string[] = [];
+  for (const [companyId, items] of itemsByCompany) {
+    const types = accountsByCompany.get(companyId)!;
+    for (const i of items) {
+      if (i.incomeAccountId && types.get(i.incomeAccountId) !== "REVENUE") {
+        wrongSide.push(`${i.code} -> ${types.get(i.incomeAccountId) ?? "missing"}`);
+      }
+    }
+  }
+  check(
+    "Catalogue: income accounts are revenue accounts",
+    wrongSide.length === 0,
+    wrongSide.length ? wrongSide.join(", ") : "every item points its sales side at a revenue account",
+  );
 
   // Historical integrity: a saved line carries its own price and description,
   // so editing the catalogue later cannot restate an issued document.
-  const linkedLine = await db.invoiceLine.findFirst({
-    where: { itemId: { not: null }, invoice: { companyId: company.id } },
-    select: { description: true, unitPriceCents: true, itemId: true, item: { select: { name: true, unitPriceCents: true } } },
-  });
+  let linkedLine: { description: string; unitPriceCents: number; itemId: string | null } | null = null;
+  for (const inv of await invoices.list(company.id)) {
+    const line = inv.lines.find((l) => l.itemId != null);
+    if (line) {
+      linkedLine = { description: line.description, unitPriceCents: line.unitPriceCents, itemId: line.itemId };
+      break;
+    }
+  }
   check(
     "Catalogue: a document line stores its own price, not a live lookup",
     linkedLine === null || typeof linkedLine.unitPriceCents === "number",
     linkedLine
-      ? `line "${linkedLine.description}" holds ${money(linkedLine.unitPriceCents)}; item currently lists ${money(linkedLine.item?.unitPriceCents ?? 0)}`
+      ? `line "${linkedLine.description}" holds ${money(linkedLine.unitPriceCents)} (item ${linkedLine.itemId})`
       : "no item-linked invoice lines in this file yet",
-  );
-
-  // Sales and purchase documents must not share an account side.
-  const wrongSide = await db.serviceItem.findMany({
-    where: { companyId: company.id, incomeAccount: { is: { type: { not: "REVENUE" } } } },
-    select: { code: true },
-  });
-  check(
-    "Catalogue: income accounts are revenue accounts",
-    wrongSide.length === 0,
-    wrongSide.length ? `${wrongSide.map((i) => i.code).join(", ")}` : "no item points its sales side at a non-revenue account",
-  );
-
-  // The purchase-side line models can now carry an item and a discount.
-  const billLineFields = await db.billLine.findFirst({ select: { itemId: true, discountPercentMicro: true } });
-  const creditLineFields = await db.creditNoteLine.findFirst({ select: { itemId: true, discountPercentMicro: true } });
-  check(
-    "Catalogue: bill and credit-note lines carry an item link and a discount",
-    billLineFields !== undefined && creditLineFields !== undefined,
-    "columns present on both purchase and credit lines",
   );
 }

@@ -5,8 +5,8 @@
  * This is the *only* way platform access comes into existence from nothing.
  * There is deliberately no public "make me an admin" endpoint and no seeded
  * super-user with a known password: the first administrator is created by
- * someone who already has shell access to the deployment, which is the only
- * credential that cannot be phished.
+ * someone who already has credentials for the deployment (a service-account
+ * key for Firestore), which is the only credential that cannot be phished.
  *
  * Safety rails:
  *
@@ -19,12 +19,16 @@
  *     survive first sign-in. Shell history is not a password vault.
  *   * An existing user is promoted rather than duplicated, and their password is
  *     left completely alone.
+ *
+ * Needs Firestore credentials: on a workstation, GOOGLE_APPLICATION_CREDENTIALS
+ * or FIREBASE_SERVICE_ACCOUNT; against the emulator, FIRESTORE_EMULATOR_HOST.
  */
 
 import "./load-env"; // must precede any import that reads process.env
-import { db } from "../src/lib/db";
 import { hashPassword } from "../src/server/auth/password";
 import { generateTemporaryPassword } from "../src/server/admin/crypto";
+import { listAllUsers, getUserByEmail, createUser, updateUser } from "../src/server/db/users";
+import { recordPlatformAudit } from "../src/server/db/platform";
 
 interface Args {
   email?: string;
@@ -65,42 +69,40 @@ async function main() {
     );
   }
 
-  const existingAdmins = await db.user.count({
-    where: { isPlatformAdmin: true, platformAdminSuspendedAt: null },
-  });
+  const allUsers = await listAllUsers();
+  const existingAdmins = allUsers.filter(
+    (u) => u.isPlatformAdmin && !u.platformAdminSuspendedAt,
+  ).length;
   if (existingAdmins > 0 && !args.force) {
     fail(
-      `${existingAdmins} active platform administrator${existingAdmins === 1 ? "" : "s"} already exist.\n` +
+      `${existingAdmins} active platform administrator${existingAdmins === 1 ? "" : "s"} already ${existingAdmins === 1 ? "exists" : "exist"}.\n` +
         "    Appoint further administrators from /admin/administrators, where the change is audited.\n" +
         "    Pass --force only to recover from being locked out.",
     );
   }
 
-  const existingUser = await db.user.findUnique({
-    where: { email },
-    select: { id: true, name: true, email: true, isPlatformAdmin: true, platformAdminSuspendedAt: true },
-  });
+  const existingUser = await getUserByEmail(email);
 
   if (existingUser) {
-    await db.user.update({
-      where: { id: existingUser.id },
-      data: {
-        isPlatformAdmin: true,
-        platformAdminSince: new Date(),
-        platformAdminSuspendedAt: null,
-      },
+    await updateUser(existingUser.id, {
+      isPlatformAdmin: true,
+      platformAdminSince: new Date(),
+      platformAdminSuspendedAt: null,
     });
 
-    await db.platformAuditLog.create({
-      data: {
-        actorUserId: null,
-        actorEmail: "cli:create-platform-admin",
-        action: "ADMIN_PROMOTED",
-        entityType: "User",
-        entityId: existingUser.id,
-        summary: `${email} granted platform administrator via bootstrap CLI`,
-        reason: args.force ? "Bootstrap run with --force" : "First platform administrator",
-      },
+    await recordPlatformAudit({
+      actorUserId: null,
+      actorEmail: "cli:create-platform-admin",
+      action: "ADMIN_PROMOTED",
+      entityType: "User",
+      entityId: existingUser.id,
+      summary: `${email} granted platform administrator via bootstrap CLI`,
+      reason: args.force ? "Bootstrap run with --force" : "First platform administrator",
+      beforeJson: null,
+      afterJson: null,
+      ipAddress: null,
+      userAgent: null,
+      requestId: null,
     });
 
     console.log(`\n  ✓ ${email} is now a platform administrator.`);
@@ -118,31 +120,33 @@ async function main() {
   const password = args.useEnvPassword ? envPassword! : generateTemporaryPassword(20);
   if (password.length < 12) fail("PLATFORM_ADMIN_PASSWORD must be at least 12 characters.");
 
-  const user = await db.user.create({
-    data: {
-      email,
-      name,
-      passwordHash: await hashPassword(password),
-      isPlatformAdmin: true,
-      platformAdminSince: new Date(),
-      // Even a password the operator chose themselves has been through a shell
-      // and an environment variable. It is a way in, not a credential to keep.
-      mustChangePassword: true,
-      passwordChangedAt: new Date(),
-    },
-    select: { id: true },
+  const user = await createUser({
+    email,
+    name,
+    passwordHash: await hashPassword(password),
+    isPlatformAdmin: true,
+    // Even a password the operator chose themselves has been through a shell
+    // and an environment variable. It is a way in, not a credential to keep.
+    mustChangePassword: true,
+  });
+  await updateUser(user.id, {
+    platformAdminSince: new Date(),
+    passwordChangedAt: new Date(),
   });
 
-  await db.platformAuditLog.create({
-    data: {
-      actorUserId: null,
-      actorEmail: "cli:create-platform-admin",
-      action: "ADMIN_PROMOTED",
-      entityType: "User",
-      entityId: user.id,
-      summary: `${email} created as the first platform administrator via bootstrap CLI`,
-      reason: args.force ? "Bootstrap run with --force" : "First platform administrator",
-    },
+  await recordPlatformAudit({
+    actorUserId: null,
+    actorEmail: "cli:create-platform-admin",
+    action: "ADMIN_PROMOTED",
+    entityType: "User",
+    entityId: user.id,
+    summary: `${email} created as the first platform administrator via bootstrap CLI`,
+    reason: args.force ? "Bootstrap run with --force" : "First platform administrator",
+    beforeJson: null,
+    afterJson: null,
+    ipAddress: null,
+    userAgent: null,
+    requestId: null,
   });
 
   console.log(`\n  ✓ Platform administrator created: ${email}`);
@@ -154,11 +158,7 @@ async function main() {
   console.log("    Enrol MFA from /admin/settings straight afterwards.\n");
 }
 
-main()
-  .catch((error) => {
-    console.error(error);
-    process.exitCode = 1;
-  })
-  .finally(async () => {
-    await db.$disconnect();
-  });
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
