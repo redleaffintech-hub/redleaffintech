@@ -12,11 +12,7 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
-    // Build output, not source: the Netlify adapter writes the bundled
-    // functions and static assets here, and linting them buries the handful of
-    // real findings under thousands from generated code.
-    ".netlify/**",
-    // Prisma's generated client.
+    // Prisma's generated client (removed at cutover 8c).
     "src/generated/**",
   ]),
 ]);

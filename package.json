@@ -15,8 +15,6 @@
     "migrate:firestore": "node --conditions=react-server --import tsx scripts/migrate-to-firestore.ts",
     "backfill:inventory-accounts": "node --conditions=react-server --import tsx scripts/backfill-inventory-accounts.ts",
     "backfill:company-modules": "node --conditions=react-server --import tsx scripts/backfill-company-modules.ts",
-    "build:free": "node scripts/build-free.mjs",
-    "start:free": "node .next/standalone/server.js",
     "db:migrate": "prisma migrate deploy"
   },
   "dependencies": {
@@ -39,7 +37,6 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@netlify/plugin-nextjs": "^5.15.13",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/pg": "^8.21.0",

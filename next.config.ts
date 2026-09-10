@@ -28,8 +28,6 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
-  // Opt in for a portable Node server; hosted adapters retain their own output.
-  ...(process.env.STANDALONE_BUILD === "1" ? { output: "standalone" as const } : {}),
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },
