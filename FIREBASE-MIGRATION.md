@@ -393,9 +393,48 @@ Documented as a deliberate deviation from strict single-transaction atomicity.
   `@/lib/db` imports are the old Prisma engine files (`ledger.ts`,
   `invoices.ts`, … ) that have `-fs` twins and `reports/exports.ts`; all are
   deleted at cutover.
-  - [ ] **6d–6h — `src/app/**`**: sales, purchases, accounting/banking/tax,
-    company/hr/payroll/inventory, reports/dashboard, admin pages, login + api
-    routes + marketing. `reports/exports.ts` folds in here.
+  - [x] **6d — sales + purchases + expenses.** customers/vendors CRUD, invoice
+    /bill/quote/credit-note/receipt/payment list + detail + new + edit pages and
+    their actions on `invoicesRepo` / `billsRepo` / `estimatesRepo` /
+    `creditNotesRepo` + the `-fs` document engines; list/detail pages fetch all
+    docs and filter/sort/paginate in memory; `peekSequence` replaces
+    `peekNumber(db,…)`; delete-guard reference counts scan embedded line arrays.
+  - [x] **6e — accounting + banking.** chart of accounts (list + reclassify /
+    CRUD / activate / delete with a cross-collection reference scan), general
+    ledger / trial balance / journal list + detail / fiscal periods /
+    opening-balances on `journal-entries` + `fiscal-periods` repos and the `-fs`
+    reports; banking review queue / accounts / rules / reconcile pages +
+    banking + bank-account actions on the `banking` repos and `categorize-fs` /
+    `matching-fs` / `import-fs` / `reconcile-fs`. Adds
+    `listEntries` / `findReversalOf` / `listLinesUpTo` / `countLinesForAccount`
+    to `journal-entries`; enriches `financials-fs` `generalLedger` rows with the
+    journal entry + party names.
+  - [x] **6f — tax + reports.** Tax Centre / filing periods / tax codes pages +
+    `tax/actions` on `tax-periods` / `tax-codes` / `tax-entries` repos and
+    `tax-fs`; tax code creation writes embedded components; period/code roll-ups
+    from one `listAllTaxEntries` pass. Report pages repointed to the `*-fs`
+    reports; budget-vs-actual reads `budgets` + `balancesInRange`. Adds
+    `deleteTaxPeriod` / `listAllTaxEntries` / `listTaxEntriesForPeriod` /
+    `listTaxEntriesForJournalEntry`, and a named `StatementSubtotal` export.
+  - [x] **6g — company / hr / payroll / inventory / firm.** company profile /
+    numbering / fiscal-calendar / users / subscription actions + pages, products
+    & services (CRUD + usage/delete guards), multi-company create/archive/
+    restore/delete, audit log; HR departments / employees / leave types /
+    time-off; payroll pay-runs (list/detail/new/edit + `pay-runs-fs`); inventory
+    page + a new self-contained `adjustStock` in `costing-fs`; firm close page +
+    action. Adds `deleteCompany` / `listAllCompanies` / `deleteItem` /
+    `updateCompany` uses.
+  - [x] **6h — admin portal + auth + app shell + api.** regional-tax-rates /
+    audit / plans / subscriptions / users / clients / settings / administrators
+    pages + actions, admin login + change-password, the customer login flow +
+    `api/search`, the `(app)` shell layout, and the shared payment
+    list/detail components — all on `platform` / `users` / `company-users` /
+    `companies` repos with in-memory filter/sort/paginate. Adds
+    `listSessionsForUser` / `revokeOtherSessionsForUser` / `spendAllUserTokens`
+    / `listAllUsers`. **No file under `src/app` or `src/components` imports
+    `@/lib/db` any more.**
+  - [ ] **`reports/exports.ts`** (CSV) — mechanical import-swap to the `-fs`
+    reports, folded into Phase 8.
 - [ ] **Phase 7 — data migration script**: read every table from Neon,
   transform, write to Firestore preserving ids; rebuild `accountPeriodBalances`;
   verify row counts and a trial balance per company matches pre/post.
