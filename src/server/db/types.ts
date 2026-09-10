@@ -919,3 +919,194 @@ export interface FiscalCalendarChange {
   changedById: string | null;
   createdAt: Date;
 }
+
+// ── Phase 5f: platform (firms, plans, subscriptions, reference, auth) ───────
+
+export interface Firm {
+  id: string;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  createdAt: Date;
+}
+
+export interface FirmUser {
+  id: string; // `${firmId}__${userId}`
+  firmId: string;
+  userId: string;
+  role: string;
+  createdAt: Date;
+}
+
+export interface PlanPriceRow {
+  cycle: string;
+  cycleAmountCents: number;
+  monthlyEquivalentCents: number;
+}
+
+export interface Plan {
+  id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  forWhom: string | null;
+  currency: string;
+  seats: number;
+  companies: number;
+  storageGb: number;
+  support: string;
+  sortOrder: number;
+  isPopular: boolean;
+  contactOnly: boolean;
+  isPublic: boolean;
+  status: string;
+  hasDraftChanges: boolean;
+  publishedAt: Date | null;
+  publishedVersionId: string | null;
+  archivedAt: Date | null;
+  prices: PlanPriceRow[];
+  features: string[];
+  modules: string[];
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface PlanVersion {
+  id: string;
+  planId: string;
+  version: number;
+  snapshot: string;
+  publishedAt: Date;
+  publishedById: string | null;
+}
+
+export interface Subscription {
+  id: string;
+  companyId: string;
+  plan: string;
+  planId: string | null;
+  planVersionId: string | null;
+  status: string;
+  billingCycle: string;
+  currency: string;
+  priceCents: number | null;
+  monthlyEquivalentCents: number | null;
+  seats: number;
+  seatsOverridden: boolean;
+  seatOverrideReason: string | null;
+  seatOverrideAt: Date | null;
+  seatOverrideById: string | null;
+  trialStartsAt: Date | null;
+  trialEndsAt: Date | null;
+  startedAt: Date | null;
+  currentPeriodStart: Date | null;
+  currentPeriodEnd: Date | null;
+  pastDueSince: Date | null;
+  suspendedAt: Date | null;
+  suspendReason: string | null;
+  cancelAt: Date | null;
+  cancelledAt: Date | null;
+  cancelReason: string | null;
+  providerRef: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface SubscriptionEvent {
+  id: string;
+  subscriptionId: string;
+  type: string;
+  summary: string;
+  reason: string | null;
+  beforeJson: string | null;
+  afterJson: string | null;
+  actorUserId: string | null;
+  actorEmail: string | null;
+  createdAt: Date;
+}
+
+export interface SubscriptionNote {
+  id: string;
+  subscriptionId: string;
+  body: string;
+  authorUserId: string | null;
+  authorEmail: string | null;
+  createdAt: Date;
+}
+
+export interface SubscriptionCompany {
+  id: string; // companyId
+  subscriptionId: string;
+  companyId: string;
+  addedById: string | null;
+  createdAt: Date;
+}
+
+export interface RegionalTaxRate {
+  id: string;
+  province: string;
+  federalType: string;
+  federalRateMicro: number;
+  provincialType: string;
+  provincialRateMicro: number;
+  effectiveFrom: Date;
+  effectiveTo: Date | null;
+  isActive: boolean;
+  createdById: string | null;
+  reason: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface Session {
+  id: string;
+  userId: string;
+  token: string;
+  scope: string; // APP | ADMIN
+  userAgent: string | null;
+  ipAddress: string | null;
+  mfaVerifiedAt: Date | null;
+  lastSeenAt: Date | null;
+  expiresAt: Date;
+  revokedAt: Date | null;
+  createdAt: Date;
+}
+
+export interface UserToken {
+  id: string;
+  userId: string;
+  purpose: string;
+  tokenHash: string;
+  expiresAt: Date;
+  usedAt: Date | null;
+  createdById: string | null;
+  createdAt: Date;
+}
+
+export interface AuthAttempt {
+  id: string;
+  email: string;
+  scope: string;
+  success: boolean;
+  outcome: string | null;
+  ipAddress: string | null;
+  userAgent: string | null;
+  createdAt: Date;
+}
+
+export interface PlatformAuditLog {
+  id: string;
+  actorUserId: string | null;
+  actorEmail: string;
+  action: string;
+  entityType: string;
+  entityId: string | null;
+  summary: string;
+  reason: string | null;
+  beforeJson: string | null;
+  afterJson: string | null;
+  ipAddress: string | null;
+  userAgent: string | null;
+  requestId: string | null;
+  createdAt: Date;
+}

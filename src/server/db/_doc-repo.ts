@@ -7,6 +7,7 @@ import {
   newId,
   sub,
   toTimestamp,
+  top,
   type Tx,
 } from "./firestore";
 
@@ -98,6 +99,72 @@ export function makeDocRepo<T extends { id: string; companyId: string }>(
     },
     async remove(companyId, id) {
       await col(companyId).doc(id).delete();
+    },
+  };
+}
+
+/**
+ * A repository over a TOP-LEVEL collection (platform data — no company scope):
+ * `users`, `firms`, `plans`, `subscriptions`, `regionalTaxRates`, …
+ */
+export interface TopRepo<T extends { id: string }> {
+  get(id: string): Promise<T | null>;
+  getTx(tx: Tx, id: string): Promise<T | null>;
+  list(opts?: {
+    where?: [string, FirebaseFirestore.WhereFilterOp, unknown][];
+    orderBy?: string;
+    direction?: "asc" | "desc";
+    limit?: number;
+  }): Promise<T[]>;
+  set(id: string, data: Partial<T>): Promise<void>;
+  create(input: Partial<T> & Record<string, unknown>): Promise<T>;
+  update(id: string, data: Partial<T>): Promise<void>;
+  remove(id: string): Promise<void>;
+}
+
+export function makeTopRepo<T extends { id: string }>(
+  collectionName: string,
+  dateFields: readonly string[],
+  opts: { touchUpdatedAt?: boolean } = {},
+): TopRepo<T> {
+  const { decode, encode } = converter<T>(dateFields);
+  const col = () => top(collectionName);
+  const touch = opts.touchUpdatedAt ?? false;
+
+  return {
+    async get(id) {
+      const snap = await col().doc(id).get();
+      return snap.exists ? decode(snap.data()!, snap.id) : null;
+    },
+    async getTx(tx, id) {
+      const snap = await tx.get(col().doc(id));
+      return snap.exists ? decode(snap.data()!, snap.id) : null;
+    },
+    async list(o = {}) {
+      let q: FirebaseFirestore.Query = col();
+      for (const [f, op, v] of o.where ?? []) q = q.where(f, op, v);
+      if (o.orderBy) q = q.orderBy(o.orderBy, o.direction ?? "asc");
+      if (o.limit) q = q.limit(o.limit);
+      return mapDocs(await q.get(), decode);
+    },
+    async set(id, data) {
+      await col().doc(id).set(encode(data) as DocumentData, { merge: true });
+    },
+    async create(input) {
+      const id = (input.id as string) ?? newId();
+      const now = new Date();
+      const row: Record<string, unknown> = { ...input, id, createdAt: input.createdAt ?? now };
+      if (touch) row.updatedAt = now;
+      await col().doc(id).set(encode(row as Partial<T>) as DocumentData);
+      return row as unknown as T;
+    },
+    async update(id, data) {
+      const patch = { ...encode(data) };
+      if (touch) patch.updatedAt = toTimestamp(new Date());
+      await col().doc(id).update(patch);
+    },
+    async remove(id) {
+      await col().doc(id).delete();
     },
   };
 }

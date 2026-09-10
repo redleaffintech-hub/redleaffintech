@@ -282,10 +282,19 @@ Documented as a deliberate deviation from strict single-transaction atomicity.
   `unmatchTransaction` → reverse). Recurring-template *generation* has no
   implementation in the Prisma app (just the model + a dashboard count), so
   nothing to port.
-- [ ] **Phase 5f — the rest of banking** (OFX/CSV import, rule auto-apply,
-  match-to-invoice/bill, transfer detect/confirm, monthly reconciliation),
-  `reports/exports.ts` (CSV), and the firm / plan / subscription read+write
-  paths the app and admin portal use.
+- [x] **Phase 5f — platform data layer.** `db/platform.ts` +
+  `makeTopRepo` (a repo over a top-level, non-company-scoped collection):
+  `firms` / `firmUsers`, `plans` / `planVersions` (+ `getPublishedPlans`,
+  `getPlanByCode`), `subscriptions` (+ `getSubscriptionForCompany`) with
+  `subscriptionEvents` / `subscriptionNotes` / `subscriptionCompanies`,
+  `regionalTaxRates` (+ `currentRegionalRate`), and the auth substrate —
+  `sessions` (by-token lookup, revoke-for-user), `userTokens` (by-hash),
+  `authAttempts` (+ `countAuthAttempts` for rate limiting), `platformAuditLogs`.
+  Indexes added.
+- [ ] **Phase 5g — remaining banking domain logic** (OFX/CSV import, rule
+  auto-apply, match-to-invoice/bill, transfer detect/confirm, monthly
+  reconciliation) and `reports/exports.ts` (CSV — the `-fs` report functions it
+  needs all exist; mechanical, can also fold into Phase 6).
 - [ ] **Phase 5c — banking & reconciliation, HR, payroll, recurring, projects,
   budgets, attachments, notifications.**
 - [ ] **Phase 6 — rewire call sites**: every `src/app/**/actions.ts`, page and
