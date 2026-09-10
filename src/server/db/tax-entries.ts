@@ -35,6 +35,14 @@ export async function listTaxEntriesForSource(
   return mapDocs(snap, decode);
 }
 
+export async function listTaxEntriesForJournalEntry(
+  companyId: string,
+  journalEntryId: string,
+): Promise<TaxEntry[]> {
+  const snap = await col(companyId).where("journalEntryId", "==", journalEntryId).get();
+  return mapDocs(snap, decode);
+}
+
 export async function listTaxEntriesForSourceTx(
   tx: Tx,
   companyId: string,

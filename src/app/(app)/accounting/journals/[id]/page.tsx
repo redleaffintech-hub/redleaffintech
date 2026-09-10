@@ -1,6 +1,14 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { db } from "@/lib/db";
+import { getEntryWithLines, getEntry, findReversalOf } from "@/server/db/journal-entries";
+import { listAccounts } from "@/server/db/accounts";
+import { getCustomer } from "@/server/db/customers";
+import { getVendor } from "@/server/db/vendors";
+import { getFiscalPeriod } from "@/server/db/fiscal-periods";
+import { listTaxEntriesForJournalEntry } from "@/server/db/tax-entries";
+import { getTaxCodesByIds } from "@/server/db/tax-codes";
+import { getUser } from "@/server/db/users";
+import { listAuditLogs } from "@/server/db/audit-logs";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES, can } from "@/lib/permissions";
 import { SOURCE_LABELS } from "@/lib/enums";
@@ -23,27 +31,57 @@ export default async function JournalDetailPage({ params }: PageProps<"/accounti
   const currency = company.baseCurrency;
   const { id } = await params;
 
-  const entry = await db.journalEntry.findFirst({
-    where: { id, companyId: company.id },
-    include: {
-      lines: { include: { account: true, customer: true, vendor: true }, orderBy: { lineNo: "asc" } },
-      fiscalPeriod: true,
-      reversalOf: { select: { id: true, entryNo: true } },
-      reversedBy: { select: { id: true, entryNo: true } },
-      taxEntries: { include: { taxCode: true } },
-    },
-  });
-  if (!entry) notFound();
+  const rawEntry = await getEntryWithLines(company.id, id);
+  if (!rawEntry) notFound();
 
-  const [createdBy, audit] = await Promise.all([
-    entry.createdById ? db.user.findUnique({ where: { id: entry.createdById }, select: { name: true } }) : null,
-    db.auditLog.findMany({
-      where: { companyId: company.id, entityType: "JournalEntry", entityId: entry.id },
-      orderBy: { createdAt: "desc" },
-      include: { user: { select: { name: true } } },
-      take: 6,
-    }),
-  ]);
+  const [accounts, taxEntryRows, fiscalPeriod, reversalOf, reversedBy, createdBy, allAudit] =
+    await Promise.all([
+      listAccounts(company.id),
+      listTaxEntriesForJournalEntry(company.id, rawEntry.id),
+      rawEntry.fiscalPeriodId ? getFiscalPeriod(company.id, rawEntry.fiscalPeriodId) : Promise.resolve(null),
+      rawEntry.reversalOfId ? getEntry(company.id, rawEntry.reversalOfId) : Promise.resolve(null),
+      findReversalOf(company.id, rawEntry.id),
+      rawEntry.createdById ? getUser(rawEntry.createdById) : Promise.resolve(null),
+      listAuditLogs(company.id, { limit: 40 }),
+    ]);
+  const accountById = new Map(accounts.map((a) => [a.id, a]));
+  const partyNames = new Map<string, string>();
+  await Promise.all(
+    rawEntry.lines.flatMap((l) => [
+      l.customerId
+        ? getCustomer(company.id, l.customerId).then((c) => c && partyNames.set(l.customerId!, c.name))
+        : null,
+      l.vendorId
+        ? getVendor(company.id, l.vendorId).then((v) => v && partyNames.set(l.vendorId!, v.name))
+        : null,
+    ]).filter(Boolean) as Promise<unknown>[],
+  );
+  const taxCodeById = await getTaxCodesByIds(
+    company.id,
+    taxEntryRows.map((t) => t.taxCodeId).filter((x): x is string => Boolean(x)),
+  );
+
+  const entry = {
+    ...rawEntry,
+    fiscalPeriod,
+    reversalOf: reversalOf ? { id: reversalOf.id, entryNo: reversalOf.entryNo } : null,
+    reversedBy: reversedBy ? { id: reversedBy.id, entryNo: reversedBy.entryNo } : null,
+    lines: rawEntry.lines.map((l) => ({
+      ...l,
+      account: accountById.get(l.accountId) ?? { code: "", name: "", type: "" },
+      customer: l.customerId ? { name: partyNames.get(l.customerId) ?? "" } : null,
+      vendor: l.vendorId ? { name: partyNames.get(l.vendorId) ?? "" } : null,
+    })),
+    taxEntries: taxEntryRows.map((t) => ({
+      ...t,
+      taxCode: t.taxCodeId ? taxCodeById.get(t.taxCodeId) ?? { code: "" } : { code: "" },
+    })),
+  };
+
+  const audit = allAudit
+    .filter((a) => a.entityType === "JournalEntry" && a.entityId === entry.id)
+    .slice(0, 6)
+    .map((a) => ({ ...a, user: null as { name: string } | null }));
 
   const sourceHref = SOURCE_HREF[entry.sourceType];
 

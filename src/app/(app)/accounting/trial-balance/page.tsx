@@ -1,6 +1,6 @@
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
-import { trialBalance } from "@/server/reports/financials";
+import { trialBalance } from "@/server/reports/financials-fs";
 import { NORMAL_BALANCE, type AccountType } from "@/lib/enums";
 import { fiscalYearOf, fiscalYearRange, isoDate, toUtcDay, today } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";

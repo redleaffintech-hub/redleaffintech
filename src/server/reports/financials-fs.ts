@@ -26,6 +26,8 @@ import {
 } from "@/lib/dates";
 import { getCompanyOrThrow } from "@/server/db/companies";
 import { listAccounts } from "@/server/db/accounts";
+import { listCustomers } from "@/server/db/customers";
+import { listVendors } from "@/server/db/vendors";
 import { sub, toTimestamp } from "@/server/db/firestore";
 import { accountRawBalanceAsOf, sumsInRange, sumsUpTo, type AccountSum } from "./ledger-fs";
 import type { Account } from "@/server/db/types";
@@ -495,6 +497,8 @@ export async function generalLedger(
     debitCents: number;
     creditCents: number;
     description: string | null;
+    customerId: string | null;
+    vendorId: string | null;
   }
   const allLines: GlLine[] = snap.docs.map((d) => {
     const raw = d.data();
@@ -507,8 +511,35 @@ export async function generalLedger(
       debitCents: raw.debitCents ?? 0,
       creditCents: raw.creditCents ?? 0,
       description: raw.description ?? null,
+      customerId: raw.customerId ?? null,
+      vendorId: raw.vendorId ?? null,
     };
   });
+
+  // The entry each line belongs to, plus the names of any party tagged on a
+  // line — the ledger view links to the source document and shows who it was.
+  const entrySnap = await sub(companyId, "journalEntries")
+    .where("date", ">=", toTimestamp(range.from))
+    .where("date", "<=", toTimestamp(range.to))
+    .get();
+  const entryById = new Map<
+    string,
+    { entryNo: string; memo: string | null; status: string; sourceType: string; sourceNumber: string | null }
+  >();
+  for (const d of entrySnap.docs) {
+    const raw = d.data();
+    entryById.set(d.id, {
+      entryNo: raw.entryNo ?? "",
+      memo: raw.memo ?? null,
+      status: raw.status ?? "POSTED",
+      sourceType: raw.sourceType ?? "",
+      sourceNumber: raw.sourceNumber ?? null,
+    });
+  }
+  const [customers, vendors] = await Promise.all([
+    getCustomerNames(companyId, allLines.map((l) => l.customerId)),
+    getVendorNames(companyId, allLines.map((l) => l.vendorId)),
+  ]);
 
   const byAccount = new Map<string, GlLine[]>();
   for (const line of allLines) {
@@ -529,7 +560,20 @@ export async function generalLedger(
       let running = openingSigned;
       const rows = lines.map((line) => {
         running += line.debitCents - line.creditCents;
-        return { ...line, runningBalanceCents: isDebitNatural ? running : -running };
+        const je = entryById.get(line.journalEntryId) ?? {
+          entryNo: "",
+          memo: null,
+          status: "POSTED",
+          sourceType: "",
+          sourceNumber: null,
+        };
+        return {
+          ...line,
+          runningBalanceCents: isDebitNatural ? running : -running,
+          journalEntry: je,
+          customer: line.customerId ? { name: customers.get(line.customerId) ?? "" } : null,
+          vendor: line.vendorId ? { name: vendors.get(line.vendorId) ?? "" } : null,
+        };
       });
       return {
         account,
@@ -544,6 +588,26 @@ export async function generalLedger(
 }
 
 // ── Shared helpers ─────────────────────────────────────────────────────────
+
+async function getCustomerNames(
+  companyId: string,
+  ids: (string | null)[],
+): Promise<Map<string, string>> {
+  const wanted = new Set(ids.filter((x): x is string => Boolean(x)));
+  if (wanted.size === 0) return new Map();
+  const rows = await listCustomers(companyId);
+  return new Map(rows.filter((r) => wanted.has(r.id)).map((r) => [r.id, r.name]));
+}
+
+async function getVendorNames(
+  companyId: string,
+  ids: (string | null)[],
+): Promise<Map<string, string>> {
+  const wanted = new Set(ids.filter((x): x is string => Boolean(x)));
+  if (wanted.size === 0) return new Map();
+  const rows = await listVendors(companyId);
+  return new Map(rows.filter((r) => wanted.has(r.id)).map((r) => [r.id, r.name]));
+}
 
 export async function currentFiscalRange(companyId: string, asOf = new Date()): Promise<DateRange> {
   const company = await getCompanyOrThrow(companyId);

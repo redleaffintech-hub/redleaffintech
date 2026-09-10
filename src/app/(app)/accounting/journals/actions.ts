@@ -2,12 +2,13 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { db } from "@/lib/db";
 import { toCents } from "@/lib/money";
 import { CAPABILITIES } from "@/lib/permissions";
 import { requireCapability, requireCompany } from "@/server/auth/context";
-import { postManualJournal } from "@/server/accounting/journals";
-import { reverseJournal } from "@/server/accounting/ledger";
+import { postManualJournal } from "@/server/accounting/journals-fs";
+import { reverseJournal } from "@/server/accounting/ledger-fs";
+import { runTransaction } from "@/server/db/firestore";
+import { listAccounts } from "@/server/db/accounts";
 
 const schema = z.object({
   date: z.string(),
@@ -59,7 +60,7 @@ export async function postJournalAction(payload: string) {
 export async function reverseJournalAction(entryId: string, reason: string) {
   const { company, user } = await requireCapability(CAPABILITIES.JOURNALS);
   try {
-    const reversal = await db.$transaction((tx) =>
+    const reversal = await runTransaction((tx) =>
       reverseJournal(tx, entryId, { companyId: company.id, memo: reason || undefined, userId: user.id }),
     );
     revalidatePath(`/accounting/journals/${entryId}`);
@@ -72,10 +73,8 @@ export async function reverseJournalAction(entryId: string, reason: string) {
 
 export async function journalFormOptions() {
   const { company } = await requireCompany();
-  const accounts = await db.account.findMany({
-    where: { companyId: company.id, isActive: true },
-    orderBy: { code: "asc" },
-    select: { id: true, code: true, name: true, type: true },
-  });
+  const accounts = (await listAccounts(company.id))
+    .filter((a) => a.isActive)
+    .map((a) => ({ id: a.id, code: a.code, name: a.name, type: a.type }));
   return { accounts };
 }

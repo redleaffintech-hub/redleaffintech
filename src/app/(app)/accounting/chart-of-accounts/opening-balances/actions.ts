@@ -2,29 +2,24 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { db } from "@/lib/db";
 import { toCents } from "@/lib/money";
 import { toUtcDay } from "@/lib/dates";
 import { CAPABILITIES } from "@/lib/permissions";
 import { recordAudit, requireCapability } from "@/server/auth/context";
-import { postOpeningBalances } from "@/server/accounting/journals";
+import { postOpeningBalances } from "@/server/accounting/journals-fs";
 import { parseOpeningBalancesCsv } from "@/server/accounting/opening-balances-import";
+import { listAccounts } from "@/server/db/accounts";
 
 async function accountsByCode(companyId: string) {
-  const accounts = await db.account.findMany({
-    where: { companyId, isActive: true },
-    select: { id: true, code: true },
-  });
-  return new Map(accounts.map((a) => [a.code.toLowerCase(), a]));
+  const accounts = (await listAccounts(companyId)).filter((a) => a.isActive);
+  return new Map(accounts.map((a) => [a.code.toLowerCase(), { id: a.id, code: a.code }]));
 }
 
 export async function openingBalancesFormOptions() {
   const { company } = await requireCapability(CAPABILITIES.COA);
-  const accounts = await db.account.findMany({
-    where: { companyId: company.id, isActive: true },
-    orderBy: { code: "asc" },
-    select: { id: true, code: true, name: true, type: true },
-  });
+  const accounts = (await listAccounts(company.id))
+    .filter((a) => a.isActive)
+    .map((a) => ({ id: a.id, code: a.code, name: a.name, type: a.type }));
   return { accounts };
 }
 

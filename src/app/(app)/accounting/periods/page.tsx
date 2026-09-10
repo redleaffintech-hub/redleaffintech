@@ -1,7 +1,8 @@
-import { db } from "@/lib/db";
+import { listFiscalPeriods } from "@/server/db/fiscal-periods";
+import { listEntries } from "@/server/db/journal-entries";
 import { requireCompany } from "@/server/auth/context";
 import { CAPABILITIES, can } from "@/lib/permissions";
-import { closeChecklist } from "@/server/accounting/journals";
+import { closeChecklist } from "@/server/accounting/journals-fs";
 import { fiscalYearOf, today, formatDate, formatDateTime } from "@/lib/dates";
 import { Badge, Callout, Card, CardHeader, Money, PageHeader, StatusBadge, Table, Td, Th, Tr } from "@/components/ui";
 import { PeriodActions, YearEndButton } from "./period-actions";
@@ -17,26 +18,28 @@ export default async function PeriodsPage({ searchParams }: PageProps<"/accounti
   );
   const canClose = can(role, CAPABILITIES.PERIOD_CLOSE);
 
-  const periods = await db.fiscalPeriod.findMany({
-    where: { companyId: company.id, fiscalYear },
-    orderBy: { periodNumber: "asc" },
-  });
+  const allPeriods = await listFiscalPeriods(company.id);
+  const periods = allPeriods
+    .filter((p) => p.fiscalYear === fiscalYear)
+    .sort((a, b) => a.periodNumber - b.periodNumber);
 
-  const [entryCounts, years] = await Promise.all([
-    db.journalEntry.groupBy({
-      by: ["fiscalPeriodId"],
-      where: { companyId: company.id, fiscalPeriodId: { in: periods.map((p) => p.id) } },
-      _count: true,
-      _sum: { totalDebitCents: true },
-    }),
-    db.fiscalPeriod.findMany({
-      where: { companyId: company.id },
-      distinct: ["fiscalYear"],
-      select: { fiscalYear: true },
-      orderBy: { fiscalYear: "desc" },
-    }),
-  ]);
-  const statsById = new Map(entryCounts.map((c) => [c.fiscalPeriodId, c]));
+  const periodIds = new Set(periods.map((p) => p.id));
+  const yearStart = periods[0]?.startDate;
+  const yearEnd = periods[periods.length - 1]?.endDate;
+  const entriesInYear =
+    yearStart && yearEnd ? await listEntries(company.id, { from: yearStart, to: yearEnd }) : [];
+  const statsById = new Map<string, { _count: number; _sum: { totalDebitCents: number } }>();
+  for (const e of entriesInYear) {
+    if (!e.fiscalPeriodId || !periodIds.has(e.fiscalPeriodId)) continue;
+    const cur = statsById.get(e.fiscalPeriodId) ?? { _count: 0, _sum: { totalDebitCents: 0 } };
+    cur._count += 1;
+    cur._sum.totalDebitCents += e.totalDebitCents;
+    statsById.set(e.fiscalPeriodId, cur);
+  }
+
+  const years = [...new Set(allPeriods.map((p) => p.fiscalYear))]
+    .sort((a, b) => b - a)
+    .map((fiscalYear) => ({ fiscalYear }));
 
   // The next period that could be closed is the earliest open one.
   const nextToClose = periods.find((p) => p.status === "OPEN" && p.endDate < today());

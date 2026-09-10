@@ -60,6 +60,57 @@ export async function getEntry(
   return snap.exists ? decodeEntry(snap.data()!, snap.id) : null;
 }
 
+/**
+ * Journal entries in a date range (newest first), optionally one source type.
+ * Replaces `db.journalEntry.findMany`.
+ */
+export async function listEntries(
+  companyId: string,
+  opts: { from?: Date; to?: Date; sourceType?: string } = {},
+): Promise<JournalEntry[]> {
+  let q: FirebaseFirestore.Query = entries(companyId);
+  if (opts.from) q = q.where("date", ">=", toTimestamp(opts.from));
+  if (opts.to) q = q.where("date", "<=", toTimestamp(opts.to));
+  q = q.orderBy("date", "desc");
+  let rows = mapDocs(await q.get(), decodeEntry);
+  if (opts.sourceType) rows = rows.filter((e) => e.sourceType === opts.sourceType);
+  return rows;
+}
+
+/** The entry that reversed this one, if any (`reversalOfId == entryId`). */
+export async function findReversalOf(
+  companyId: string,
+  entryId: string,
+): Promise<JournalEntry | null> {
+  const snap = await entries(companyId)
+    .where("reversalOfId", "==", entryId)
+    .limit(1)
+    .get();
+  return snap.empty ? null : decodeEntry(snap.docs[0].data(), snap.docs[0].id);
+}
+
+/**
+ * Every posted journal line for the company, up to and including `asOf`. Used by
+ * the chart-of-accounts page to show per-account entry counts and balances
+ * without a roll-up (Firestore has no GROUP BY).
+ */
+export async function listLinesUpTo(
+  companyId: string,
+  asOf: Date,
+): Promise<JournalLine[]> {
+  const snap = await lines(companyId).where("date", "<=", toTimestamp(asOf)).get();
+  return mapDocs(snap, decodeLine);
+}
+
+/** How many posted journal lines reference an account (for delete guards). */
+export async function countLinesForAccount(
+  companyId: string,
+  accountId: string,
+): Promise<number> {
+  const snap = await lines(companyId).where("accountId", "==", accountId).count().get();
+  return snap.data().count;
+}
+
 export async function getLinesForEntry(
   companyId: string,
   entryId: string,

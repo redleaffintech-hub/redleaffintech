@@ -1,6 +1,6 @@
 import Link from "next/link";
-import { db } from "@/lib/db";
-import { contains } from "@/lib/search";
+import { listEntries } from "@/server/db/journal-entries";
+import { listFiscalPeriods } from "@/server/db/fiscal-periods";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
 import { SOURCE_LABELS } from "@/lib/enums";
@@ -22,26 +22,35 @@ export default async function JournalsPage({ searchParams }: PageProps<"/account
   const source = typeof params.source === "string" ? params.source : "";
   const query = typeof params.q === "string" ? params.q : "";
 
-  const [entries, sourceCounts] = await Promise.all([
-    db.journalEntry.findMany({
-      where: {
-        companyId: company.id,
-        date: { gte: from, lte: to },
-        ...(source ? { sourceType: source } : {}),
-        ...(query ? { OR: [{ entryNo: contains(query) }, { memo: contains(query) }, { sourceNumber: contains(query) }] } : {}),
-      },
-      orderBy: [{ date: "desc" }, { entryNo: "desc" }],
-      take: 200,
-      include: { fiscalPeriod: { select: { name: true, status: true } } },
-    }),
-    db.journalEntry.groupBy({
-      by: ["sourceType"],
-      where: { companyId: company.id, date: { gte: from, lte: to } },
-      _count: true,
-    }),
+  const q = query.toLowerCase();
+  const [allInRange, periods] = await Promise.all([
+    listEntries(company.id, { from, to }),
+    listFiscalPeriods(company.id),
   ]);
+  const periodById = new Map(periods.map((p) => [p.id, p]));
 
-  const countOf = (type: string) => sourceCounts.find((c) => c.sourceType === type)?._count ?? 0;
+  const sourceCount = new Map<string, number>();
+  for (const e of allInRange) sourceCount.set(e.sourceType, (sourceCount.get(e.sourceType) ?? 0) + 1);
+  const countOf = (type: string) => sourceCount.get(type) ?? 0;
+
+  const entries = allInRange
+    .filter((e) => !source || e.sourceType === source)
+    .filter(
+      (e) =>
+        !q ||
+        e.entryNo.toLowerCase().includes(q) ||
+        (e.memo ?? "").toLowerCase().includes(q) ||
+        (e.sourceNumber ?? "").toLowerCase().includes(q),
+    )
+    .slice(0, 200)
+    .map((e) => ({
+      ...e,
+      fiscalPeriod: e.fiscalPeriodId
+        ? periodById.get(e.fiscalPeriodId)
+          ? { name: periodById.get(e.fiscalPeriodId)!.name, status: periodById.get(e.fiscalPeriodId)!.status }
+          : null
+        : null,
+    }));
   const totalCents = entries.reduce((s, e) => s + e.totalDebitCents, 0);
 
   return (

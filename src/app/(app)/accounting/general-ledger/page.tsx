@@ -1,8 +1,8 @@
 import Link from "next/link";
-import { db } from "@/lib/db";
+import { listAccounts } from "@/server/db/accounts";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
-import { generalLedger } from "@/server/reports/financials";
+import { generalLedger } from "@/server/reports/financials-fs";
 import { SOURCE_LABELS } from "@/lib/enums";
 import { fiscalYearOf, fiscalYearRange, isoDate, toUtcDay, today, formatDate } from "@/lib/dates";
 import { LinkButton, Money, PageHeader, EmptyState } from "@/components/ui";
@@ -29,11 +29,12 @@ export default async function GeneralLedgerPage({ searchParams }: PageProps<"/ac
   const to = toUtcDay(typeof params.to === "string" ? params.to : isoDate(today()));
   const accountId = typeof params.account === "string" ? params.account : "";
 
-  const accounts = await db.account.findMany({
-    where: { companyId: company.id },
-    orderBy: { code: "asc" },
-    select: { id: true, code: true, name: true, type: true },
-  });
+  const accounts = (await listAccounts(company.id)).map((a) => ({
+    id: a.id,
+    code: a.code,
+    name: a.name,
+    type: a.type,
+  }));
 
   const groups = await generalLedger(company.id, { from, to }, { accountIds: accountId ? [accountId] : undefined });
 

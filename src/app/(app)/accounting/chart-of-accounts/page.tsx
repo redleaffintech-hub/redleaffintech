@@ -1,6 +1,15 @@
 import Link from "next/link";
-import { db } from "@/lib/db";
-import { contains } from "@/lib/search";
+import { listAccounts } from "@/server/db/accounts";
+import { listLinesUpTo } from "@/server/db/journal-entries";
+import { invoices as invoicesRepo } from "@/server/db/invoices";
+import { estimates as estimatesRepo } from "@/server/db/estimates";
+import { creditNotes as creditNotesRepo } from "@/server/db/credit-notes";
+import { bills as billsRepo } from "@/server/db/bills";
+import { expenses as expensesRepo } from "@/server/db/expenses";
+import { budgets as budgetsRepo } from "@/server/db/supporting";
+import { bankAccounts as bankAccountsRepo } from "@/server/db/banking";
+import { listItems } from "@/server/db/items";
+import { listTaxCodes } from "@/server/db/tax-codes";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES, can } from "@/lib/permissions";
 import { ACCOUNT_SUBTYPES, ACCOUNT_TYPES, NORMAL_BALANCE, type AccountType } from "@/lib/enums";
@@ -31,71 +40,63 @@ export default async function ChartOfAccountsPage({ searchParams }: PageProps<"/
   const typeFilter = typeof params.type === "string" ? params.type : "";
   const query = typeof params.q === "string" ? params.q : "";
 
-  const [accounts, balances] = await Promise.all([
-    db.account.findMany({
-      where: {
-        companyId: company.id,
-        ...(typeFilter ? { type: typeFilter } : {}),
-        ...(query ? { OR: [{ name: contains(query) }, { code: contains(query) }] } : {}),
-      },
-      orderBy: { code: "asc" },
-    }),
-    db.journalLine.groupBy({
-      by: ["accountId"],
-      where: { companyId: company.id, date: { lte: today() } },
-      _sum: { debitCents: true, creditCents: true },
-      _count: true,
-    }),
-  ]);
+  const q = query.toLowerCase();
+  const [allAccounts, lines, invoiceDocs, estimateDocs, creditNoteDocs, billDocs, expenseDocs, budgetDocs, banks, items, taxCodes] =
+    await Promise.all([
+      listAccounts(company.id),
+      listLinesUpTo(company.id, today()),
+      invoicesRepo.list(company.id),
+      estimatesRepo.list(company.id),
+      creditNotesRepo.list(company.id),
+      billsRepo.list(company.id),
+      expensesRepo.list(company.id),
+      budgetsRepo.list(company.id),
+      bankAccountsRepo.list(company.id),
+      listItems(company.id),
+      listTaxCodes(company.id),
+    ]);
 
-  const balanceById = new Map(
-    balances.map((b) => [b.accountId, { debit: b._sum.debitCents ?? 0, credit: b._sum.creditCents ?? 0, count: b._count }]),
-  );
+  const accounts = allAccounts
+    .filter((a) => !typeFilter || a.type === typeFilter)
+    .filter((a) => !q || a.name.toLowerCase().includes(q) || a.code.toLowerCase().includes(q));
 
-  // A cheap presence check for the Delete button: one query per source table
-  // that can reference an account, unioned into a set, rather than one query
-  // per account. The server action re-verifies the real count before ever
-  // deleting anything — this only decides whether the button is worth showing.
-  const [
-    journalAccountIds, docAccountIds, budgetAccountIds, bankAccountIds,
-    itemAccountIds, taxComponentAccountIds, parentAccountIds,
-  ] = await Promise.all([
-    db.journalLine.findMany({ where: { companyId: company.id }, select: { accountId: true }, distinct: ["accountId"] }),
-    Promise.all([
-      db.invoiceLine.findMany({ where: { invoice: { companyId: company.id } }, select: { accountId: true }, distinct: ["accountId"] }),
-      db.estimateLine.findMany({ where: { estimate: { companyId: company.id } }, select: { accountId: true }, distinct: ["accountId"] }),
-      db.creditNoteLine.findMany({ where: { creditNote: { companyId: company.id } }, select: { accountId: true }, distinct: ["accountId"] }),
-      db.billLine.findMany({ where: { bill: { companyId: company.id } }, select: { accountId: true }, distinct: ["accountId"] }),
-      db.expenseLine.findMany({ where: { expense: { companyId: company.id } }, select: { accountId: true }, distinct: ["accountId"] }),
-    ]).then((groups) => groups.flat()),
-    db.budgetLine.findMany({ where: { budget: { companyId: company.id } }, select: { accountId: true }, distinct: ["accountId"] }),
-    db.bankAccount.findMany({ where: { companyId: company.id }, select: { accountId: true } }),
-    db.serviceItem.findMany({
-      where: { companyId: company.id },
-      select: { incomeAccountId: true, expenseAccountId: true },
-    }),
-    db.taxComponent.findMany({
-      where: { taxCode: { companyId: company.id } },
-      select: { liabilityAccountId: true, recoverableAccountId: true },
-    }),
-    db.account.findMany({ where: { companyId: company.id, parentId: { not: null } }, select: { parentId: true } }),
-  ]);
+  const balanceById = new Map<string, { debit: number; credit: number; count: number }>();
+  for (const line of lines) {
+    const cur = balanceById.get(line.accountId) ?? { debit: 0, credit: 0, count: 0 };
+    cur.debit += line.debitCents;
+    cur.credit += line.creditCents;
+    cur.count += 1;
+    balanceById.set(line.accountId, cur);
+  }
+
+  // A presence check for the Delete button — the server action re-verifies the
+  // real count before deleting anything, this only decides whether to show it.
   const referencedIds = new Set<string>();
-  for (const r of journalAccountIds) referencedIds.add(r.accountId);
-  for (const r of docAccountIds) referencedIds.add(r.accountId);
-  for (const r of budgetAccountIds) referencedIds.add(r.accountId);
-  for (const r of bankAccountIds) referencedIds.add(r.accountId);
-  for (const r of itemAccountIds) { if (r.incomeAccountId) referencedIds.add(r.incomeAccountId); if (r.expenseAccountId) referencedIds.add(r.expenseAccountId); }
-  for (const r of taxComponentAccountIds) { if (r.liabilityAccountId) referencedIds.add(r.liabilityAccountId); if (r.recoverableAccountId) referencedIds.add(r.recoverableAccountId); }
-  for (const r of parentAccountIds) { if (r.parentId) referencedIds.add(r.parentId); }
+  for (const line of lines) referencedIds.add(line.accountId);
+  for (const docs of [invoiceDocs, estimateDocs, creditNoteDocs, billDocs, expenseDocs, budgetDocs]) {
+    for (const d of docs) for (const l of d.lines ?? []) referencedIds.add(l.accountId);
+  }
+  for (const b of banks) if (b.accountId) referencedIds.add(b.accountId);
+  for (const i of items) {
+    if (i.incomeAccountId) referencedIds.add(i.incomeAccountId);
+    if (i.expenseAccountId) referencedIds.add(i.expenseAccountId);
+  }
+  for (const c of taxCodes) {
+    for (const comp of c.components ?? []) {
+      if (comp.liabilityAccountId) referencedIds.add(comp.liabilityAccountId);
+      if (comp.recoverableAccountId) referencedIds.add(comp.recoverableAccountId);
+    }
+  }
+  for (const a of allAccounts) if (a.parentId) referencedIds.add(a.parentId);
 
   const grouped = ACCOUNT_TYPES.map((type) => ({
     type,
     accounts: accounts.filter((a) => a.type === type),
   })).filter((group) => group.accounts.length > 0);
 
-  const counts = await db.account.groupBy({ by: ["type"], where: { companyId: company.id }, _count: true });
-  const countOf = (type: string) => counts.find((c) => c.type === type)?._count ?? 0;
+  const typeCount = new Map<string, number>();
+  for (const a of allAccounts) typeCount.set(a.type, (typeCount.get(a.type) ?? 0) + 1);
+  const countOf = (type: string) => typeCount.get(type) ?? 0;
 
   return (
     <>

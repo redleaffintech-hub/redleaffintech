@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { CAPABILITIES } from "@/lib/permissions";
 import { requireCapability } from "@/server/auth/context";
-import { closeFiscalYear, closePeriod, reopenPeriod } from "@/server/accounting/journals";
+import { closeFiscalYear, closePeriod, reopenPeriod } from "@/server/accounting/journals-fs";
 
 export async function closePeriodAction(periodId: string) {
   const { company, user } = await requireCapability(CAPABILITIES.PERIOD_CLOSE);

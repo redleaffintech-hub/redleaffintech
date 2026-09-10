@@ -2,10 +2,26 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { db } from "@/lib/db";
 import { ACCOUNT_SUBTYPES, subtypeLabel, type AccountType } from "@/lib/enums";
 import { CAPABILITIES } from "@/lib/permissions";
 import { recordAudit, requireCapability } from "@/server/auth/context";
+import {
+  createAccount,
+  getAccount,
+  listAccounts,
+  updateAccount,
+} from "@/server/db/accounts";
+import { countLinesForAccount } from "@/server/db/journal-entries";
+import { db, companyRef } from "@/server/db/firestore";
+import { invoices as invoicesRepo } from "@/server/db/invoices";
+import { estimates as estimatesRepo } from "@/server/db/estimates";
+import { creditNotes as creditNotesRepo } from "@/server/db/credit-notes";
+import { bills as billsRepo } from "@/server/db/bills";
+import { expenses as expensesRepo } from "@/server/db/expenses";
+import { budgets as budgetsRepo } from "@/server/db/supporting";
+import { bankAccounts as bankAccountsRepo } from "@/server/db/banking";
+import { listItems } from "@/server/db/items";
+import { listTaxCodes } from "@/server/db/tax-codes";
 
 const reclassifySchema = z.object({
   accountId: z.string().min(1),
@@ -35,10 +51,7 @@ export async function reclassifyAccountAction(formData: FormData) {
   if (!parsed.success) return { error: "Pick an account and a classification." };
   const { accountId, subtype } = parsed.data;
 
-  const account = await db.account.findFirst({
-    where: { id: accountId, companyId: company.id },
-    select: { id: true, code: true, name: true, type: true, subtype: true },
-  });
+  const account = await getAccount(company.id, accountId);
   if (!account) return { error: "That account does not belong to this company." };
   if (account.subtype === subtype) return { ok: true };
 
@@ -49,7 +62,7 @@ export async function reclassifyAccountAction(formData: FormData) {
     };
   }
 
-  await db.account.update({ where: { id: account.id }, data: { subtype } });
+  await updateAccount(company.id, account.id, { subtype });
 
   await recordAudit({
     companyId: company.id,
@@ -87,10 +100,9 @@ async function validateAccountInput(
   if (!allowed.includes(input.subtype)) {
     return { error: `${subtypeLabel(input.subtype)} is not a valid classification for a ${input.type.toLowerCase()} account.` };
   }
-  const clash = await db.account.findFirst({
-    where: { companyId, code: input.code, ...(existingId ? { NOT: { id: existingId } } : {}) },
-    select: { id: true, name: true },
-  });
+  const clash = (await listAccounts(companyId)).find(
+    (a) => a.code === input.code && a.id !== existingId,
+  );
   if (clash) return { error: `Code ${input.code} is already used by "${clash.name}".` };
   return { ok: true };
 }
@@ -111,16 +123,14 @@ export async function createAccountAction(formData: FormData) {
   const validation = await validateAccountInput(company.id, input);
   if ("error" in validation) return validation;
 
-  const account = await db.account.create({
-    data: {
-      companyId: company.id,
-      code: input.code,
-      name: input.name,
-      type: input.type,
-      subtype: input.subtype,
-      description: input.description || null,
-      isActive: input.isActive === "on",
-    },
+  const account = await createAccount({
+    companyId: company.id,
+    code: input.code,
+    name: input.name,
+    type: input.type,
+    subtype: input.subtype,
+    description: input.description || null,
+    isActive: input.isActive === "on",
   });
 
   await recordAudit({
@@ -147,10 +157,7 @@ export async function createAccountAction(formData: FormData) {
  */
 export async function updateAccountAction(accountId: string, formData: FormData) {
   const { company, user } = await requireCapability(CAPABILITIES.COA);
-  const existing = await db.account.findFirst({
-    where: { id: accountId, companyId: company.id },
-    select: { id: true, code: true, name: true, type: true, subtype: true, isSystem: true, isActive: true },
-  });
+  const existing = await getAccount(company.id, accountId);
   if (!existing) return { error: "That account does not belong to this company." };
 
   const parsed = accountSchema.safeParse(Object.fromEntries(formData));
@@ -169,16 +176,13 @@ export async function updateAccountAction(accountId: string, formData: FormData)
   const validation = await validateAccountInput(company.id, input, accountId);
   if ("error" in validation) return validation;
 
-  await db.account.update({
-    where: { id: accountId },
-    data: {
-      code: input.code,
-      name: input.name,
-      type: input.type,
-      subtype: input.subtype,
-      description: input.description || null,
-      isActive: input.isActive === "on",
-    },
+  await updateAccount(company.id, accountId, {
+    code: input.code,
+    name: input.name,
+    type: input.type,
+    subtype: input.subtype,
+    description: input.description || null,
+    isActive: input.isActive === "on",
   });
 
   await recordAudit({
@@ -195,39 +199,71 @@ export async function updateAccountAction(accountId: string, formData: FormData)
 }
 
 /** How many rows, across every place an account can be posted to or defaulted from, reference it. */
-async function accountReferenceCount(accountId: string): Promise<number> {
+async function accountReferenceCount(companyId: string, accountId: string): Promise<number> {
+  const embeddedLineHit = (docs: { lines?: { accountId: string }[] }[]) =>
+    docs.reduce((n, d) => n + (d.lines ?? []).filter((l) => l.accountId === accountId).length, 0);
+
   const [
-    journalLines, invoiceLines, estimateLines, creditNoteLines, billLines, expenseLines, budgetLines,
-    bankAccounts, catalogueDefaults, taxComponents, childAccounts,
+    journalLines,
+    invoiceDocs,
+    estimateDocs,
+    creditNoteDocs,
+    billDocs,
+    expenseDocs,
+    budgetDocs,
+    banks,
+    items,
+    taxCodes,
+    accounts,
   ] = await Promise.all([
-    db.journalLine.count({ where: { accountId } }),
-    db.invoiceLine.count({ where: { accountId } }),
-    db.estimateLine.count({ where: { accountId } }),
-    db.creditNoteLine.count({ where: { accountId } }),
-    db.billLine.count({ where: { accountId } }),
-    db.expenseLine.count({ where: { accountId } }),
-    db.budgetLine.count({ where: { accountId } }),
-    db.bankAccount.count({ where: { accountId } }),
-    db.serviceItem.count({ where: { OR: [{ incomeAccountId: accountId }, { expenseAccountId: accountId }] } }),
-    db.taxComponent.count({ where: { OR: [{ liabilityAccountId: accountId }, { recoverableAccountId: accountId }] } }),
-    db.account.count({ where: { parentId: accountId } }),
+    countLinesForAccount(companyId, accountId),
+    invoicesRepo.list(companyId),
+    estimatesRepo.list(companyId),
+    creditNotesRepo.list(companyId),
+    billsRepo.list(companyId),
+    expensesRepo.list(companyId),
+    budgetsRepo.list(companyId),
+    bankAccountsRepo.list(companyId),
+    listItems(companyId),
+    listTaxCodes(companyId),
+    listAccounts(companyId),
   ]);
+
+  const catalogueDefaults = items.filter(
+    (i) => i.incomeAccountId === accountId || i.expenseAccountId === accountId,
+  ).length;
+  const taxComponents = taxCodes.reduce(
+    (n, c) =>
+      n +
+      (c.components ?? []).filter(
+        (comp) => comp.liabilityAccountId === accountId || comp.recoverableAccountId === accountId,
+      ).length,
+    0,
+  );
+  const childAccounts = accounts.filter((a) => a.parentId === accountId).length;
+
   return (
-    journalLines + invoiceLines + estimateLines + creditNoteLines + billLines + expenseLines + budgetLines +
-    bankAccounts + catalogueDefaults + taxComponents + childAccounts
+    journalLines +
+    embeddedLineHit(invoiceDocs) +
+    embeddedLineHit(estimateDocs) +
+    embeddedLineHit(creditNoteDocs) +
+    embeddedLineHit(billDocs) +
+    embeddedLineHit(expenseDocs) +
+    embeddedLineHit(budgetDocs) +
+    banks.filter((b) => b.accountId === accountId).length +
+    catalogueDefaults +
+    taxComponents +
+    childAccounts
   );
 }
 
 export async function setAccountActiveAction(accountId: string, isActive: boolean) {
   const { company, user } = await requireCapability(CAPABILITIES.COA);
-  const account = await db.account.findFirst({
-    where: { id: accountId, companyId: company.id },
-    select: { id: true, code: true, name: true, isSystem: true },
-  });
+  const account = await getAccount(company.id, accountId);
   if (!account) return { error: "That account does not belong to this company." };
   if (account.isSystem && !isActive) return { error: `${account.name} is a system account and cannot be deactivated.` };
 
-  await db.account.update({ where: { id: accountId }, data: { isActive } });
+  await updateAccount(company.id, accountId, { isActive });
 
   await recordAudit({
     companyId: company.id,
@@ -252,36 +288,27 @@ export async function setAccountActiveAction(accountId: string, isActive: boolea
  */
 export async function deleteAccountAction(accountId: string) {
   const { company, user } = await requireCapability(CAPABILITIES.COA);
-  const account = await db.account.findFirst({
-    where: { id: accountId, companyId: company.id },
-    select: { id: true, code: true, name: true, isSystem: true },
-  });
+  const account = await getAccount(company.id, accountId);
   if (!account) return { error: "That account does not belong to this company." };
   if (account.isSystem) return { error: `${account.name} is a system account and cannot be deleted.` };
 
-  const used = await accountReferenceCount(accountId);
+  const used = await accountReferenceCount(company.id, accountId);
   if (used > 0) {
     return {
       error: `${account.code} — ${account.name} is referenced by ${used} record${used === 1 ? "" : "s"} and cannot be deleted. Deactivate it instead.`,
     };
   }
 
-  // Re-checked immediately before deleting, inside the same call, so nothing
-  // posted between the page rendering and this click can slip through. Every
-  // accountId relation in the schema carries no onDelete clause, which Postgres
-  // treats as RESTRICT — so even a reference this count missed would still make
-  // the delete itself fail rather than silently cascade into real history.
+  // Re-checked inside the transaction, immediately before deleting, so nothing
+  // posted between the page rendering and this click can slip through.
   try {
-    await db.$transaction(async (tx) => {
-      const stillUsed = await accountReferenceCount(accountId);
+    await db.runTransaction(async (tx) => {
+      const stillUsed = await accountReferenceCount(company.id, accountId);
       if (stillUsed > 0) throw new Error(`${account.name} was just used by another record. Deactivate it instead.`);
-      await tx.account.delete({ where: { id: accountId } });
+      tx.delete(companyRef(company.id).collection("accounts").doc(accountId));
+      tx.delete(companyRef(company.id).collection("accountCodes").doc(account.code));
     });
   } catch (error) {
-    const code = (error as { code?: string }).code;
-    if (code === "P2003") {
-      return { error: `${account.name} is still referenced somewhere and cannot be deleted. Deactivate it instead.` };
-    }
     return { error: (error as Error).message };
   }
 
