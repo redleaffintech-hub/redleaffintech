@@ -13,7 +13,10 @@
     "admin:create": "node --conditions=react-server --import tsx scripts/create-platform-admin.ts",
     "verify": "node --conditions=react-server --import tsx scripts/verify.ts",
     "backfill:inventory-accounts": "node --conditions=react-server --import tsx scripts/backfill-inventory-accounts.ts",
-    "backfill:company-modules": "node --conditions=react-server --import tsx scripts/backfill-company-modules.ts"
+    "backfill:company-modules": "node --conditions=react-server --import tsx scripts/backfill-company-modules.ts",
+    "build:free": "node scripts/build-free.mjs",
+    "start:free": "node .next/standalone/server.js",
+    "db:migrate": "prisma migrate deploy"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.9.1",

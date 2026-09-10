@@ -1,8 +1,7 @@
 # Render Blueprint — https://render.com/docs/blueprint-spec
 #
 # The app carries no host-specific code. Render runs it as a plain Node web
-# service: `npm run build` (prisma migrate deploy + generate + next build
-# --webpack) then `next start`, which binds 0.0.0.0:$PORT as Render expects.
+# service using the standalone build. Migrations run explicitly before build.
 #
 # `netlify.toml` in the repo is inert here — Render never reads it.
 #
@@ -18,10 +17,12 @@ services:
     region: virginia      # same AWS us-east-1 as the Neon database
     branch: main
     autoDeployTrigger: commit
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start
-    healthCheckPath: /login
+    buildCommand: npm ci && npm run db:migrate && npm run build:free
+    startCommand: npm run start:free
+    healthCheckPath: /api/health
     envVars:
+      - key: HOSTNAME
+        value: "0.0.0.0"
       - key: NODE_VERSION
         value: "22"
       - key: PRISMA_CLI_QUERY_ENGINE_TYPE
