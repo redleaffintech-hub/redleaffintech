@@ -1,11 +1,11 @@
 import Link from "next/link";
-import { db } from "@/lib/db";
-import { contains } from "@/lib/search";
+import { bills as billsRepo } from "@/server/db/bills";
+import { getVendor } from "@/server/db/vendors";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
 import { formatDate, today, daysBetween } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
-import { Badge, Card, EmptyState, LinkButton, Money, PageHeader, StatusBadge, Table, Td, Th, Tr } from "@/components/ui";
+import { Card, EmptyState, LinkButton, Money, PageHeader, StatusBadge, Table, Td, Th, Tr } from "@/components/ui";
 import { FilterBar } from "@/components/filter-bar";
 import { ExportCsvButton } from "@/components/export-csv-button";
 import { Icon } from "@/components/shell/icons";
@@ -20,33 +20,44 @@ export default async function BillsPage({ searchParams }: PageProps<"/purchases/
   const query = typeof params.q === "string" ? params.q : "";
   const asOf = today();
 
-  const openStatuses = { status: { in: ["OPEN", "PARTIALLY_PAID", "OVERDUE"] } };
-  const where = {
-    companyId: company.id,
-    ...(status === "OPEN"
-      ? openStatuses
-      : status === "OVERDUE"
-        ? { ...openStatuses, balanceCents: { gt: 0 }, dueDate: { lt: asOf } }
-        : status
-          ? { status }
-          : {}),
-    ...(query ? { OR: [{ number: contains(query) }, { vendor: { name: contains(query) } }, { vendorInvoiceNo: contains(query) }] } : {}),
-  };
+  const OPEN = ["OPEN", "PARTIALLY_PAID", "OVERDUE"];
+  const q = query.toLowerCase();
 
-  const [bills, counts, totals, overdueCount] = await Promise.all([
-    db.bill.findMany({
-      where,
-      include: { vendor: { select: { id: true, name: true } } },
-      orderBy: [{ dueDate: "asc" }, { number: "desc" }],
-      take: 150,
+  const allBills = await billsRepo.list(company.id, { orderBy: "dueDate", direction: "asc" });
+  const vendorNames = new Map<string, string>();
+  await Promise.all(
+    [...new Set(allBills.map((b) => b.vendorId))].map(async (id) => {
+      vendorNames.set(id, (await getVendor(company.id, id))?.name ?? "—");
     }),
-    db.bill.groupBy({ by: ["status"], where: { companyId: company.id }, _count: true }),
-    db.bill.aggregate({ where: { companyId: company.id, ...openStatuses }, _sum: { balanceCents: true } }),
-    db.bill.count({ where: { companyId: company.id, ...openStatuses, balanceCents: { gt: 0 }, dueDate: { lt: asOf } } }),
-  ]);
+  );
 
-  const countOf = (statuses: string[]) => counts.filter((c) => statuses.includes(c.status)).reduce((s, c) => s + c._count, 0);
-  const owingCents = totals._sum.balanceCents ?? 0;
+  const isOverdue = (b: (typeof allBills)[number]) =>
+    OPEN.includes(b.status) && b.balanceCents > 0 && b.dueDate < asOf;
+
+  const bills = allBills
+    .filter((b) => {
+      if (status === "OPEN") return OPEN.includes(b.status);
+      if (status === "OVERDUE") return isOverdue(b);
+      if (status) return b.status === status;
+      return true;
+    })
+    .filter(
+      (b) =>
+        !q ||
+        b.number.toLowerCase().includes(q) ||
+        (vendorNames.get(b.vendorId) ?? "").toLowerCase().includes(q) ||
+        (b.vendorInvoiceNo ?? "").toLowerCase().includes(q),
+    )
+    .slice(0, 150)
+    .map((b) => ({ ...b, vendor: { id: b.vendorId, name: vendorNames.get(b.vendorId) ?? "—" } }));
+
+  const statusCount = new Map<string, number>();
+  for (const b of allBills) statusCount.set(b.status, (statusCount.get(b.status) ?? 0) + 1);
+  const countOf = (statuses: string[]) => statuses.reduce((s, st) => s + (statusCount.get(st) ?? 0), 0);
+  const overdueCount = allBills.filter(isOverdue).length;
+  const owingCents = allBills
+    .filter((b) => OPEN.includes(b.status))
+    .reduce((s, b) => s + b.balanceCents, 0);
 
   return (
     <>

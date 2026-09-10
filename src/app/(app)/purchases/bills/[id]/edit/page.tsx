@@ -1,8 +1,10 @@
 import { notFound, redirect } from "next/navigation";
-import { db } from "@/lib/db";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
 import { isoDate } from "@/lib/dates";
+import { bills as billsRepo } from "@/server/db/bills";
+import { getTaxCodesByIds } from "@/server/db/tax-codes";
+import { listAllocationsForBill } from "@/server/db/payment-allocations";
 import { PageHeader } from "@/components/ui";
 import { DocumentForm, type DocumentFormInitial } from "@/components/document-form";
 import { billFormOptions, updateBillAction } from "../../actions";
@@ -13,27 +15,23 @@ export default async function EditBillPage({ params }: { params: Promise<{ id: s
   const { company } = await requireCapability(CAPABILITIES.BILLS);
   const { id } = await params;
 
-  const bill = await db.bill.findFirst({
-    where: { id, companyId: company.id },
-    include: { lines: { orderBy: { lineNo: "asc" } }, allocations: { select: { id: true } } },
-  });
+  const bill = await billsRepo.get(company.id, id);
   if (!bill) notFound();
+  const allocations = await listAllocationsForBill(company.id, bill.id);
+  const lines = [...bill.lines].sort((a, b) => a.lineNo - b.lineNo);
 
   // Editable only while nothing is owed against it and it is not void.
-  if (bill.status === "VOID" || bill.allocations.length > 0 || bill.amountPaidCents !== 0) {
+  if (bill.status === "VOID" || allocations.length > 0 || bill.amountPaidCents !== 0) {
     redirect(`/purchases/bills/${id}`);
   }
 
   const options = await billFormOptions();
 
   const missingCodeIds = [
-    ...new Set(bill.lines.map((l) => l.taxCodeId).filter((x): x is string => Boolean(x))),
+    ...new Set(lines.map((l) => l.taxCodeId).filter((x): x is string => Boolean(x))),
   ].filter((codeId) => !options.taxCodes.some((c) => c.id === codeId));
   const extraCodes = missingCodeIds.length
-    ? await db.taxCode.findMany({
-        where: { id: { in: missingCodeIds }, companyId: company.id },
-        include: { components: true },
-      })
+    ? [...(await getTaxCodesByIds(company.id, missingCodeIds)).values()]
     : [];
 
   const initial: DocumentFormInitial = {
@@ -46,7 +44,7 @@ export default async function EditBillPage({ params }: { params: Promise<{ id: s
     reference: bill.vendorInvoiceNo ?? "",
     billTo: { name: "", line1: "", line2: "", city: "", province: "", postalCode: "" },
     shipTo: null,
-    lines: bill.lines.map((line) => ({
+    lines: lines.map((line) => ({
       description: line.description,
       quantity: String(line.quantityMilli / 1000),
       unitPrice: (line.unitPriceCents / 100).toFixed(2),

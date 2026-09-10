@@ -1,6 +1,14 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { db } from "@/lib/db";
+import { bills as billsRepo } from "@/server/db/bills";
+import { getVendor } from "@/server/db/vendors";
+import { listAccounts } from "@/server/db/accounts";
+import { getTaxCodesByIds } from "@/server/db/tax-codes";
+import { getEntryWithLines } from "@/server/db/journal-entries";
+import { listTaxEntriesForSource } from "@/server/db/tax-entries";
+import { listAllocationsForBill } from "@/server/db/payment-allocations";
+import { getPayment } from "@/server/db/payments";
+import { listAuditLogs } from "@/server/db/audit-logs";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES, can, canApprove } from "@/lib/permissions";
 import { formatDate, formatDateTime, daysBetween, today } from "@/lib/dates";
@@ -13,33 +21,59 @@ export default async function BillDetailPage({ params }: PageProps<"/purchases/b
   const currency = company.baseCurrency;
   const { id } = await params;
 
-  const bill = await db.bill.findFirst({
-    where: { id, companyId: company.id },
-    include: {
-      vendor: true,
-      lines: { orderBy: { lineNo: "asc" }, include: { account: true, taxCode: true } },
-      allocations: { include: { payment: true }, orderBy: { date: "asc" } },
-      journalEntry: { include: { lines: { include: { account: true }, orderBy: { lineNo: "asc" } } } },
-    },
-  });
-  if (!bill) notFound();
+  const raw = await billsRepo.get(company.id, id);
+  if (!raw) notFound();
 
-  const [bankAccounts, taxEntries, audit] = await Promise.all([
-    db.account.findMany({
-      where: { companyId: company.id, subtype: { in: ["BANK", "CASH", "CREDIT_CARD"] }, isActive: true },
-      orderBy: { code: "asc" },
-      select: { id: true, name: true },
-    }),
-    db.taxEntry.findMany({
-      where: { companyId: company.id, sourceType: "BILL", sourceId: bill.id },
-    }),
-    db.auditLog.findMany({
-      where: { companyId: company.id, entityType: "Bill", entityId: bill.id },
-      orderBy: { createdAt: "desc" },
-      include: { user: { select: { name: true } } },
-      take: 8,
-    }),
+  const [accounts, vendorDoc, entry, taxEntries, allocDocs, allAudit] = await Promise.all([
+    listAccounts(company.id),
+    getVendor(company.id, raw.vendorId),
+    raw.journalEntryId ? getEntryWithLines(company.id, raw.journalEntryId) : Promise.resolve(null),
+    listTaxEntriesForSource(company.id, "BILL", raw.id),
+    listAllocationsForBill(company.id, raw.id),
+    listAuditLogs(company.id, { limit: 40 }),
   ]);
+  const accountById = new Map(accounts.map((a) => [a.id, a]));
+  const taxCodeById = await getTaxCodesByIds(
+    company.id,
+    raw.lines.map((l) => l.taxCodeId).filter((x): x is string => Boolean(x)),
+  );
+
+  const bill = {
+    ...raw,
+    vendor: vendorDoc!,
+    lines: [...raw.lines]
+      .sort((a, b) => a.lineNo - b.lineNo)
+      .map((l) => ({
+        ...l,
+        account: accountById.get(l.accountId) ?? { code: "", name: "" },
+        taxCode: l.taxCodeId ? taxCodeById.get(l.taxCodeId) ?? null : null,
+      })),
+    allocations: await Promise.all(
+      [...allocDocs]
+        .sort((a, b) => a.date.getTime() - b.date.getTime())
+        .map(async (al) => ({
+          ...al,
+          payment: al.paymentId ? await getPayment(company.id, al.paymentId) : null,
+        })),
+    ),
+    journalEntry: entry
+      ? {
+          ...entry,
+          lines: [...entry.lines]
+            .sort((a, b) => a.lineNo - b.lineNo)
+            .map((l) => ({ ...l, account: accountById.get(l.accountId) ?? { code: "", name: "" } })),
+        }
+      : null,
+  };
+
+  const bankAccounts = accounts
+    .filter((a) => a.isActive && ["BANK", "CASH", "CREDIT_CARD"].includes(a.subtype))
+    .sort((a, b) => a.code.localeCompare(b.code))
+    .map((a) => ({ id: a.id, name: a.name }));
+  const audit = allAudit
+    .filter((a) => a.entityType === "Bill" && a.entityId === bill.id)
+    .slice(0, 8)
+    .map((a) => ({ ...a, user: null as { name: string } | null }));
 
   const overdueDays = daysBetween(bill.dueDate, today());
   const editable =
@@ -97,7 +131,7 @@ export default async function BillDetailPage({ params }: PageProps<"/purchases/b
             </thead>
             <tbody>
               {bill.lines.map((line) => (
-                <Tr key={line.id}>
+                <Tr key={line.lineNo}>
                   <Td className="font-medium text-ink-900">{line.description}</Td>
                   <Td className="text-muted-ink">
                     {line.account.code} · {line.account.name}

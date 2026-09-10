@@ -2,12 +2,17 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { db } from "@/lib/db";
 import { toCents } from "@/lib/money";
 import { CAPABILITIES } from "@/lib/permissions";
 import { requireCapability, requireCompany } from "@/server/auth/context";
-import { approveBill, createBill, postBill, updateBill, voidBill } from "@/server/documents/bills";
-import { recordPayment } from "@/server/documents/payments";
+import { approveBill, createBill, postBill, updateBill, voidBill } from "@/server/documents/bills-fs";
+import { recordPayment } from "@/server/documents/payments-fs";
+import { bills as billsRepo } from "@/server/db/bills";
+import { getCompanyOrThrow } from "@/server/db/companies";
+import { listVendors } from "@/server/db/vendors";
+import { listAccounts } from "@/server/db/accounts";
+import { listTaxCodes } from "@/server/db/tax-codes";
+import { listItems } from "@/server/db/items";
 
 const schema = z.object({
   partyId: z.string().min(1),
@@ -146,7 +151,7 @@ export async function voidBillAction(billId: string) {
 export async function payBillAction(formData: FormData) {
   const { company, user } = await requireCapability(CAPABILITIES.PAYMENTS);
   const billId = String(formData.get("billId"));
-  const bill = await db.bill.findFirst({ where: { id: billId, companyId: company.id } });
+  const bill = await billsRepo.get(company.id, billId);
   if (!bill) return { error: "Bill not found." };
 
   try {
@@ -175,43 +180,25 @@ export async function payBillAction(formData: FormData) {
 
 export async function billFormOptions() {
   const { company } = await requireCompany();
-  const [vendors, accounts, taxCodes, items, profile] = await Promise.all([
-    db.vendor.findMany({
-      where: { companyId: company.id, isActive: true },
-      orderBy: { name: "asc" },
-      select: { id: true, name: true, taxCodeId: true, paymentTermsDays: true },
-    }),
-    db.account.findMany({
-      where: { companyId: company.id, isActive: true, type: { in: ["EXPENSE", "ASSET", "LIABILITY"] } },
-      orderBy: { code: "asc" },
-      select: { id: true, code: true, name: true, type: true },
-    }),
-    db.taxCode.findMany({
-      where: { companyId: company.id, isActive: true, appliesToPurchases: true },
-      orderBy: { code: "asc" },
-      include: { components: true },
-    }),
-    // The same catalogue serves purchases. A bill seeds the item's EXPENSE
-    // account and purchase tax code — never the income account.
-    db.serviceItem.findMany({
-      where: { companyId: company.id, isActive: true },
-      orderBy: [{ code: "asc" }],
-      select: {
-        id: true, code: true, name: true, description: true, unit: true,
-        unitPriceCents: true, discountPercentMicro: true,
-        incomeAccountId: true, expenseAccountId: true,
-        taxCodeId: true, purchaseTaxCodeId: true,
-      },
-    }),
-    db.company.findUniqueOrThrow({
-      where: { id: company.id },
-      select: {
-        name: true, legalName: true, addressLine1: true, addressLine2: true, city: true, province: true,
-        postalCode: true, businessNumber: true, gstNumber: true, qstNumber: true, pstNumber: true,
-        email: true, phone: true, website: true, invoiceFooter: true, logoUrl: true,
-      },
-    }),
+  const [vendorRows, allAccounts, allTaxCodes, allItems, profile] = await Promise.all([
+    listVendors(company.id, { activeOnly: true }),
+    listAccounts(company.id),
+    listTaxCodes(company.id, { activeOnly: true }),
+    listItems(company.id, { activeOnly: true }),
+    getCompanyOrThrow(company.id),
   ]);
+  const vendors = vendorRows
+    .map((v) => ({ id: v.id, name: v.name, taxCodeId: v.taxCodeId, paymentTermsDays: v.paymentTermsDays }));
+  const accounts = allAccounts
+    .filter((a) => a.isActive && ["EXPENSE", "ASSET", "LIABILITY"].includes(a.type))
+    .sort((a, b) => a.code.localeCompare(b.code))
+    .map((a) => ({ id: a.id, code: a.code, name: a.name, type: a.type }));
+  // The same catalogue serves purchases. A bill seeds the item's EXPENSE
+  // account and purchase tax code — never the income account.
+  const taxCodes = allTaxCodes
+    .filter((c) => c.appliesToPurchases)
+    .sort((a, b) => a.code.localeCompare(b.code));
+  const items = [...allItems].sort((a, b) => a.code.localeCompare(b.code));
   return {
     vendors,
     accounts,
