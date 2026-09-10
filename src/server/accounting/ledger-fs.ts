@@ -3,23 +3,28 @@ import "server-only";
 /**
  * The double-entry posting engine (§5) — Firestore implementation.
  *
- * Mirrors src/server/accounting/ledger.ts exactly in behaviour and invariants.
- * The only structural change is the datastore: `postJournal` and `reverseJournal`
- * run inside a Firestore `runTransaction` callback and additionally maintain the
- * `accountPeriodBalances` roll-up (§4).
+ * Firestore transactions require every read to precede every write, so posting
+ * is split into two phases that a caller can interleave with its own reads and
+ * writes:
  *
- * FIRESTORE TRANSACTION RULE: every read (tx.get) must precede every write. The
- * ordering inside `postJournal` is deliberate — company, accounts and period are
- * read first; `bumpSequenceTx` does the last read then the first write; entry,
- * lines, roll-ups and audit are writes only.
+ *   planPosting(tx, input)   -> PostingPlan   (reads only)
+ *   commitPosting(tx, plan)  -> entry+lines   (writes only)
+ *
+ * `postJournal` runs both back to back — the shape the simple callers (manual
+ * journal, opening balances, year-end close) want. Document flows that also read
+ * customers / tax codes / stock call planPosting during their own read phase and
+ * commitPosting during their write phase.
+ *
+ * Behaviour and invariants mirror src/server/accounting/ledger.ts exactly.
  */
 
 import type { AccountType } from "@/lib/enums";
 import { NORMAL_BALANCE } from "@/lib/enums";
+import { SEQUENCE_FIELD } from "@/server/db/companies";
 import { getAccountsTx, getSystemAccountTx } from "@/server/db/accounts";
 import { allBalances, applyLineToBalanceTx } from "@/server/db/account-balances";
 import { recordAuditTx } from "@/server/db/audit-logs";
-import { bumpSequenceTx, getCompanyTx } from "@/server/db/companies";
+import { companyRef, type Tx } from "@/server/db/firestore";
 import { findPeriodForDateTx } from "@/server/db/fiscal-periods";
 import {
   createEntryTx,
@@ -28,7 +33,6 @@ import {
   type LineDraft,
 } from "@/server/db/journal-entries";
 import type { Account, JournalEntryWithLines } from "@/server/db/types";
-import type { Tx } from "@/server/db/firestore";
 
 export class PostingError extends Error {
   constructor(
@@ -74,7 +78,7 @@ export interface PostJournalInput {
   entryNoOverride?: string;
 }
 
-/** Resolve a control account by its stable handle (AR, AP, GST payable…). */
+/** Resolve a control account by its stable handle. Read — call during planning. */
 export async function getSystemAccount(
   tx: Tx,
   companyId: string,
@@ -90,7 +94,6 @@ export async function getSystemAccount(
   return account;
 }
 
-/** The fiscal period containing `date`; throws if missing or not open. */
 export async function resolveOpenPeriod(
   tx: Tx,
   companyId: string,
@@ -111,10 +114,7 @@ export async function resolveOpenPeriod(
     );
   }
   if (period.status === "LOCKED") {
-    throw new PostingError(
-      `${period.name} is locked and cannot accept any posting.`,
-      "PERIOD_CLOSED",
-    );
+    throw new PostingError(`${period.name} is locked and cannot accept any posting.`, "PERIOD_CLOSED");
   }
   return period;
 }
@@ -138,10 +138,7 @@ function normalizeLines(lines: JournalLineInput[]): NormalizedLine[] {
       );
     }
     if (debit > 0 && credit > 0) {
-      throw new PostingError(
-        `Line ${index + 1}: a line cannot be both a debit and a credit.`,
-        "BAD_LINE",
-      );
+      throw new PostingError(`Line ${index + 1}: a line cannot be both a debit and a credit.`, "BAD_LINE");
     }
     if (debit === 0 && credit === 0) {
       throw new PostingError(`Line ${index + 1}: amount is zero.`, "BAD_LINE");
@@ -161,19 +158,26 @@ function normalizeLines(lines: JournalLineInput[]): NormalizedLine[] {
   return normalized;
 }
 
-/**
- * Post a balanced journal entry. MUST be called inside `runTransaction` so a
- * partial posting can never survive (§5.1).
- */
-export async function postJournal(
-  tx: Tx,
-  input: PostJournalInput,
-): Promise<JournalEntryWithLines> {
+export interface PostingPlan {
+  input: PostJournalInput;
+  normalized: NormalizedLine[];
+  accountTypeById: Map<string, string>;
+  fiscalPeriodId: string;
+  periodName: string;
+  entryNo: string;
+  /** company.nextJournalNumber at read time; commit writes back +1 (unless overridden). */
+  counterAt: number | null;
+  totalDebit: number;
+  totalCredit: number;
+}
+
+/** READ PHASE. */
+export async function planPosting(tx: Tx, input: PostJournalInput): Promise<PostingPlan> {
   const { companyId, date } = input;
   const normalized = normalizeLines(input.lines);
 
-  // ── Reads ───────────────────────────────────────────────────────────────
-  const owner = await getCompanyTx(tx, companyId);
+  const companySnap = await tx.get(companyRef(companyId));
+  const owner = companySnap.data();
   if (owner?.isReadOnly) {
     throw new PostingError(
       "This company file is read-only. Its books remain readable and exportable, but no new entries can be posted.",
@@ -189,30 +193,55 @@ export async function postJournal(
 
   const accountIds = [...new Set(normalized.map((l) => l.accountId))];
   const byId = await getAccountsTx(tx, companyId, accountIds);
+  const accountTypeById = new Map<string, string>();
   for (const id of accountIds) {
     const account = byId.get(id);
-    if (!account) {
-      throw new PostingError(`Account ${id} does not exist in this company.`, "UNKNOWN_ACCOUNT");
-    }
+    if (!account) throw new PostingError(`Account ${id} does not exist in this company.`, "UNKNOWN_ACCOUNT");
     if (!account.isActive) {
       throw new PostingError(`Account ${account.code} ${account.name} is archived.`, "UNKNOWN_ACCOUNT");
     }
+    accountTypeById.set(id, account.type);
   }
 
   const period = await resolveOpenPeriod(tx, companyId, date, input.allowClosedPeriod);
 
-  // Last read + first write.
-  const entryNo =
-    input.entryNoOverride ?? (await bumpSequenceTx(tx, companyId, "journal"));
+  let entryNo: string;
+  let counterAt: number | null = null;
+  if (input.entryNoOverride) {
+    entryNo = input.entryNoOverride;
+  } else {
+    const spec = SEQUENCE_FIELD.journal;
+    counterAt = Number(owner?.[spec.next] ?? 1);
+    entryNo = `${String(owner?.[spec.prefix] ?? "")}${String(counterAt).padStart(spec.pad, "0")}`;
+  }
 
-  // ── Writes ──────────────────────────────────────────────────────────────
-  const totalDebit = normalized.reduce((s, l) => s + l.debitCents, 0);
-  const totalCredit = normalized.reduce((s, l) => s + l.creditCents, 0);
+  return {
+    input,
+    normalized,
+    accountTypeById,
+    fiscalPeriodId: period.id,
+    periodName: period.name,
+    entryNo,
+    counterAt,
+    totalDebit: normalized.reduce((s, l) => s + l.debitCents, 0),
+    totalCredit: normalized.reduce((s, l) => s + l.creditCents, 0),
+  };
+}
+
+/** WRITE PHASE. */
+export function commitPosting(tx: Tx, plan: PostingPlan): JournalEntryWithLines {
+  const { input, normalized } = plan;
+  const { companyId, date } = input;
+
+  if (plan.counterAt !== null) {
+    const spec = SEQUENCE_FIELD.journal;
+    tx.update(companyRef(companyId), { [spec.next]: plan.counterAt + 1 });
+  }
 
   const lineDrafts: LineDraft[] = normalized.map((line, index) => ({
     lineNo: index + 1,
     accountId: line.accountId,
-    accountType: byId.get(line.accountId)!.type,
+    accountType: plan.accountTypeById.get(line.accountId)!,
     description: line.description ?? null,
     debitCents: line.debitCents,
     creditCents: line.creditCents,
@@ -226,16 +255,16 @@ export async function postJournal(
     tx,
     {
       companyId,
-      entryNo,
+      entryNo: plan.entryNo,
       date,
       memo: input.memo ?? null,
       sourceType: input.sourceType,
       sourceId: input.sourceId ?? null,
       sourceNumber: input.sourceNumber ?? null,
       isAdjusting: input.isAdjusting ?? false,
-      fiscalPeriodId: period.id,
-      totalDebitCents: totalDebit,
-      totalCreditCents: totalCredit,
+      fiscalPeriodId: plan.fiscalPeriodId,
+      totalDebitCents: plan.totalDebit,
+      totalCreditCents: plan.totalCredit,
       createdById: input.createdById ?? null,
     },
     lineDrafts,
@@ -257,16 +286,24 @@ export async function postJournal(
     action: "POST",
     entityType: "JournalEntry",
     entityId: entry.id,
-    summary: `Posted ${entryNo} — ${input.sourceType}${input.sourceNumber ? ` ${input.sourceNumber}` : ""} for ${(totalDebit / 100).toFixed(2)}`,
-    metadata: { totalDebit, totalCredit, period: period.name },
+    summary: `Posted ${plan.entryNo} — ${input.sourceType}${input.sourceNumber ? ` ${input.sourceNumber}` : ""} for ${(plan.totalDebit / 100).toFixed(2)}`,
+    metadata: { totalDebit: plan.totalDebit, totalCredit: plan.totalCredit, period: plan.periodName },
   });
 
   return entry;
 }
 
+/** Plan + commit back to back. For callers with no reads of their own. */
+export async function postJournal(
+  tx: Tx,
+  input: PostJournalInput,
+): Promise<JournalEntryWithLines> {
+  return commitPosting(tx, await planPosting(tx, input));
+}
+
 /**
- * Reverse a posted entry with a mirror-image entry (§5.1). The reversal keeps
- * the source linkage so drill-down and the audit trail stay intact.
+ * Reverse a posted entry with a mirror-image entry (§5.1). Reads the original in
+ * this call, so it must be the caller's first tx operation on that data.
  */
 export async function reverseJournal(
   tx: Tx,
@@ -287,7 +324,7 @@ export async function reverseJournal(
     throw new PostingError(`${original.entryNo} has already been reversed.`, "ALREADY_REVERSED");
   }
 
-  const reversal = await postJournal(tx, {
+  const plan = await planPosting(tx, {
     companyId: opts.companyId,
     date: opts.date ?? original.date,
     memo: opts.memo ?? `Reversal of ${original.entryNo}${original.memo ? ` — ${original.memo}` : ""}`,
@@ -307,6 +344,7 @@ export async function reverseJournal(
       taxCodeId: line.taxCodeId,
     })),
   });
+  const reversal = commitPosting(tx, plan);
 
   updateEntryTx(tx, opts.companyId, reversal.id, { reversalOfId: original.id });
   updateEntryTx(tx, opts.companyId, original.id, { status: "REVERSED" });
@@ -314,24 +352,16 @@ export async function reverseJournal(
   return reversal;
 }
 
-/** Signed balance in the account's natural direction. */
 export function naturalBalance(
   type: AccountType,
   debitCents: number,
   creditCents: number,
 ): number {
-  return NORMAL_BALANCE[type] === "DEBIT"
-    ? debitCents - creditCents
-    : creditCents - debitCents;
+  return NORMAL_BALANCE[type] === "DEBIT" ? debitCents - creditCents : creditCents - debitCents;
 }
 
-/**
- * Ledger integrity probe (§5.3), from the `accountPeriodBalances` roll-up rather
- * than a scan of every line. Read-only, so no transaction.
- */
 export async function checkLedgerIntegrity(companyId: string) {
   const balances = await allBalances(companyId);
-
   let debits = 0;
   let credits = 0;
   const byType: Partial<Record<AccountType, number>> = {};
@@ -339,17 +369,12 @@ export async function checkLedgerIntegrity(companyId: string) {
     debits += b.debitCents;
     credits += b.creditCents;
     const t = b.accountType as AccountType;
-    byType[t] =
-      (byType[t] ?? 0) + naturalBalance(t, b.debitCents, b.creditCents);
+    byType[t] = (byType[t] ?? 0) + naturalBalance(t, b.debitCents, b.creditCents);
   }
-
   const assets = byType.ASSET ?? 0;
   const liabilities = byType.LIABILITY ?? 0;
   const equity = byType.EQUITY ?? 0;
-  const revenue = byType.REVENUE ?? 0;
-  const expense = byType.EXPENSE ?? 0;
-  const netIncome = revenue - expense;
-
+  const netIncome = (byType.REVENUE ?? 0) - (byType.EXPENSE ?? 0);
   return {
     debits,
     credits,

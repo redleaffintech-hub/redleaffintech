@@ -219,16 +219,36 @@ Documented as a deliberate deviation from strict single-transaction atomicity.
   **Deferred to Phase 4:** the posting-path service functions
   (`createInvoice`/`postInvoice`/`voidInvoice`/`recordPayment`/…) — they call the
   tax engine and inventory costing, which land in Phase 4.
-- [ ] **Phase 4 — tax engine, inventory, then wire document posting; banking &
-  reconciliation; HR; payroll.**
-- [ ] **Phase 5 — reports** rewritten against `accountPeriodBalances` +
-  collection queries; CSV export.
-- [ ] **Phase 6 — auth** (§5): Firebase Auth, session cookies, guards, MFA.
-- [ ] **Phase 7 — platform admin**: plans, subscriptions, audit, regional rates.
-- [ ] **Phase 8 — data migration script**: read every table from Neon, transform,
-  write to Firestore preserving ids; verify row counts and a trial balance per
-  company matches pre/post.
-- [ ] **Phase 9 — cutover**: enable Blaze, deploy App Hosting backend, smoke
+- [x] **Phase 4 — tax engine, inventory, and the first posting flows.**
+  Repos: `tax-codes.ts` (+ `taxCodeCodes` guard), `tax-periods.ts`,
+  `tax-entries.ts`, `inventory-movements.ts`. Engine wrappers:
+  `tax/engine-fs.ts` (pure arithmetic re-exported; `loadTaxCodesTx`,
+  `findTaxPeriodTx`, `recordTaxEntriesTx` with a pre-resolved `taxPeriodId`),
+  `inventory/costing-fs.ts` (weighted-average, split plan/commit).
+  **`ledger-fs.ts` refactored to `planPosting` (reads) / `commitPosting`
+  (writes)** — Firestore forbids reads after writes, so every posting flow is
+  now two-phase; `postJournal` runs both. `documents/invoices-fs.ts`
+  (`createInvoice`, `postInvoice`, `voidInvoice`, `refreshInvoiceStatusTx` —
+  incl. COGS for tracked items and per-component tax rows) and
+  `documents/payments-fs.ts` (`recordPayment`, `voidPayment`,
+  `openDocumentsForParty`). `documents/bills-fs.ts` has only
+  `refreshBillStatusTx` so far.
+  **Deviation:** create-and-post and edit-a-posted-invoice run as a short
+  sequence of single-purpose transactions, not one — a Firestore transaction
+  can't re-read what it just wrote, and each step is individually atomic.
+- [ ] **Phase 5 — remaining posting flows** (bills, expenses, estimates→invoice
+  conversion, credit notes) + **reports** rewritten against
+  `accountPeriodBalances` + collection queries + `closeChecklist`; CSV export.
+- [ ] **Phase 5b — banking & reconciliation, HR, payroll, recurring, projects,
+  budgets, attachments, notifications.**
+- [ ] **Phase 6 — rewire call sites**: every `src/app/**/actions.ts`, page and
+  `src/server/**` module off `@/lib/db` and onto the repos / `-fs` engines.
+- [ ] **Phase 7 — auth** (§5): Firebase Auth, session cookies, guards, MFA.
+- [ ] **Phase 8 — platform admin**: plans, subscriptions, audit, regional rates.
+- [ ] **Phase 9 — data migration script**: read every table from Neon,
+  transform, write to Firestore preserving ids; rebuild `accountPeriodBalances`;
+  verify row counts and a trial balance per company matches pre/post.
+- [ ] **Phase 10 — cutover**: enable Blaze, deploy App Hosting backend, smoke
   test, move DNS, remove Prisma/`prisma/`, `@prisma/*`, `pg`, `src/lib/db.ts`,
   `src/generated/prisma`, `netlify.toml`, `render.yaml`.
 

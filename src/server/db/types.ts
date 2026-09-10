@@ -505,3 +505,95 @@ export interface PaymentAllocation {
   amountCents: number;
   date: Date;
 }
+
+// ── Phase 4: tax engine + inventory ────────────────────────────────────────
+
+export interface TaxComponent {
+  id: string;
+  name: string;
+  kind: string; // GST | HST | PST | QST | RST
+  rateMicro: number;
+  isRecoverable: boolean;
+  compoundOnPrevious: boolean;
+  liabilityAccountId: string | null;
+  recoverableAccountId: string | null;
+  sortOrder: number;
+}
+
+export interface TaxCode {
+  id: string;
+  companyId: string;
+  code: string;
+  name: string;
+  description: string | null;
+  jurisdiction: string;
+  appliesToSales: boolean;
+  appliesToPurchases: boolean;
+  isZeroRated: boolean;
+  isExempt: boolean;
+  isDefaultSales: boolean;
+  isDefaultPurchase: boolean;
+  effectiveFrom: Date;
+  effectiveTo: Date | null;
+  isActive: boolean;
+  components: TaxComponent[];
+  createdAt: Date;
+}
+
+export interface TaxPeriod {
+  id: string;
+  companyId: string;
+  name: string;
+  startDate: Date;
+  endDate: Date;
+  frequency: string;
+  status: string;
+  filingReference: string | null;
+  filedAt: Date | null;
+  lockedAt: Date | null;
+  netFiledCents: number | null;
+  createdAt: Date;
+}
+
+export interface TaxEntry {
+  id: string;
+  companyId: string;
+  date: Date;
+  direction: string; // SALE | PURCHASE
+  sourceType: string;
+  sourceId: string;
+  sourceNumber: string | null;
+  lineId: string | null;
+  taxCodeId: string;
+  taxComponentId: string | null;
+  jurisdiction: string;
+  kind: string;
+  rateMicro: number;
+  taxableCents: number;
+  taxCents: number;
+  recoverableCents: number;
+  journalEntryId: string | null;
+  taxPeriodId: string | null;
+  partyName: string | null;
+  createdAt: Date;
+}
+
+export interface InventoryMovement {
+  id: string;
+  companyId: string;
+  itemId: string;
+  date: Date;
+  type: string; // PURCHASE | SALE | ADJUSTMENT
+  quantityMilli: number;
+  unitCostCents: number;
+  totalCostCents: number;
+  quantityOnHandAfterMilli: number;
+  averageCostAfterCents: number;
+  sourceType: string;
+  sourceId: string | null;
+  sourceNumber: string | null;
+  journalEntryId: string | null;
+  memo: string | null;
+  createdById: string | null;
+  createdAt: Date;
+}

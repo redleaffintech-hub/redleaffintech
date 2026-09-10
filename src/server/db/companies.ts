@@ -18,7 +18,7 @@ import type { Company, NumberSequence } from "./types";
  * Replaces `db.company.*`.
  */
 
-const SEQUENCE_FIELDS: Record<
+export const SEQUENCE_FIELD: Record<
   NumberSequence,
   { prefix: keyof Company; next: keyof Company; pad: number }
 > = {
@@ -99,7 +99,7 @@ export async function bumpSequenceTx(
   companyId: string,
   which: NumberSequence,
 ): Promise<string> {
-  const spec = SEQUENCE_FIELDS[which];
+  const spec = SEQUENCE_FIELD[which];
   const snap = await tx.get(companyRef(companyId));
   if (!snap.exists) throw new Error(`Company ${companyId} not found.`);
   const data = snap.data()!;
@@ -118,7 +118,7 @@ export async function peekSequence(
   companyId: string,
   which: NumberSequence,
 ): Promise<string> {
-  const spec = SEQUENCE_FIELDS[which];
+  const spec = SEQUENCE_FIELD[which];
   const snap = await companyRef(companyId).get();
   if (!snap.exists) throw new Error(`Company ${companyId} not found.`);
   const data = snap.data()!;
