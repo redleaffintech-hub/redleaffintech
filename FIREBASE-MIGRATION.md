@@ -435,9 +435,22 @@ Documented as a deliberate deviation from strict single-transaction atomicity.
     `@/lib/db` any more.**
   - [ ] **`reports/exports.ts`** (CSV) — mechanical import-swap to the `-fs`
     reports, folded into Phase 8.
-- [ ] **Phase 7 — data migration script**: read every table from Neon,
-  transform, write to Firestore preserving ids; rebuild `accountPeriodBalances`;
-  verify row counts and a trial balance per company matches pre/post.
+- [x] **Phase 7 — data migration script**: `scripts/migrate-to-firestore.ts`
+  (`npm run migrate:firestore -- --dry-run | --yes | --only=…`). Reads all 63
+  Prisma models, writes to Firestore preserving cuids (except `companyUsers` /
+  `firmUsers` → `${a}__${b}`, `sessions` → token, `subscriptionCompanies` →
+  companyId — the deterministic ids the app computes); line children embed onto
+  their parent; `accountCodes` / `taxCodeCodes` / `itemCodes` / `userEmails`
+  guard docs written alongside; `paymentAllocations` (no `companyId` column)
+  attributed via their payment/invoice/bill/creditNote. Rebuilds
+  `accountPeriodBalances` from `journalLines` after the import. Idempotent
+  (every write is an id-addressed `.set()`); never deletes. Verification pass:
+  per-company trial balance PG-vs-FS + per-account match, and row counts for
+  invoices/bills/payments/journals/customers/vendors/taxEntries + the top-level
+  collections. Dry run against the live Neon DB: 63 tables → **2,694 documents**
+  (2 companies, demo data). Live write needs a `redleaf-fintech-e4c4d` service
+  account (`GOOGLE_APPLICATION_CREDENTIALS` / `FIREBASE_SERVICE_ACCOUNT`) — set
+  at cutover.
 - [ ] **Phase 8 — cutover**: enable Blaze, deploy App Hosting backend, smoke
   test, move DNS, remove Prisma/`prisma/`, `@prisma/*`, `pg`, `src/lib/db.ts`,
   `src/generated/prisma`, `netlify.toml`, `render.yaml`.
