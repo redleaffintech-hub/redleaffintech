@@ -291,10 +291,14 @@ Documented as a deliberate deviation from strict single-transaction atomicity.
   `sessions` (by-token lookup, revoke-for-user), `userTokens` (by-hash),
   `authAttempts` (+ `countAuthAttempts` for rate limiting), `platformAuditLogs`.
   Indexes added.
-- [ ] **Phase 5g — remaining banking domain logic** (OFX/CSV import, rule
-  auto-apply, match-to-invoice/bill, transfer detect/confirm, monthly
-  reconciliation) and `reports/exports.ts` (CSV — the `-fs` report functions it
-  needs all exist; mechanical, can also fold into Phase 6).
+- [x] **Phase 5g — bank import + matching.** `banking/import-fs.ts` (pure
+  CSV/OFX parsers re-exported; `importTransactions` — in-memory dup index +
+  `BulkWriter`). `banking/matching-fs.ts` (`suggestRule` / `applyRuleToTransaction`,
+  `suggestMatches` + `scoreMatch`, `matchTransactionToDocuments` — records the
+  payment in its own transaction then flags the bank line —, `detectTransfers` /
+  `confirmTransfer`).
+- [ ] **Phase 5h — monthly bank reconciliation** (`banking/reconcile.ts`, 8
+  functions incl. the workspace builder) and `reports/exports.ts` (CSV).
 - [ ] **Phase 5c — banking & reconciliation, HR, payroll, recurring, projects,
   budgets, attachments, notifications.**
 - [ ] **Phase 6 — rewire call sites**: every `src/app/**/actions.ts`, page and
