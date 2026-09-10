@@ -1,6 +1,5 @@
 import "server-only";
 
-import { db } from "@/lib/db";
 import {
   csvDate,
   csvFile,
@@ -21,9 +20,19 @@ import {
   incomeStatement,
   trialBalance,
   type ReportPeriod,
-} from "./financials";
-import { apAging, arAging, partyStatement } from "./aging";
-import { taxDetail, taxSummary } from "./tax";
+} from "./financials-fs";
+import { apAging, arAging, partyStatement } from "./aging-fs";
+import { taxDetail, taxSummary } from "./tax-fs";
+import { listAccounts } from "@/server/db/accounts";
+import { getCustomer } from "@/server/db/customers";
+import { getVendor } from "@/server/db/vendors";
+import { listEntries, getLinesForEntry } from "@/server/db/journal-entries";
+import { balancesInRange } from "@/server/db/account-balances";
+import { budgets as budgetsRepo } from "@/server/db/supporting";
+import { invoices as invoicesRepo } from "@/server/db/invoices";
+import { bills as billsRepo } from "@/server/db/bills";
+import { listItems } from "@/server/db/items";
+import { listTaxCodes } from "@/server/db/tax-codes";
 
 /**
  * CSV export definitions.
@@ -391,20 +400,23 @@ const journalReportExport: ExportDefinition = {
 
     // Every line of every entry in the period — the journal report drilled all
     // the way down, which is what makes the file useful outside the app.
-    const entries = await db.journalEntry.findMany({
-      where: {
-        companyId: ctx.companyId,
-        date: { gte: range.from, lte: range.to },
-        ...(source ? { sourceType: source } : {}),
-      },
-      include: {
-        lines: {
-          orderBy: { lineNo: "asc" },
-          include: { account: { select: { code: true, name: true } } },
-        },
-      },
-      orderBy: [{ date: "asc" }, { entryNo: "asc" }],
-    });
+    const [rawEntries, accounts] = await Promise.all([
+      listEntries(ctx.companyId, { from: range.from, to: range.to, sourceType: source || undefined }),
+      listAccounts(ctx.companyId),
+    ]);
+    const accountById = new Map(accounts.map((a) => [a.id, a]));
+    const entries = await Promise.all(
+      rawEntries
+        .slice()
+        .sort((a, b) => a.date.getTime() - b.date.getTime() || a.entryNo.localeCompare(b.entryNo))
+        .map(async (e) => ({
+          ...e,
+          lines: (await getLinesForEntry(ctx.companyId, e.id))
+            .slice()
+            .sort((a, b) => a.lineNo - b.lineNo)
+            .map((l) => ({ ...l, account: accountById.get(l.accountId) ?? { code: "", name: "" } })),
+        })),
+    );
 
     interface Line {
       date: Date;
@@ -523,8 +535,8 @@ function statementExport(kind: "customer" | "vendor"): ExportDefinition {
       // id came off a URL, so it is not to be trusted on its own.
       const party =
         kind === "customer"
-          ? await db.customer.findFirst({ where: { id: partyId, companyId: ctx.companyId }, select: { name: true } })
-          : await db.vendor.findFirst({ where: { id: partyId, companyId: ctx.companyId }, select: { name: true } });
+          ? await getCustomer(ctx.companyId, partyId)
+          : await getVendor(ctx.companyId, partyId);
       if (!party) throw new ExportError("That party does not belong to this company.", 404);
 
       const statement = await partyStatement(
@@ -537,10 +549,10 @@ function statementExport(kind: "customer" | "vendor"): ExportDefinition {
 
       const columns: CsvColumn<Row>[] = [
         { header: "Date", value: (r) => csvDate(r.date) },
-        { header: "Entry no.", value: (r) => r.journalEntry.entryNo },
-        { header: "Source", value: (r) => r.journalEntry.sourceType },
-        { header: "Document", value: (r) => r.journalEntry.sourceNumber },
-        { header: "Description", value: (r) => r.description ?? r.journalEntry.memo },
+        { header: "Entry no.", value: (r) => r.journalEntry?.entryNo ?? "" },
+        { header: "Source", value: (r) => r.journalEntry?.sourceType ?? "" },
+        { header: "Document", value: (r) => r.journalEntry?.sourceNumber ?? "" },
+        { header: "Description", value: (r) => r.description ?? r.journalEntry?.memo ?? "" },
         { header: money("Debit", ctx), value: (r) => csvMoney(r.debitCents), numeric: true },
         { header: money("Credit", ctx), value: (r) => csvMoney(r.creditCents), numeric: true },
         // Signed in the party's favour: positive means they owe more.
@@ -608,7 +620,7 @@ const taxDetailExport: ExportDefinition = {
 
     const columns: CsvColumn<Row>[] = [
       { header: "Date", value: (r) => csvDate(r.date) },
-      { header: "Entry no.", value: (r) => r.journalEntry?.entryNo ?? "" },
+      { header: "Source document", value: (r) => r.sourceNumber ?? r.sourceType },
       { header: "Direction", value: (r) => r.direction },
       { header: "Tax kind", value: (r) => r.kind },
       { header: "Tax code", value: (r) => r.taxCode?.code ?? "" },
@@ -629,31 +641,25 @@ const budgetVsActualExport: ExportDefinition = {
   capability: CAPABILITIES.REPORTS,
   build: async (ctx) => {
     const range = rangeFrom(ctx);
-    const [budget, actuals, accounts] = await Promise.all([
-      db.budget.findFirst({
-        where: { companyId: ctx.companyId },
-        include: { lines: true },
-        orderBy: { createdAt: "desc" },
-      }),
-      db.journalLine.groupBy({
-        by: ["accountId"],
-        where: { companyId: ctx.companyId, date: { gte: range.from, lte: range.to } },
-        _sum: { debitCents: true, creditCents: true },
-      }),
-      db.account.findMany({
-        where: { companyId: ctx.companyId, type: { in: ["REVENUE", "EXPENSE"] } },
-        select: { id: true, code: true, name: true, type: true },
-        orderBy: { code: "asc" },
-      }),
+    const [allBudgets, balances, allAccounts] = await Promise.all([
+      budgetsRepo.list(ctx.companyId),
+      balancesInRange(ctx.companyId, range.from, range.to),
+      listAccounts(ctx.companyId),
     ]);
+    const budget = allBudgets
+      .slice()
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0] ?? null;
+    const accounts = allAccounts
+      .filter((a) => ["REVENUE", "EXPENSE"].includes(a.type))
+      .sort((a, b) => a.code.localeCompare(b.code));
 
-    const actualByAccount = new Map(
-      actuals.map((a) => {
-        const debit = a._sum.debitCents ?? 0;
-        const credit = a._sum.creditCents ?? 0;
-        return [a.accountId, { debit, credit }];
-      }),
-    );
+    const actualByAccount = new Map<string, { debit: number; credit: number }>();
+    for (const b of balances) {
+      const cur = actualByAccount.get(b.accountId) ?? { debit: 0, credit: 0 };
+      cur.debit += b.debitCents;
+      cur.credit += b.creditCents;
+      actualByAccount.set(b.accountId, cur);
+    }
     const budgetByAccount = new Map((budget?.lines ?? []).map((l) => [l.accountId, l.amountCents]));
 
     interface Line {
@@ -707,27 +713,31 @@ function documentListExport(kind: "invoice" | "bill"): ExportDefinition {
     capability: kind === "invoice" ? CAPABILITIES.INVOICES : CAPABILITIES.BILLS,
     build: async (ctx) => {
       const status = ctx.params.get("status") ?? "";
-      const query = ctx.params.get("q") ?? "";
+      const query = (ctx.params.get("q") ?? "").toLowerCase();
       const from = ctx.params.get("from");
       const to = ctx.params.get("to");
-
-      const where = {
-        companyId: ctx.companyId,
-        ...(status ? { status } : {}),
-        ...(from || to
-          ? { issueDate: { ...(from ? { gte: toUtcDay(from) } : {}), ...(to ? { lte: toUtcDay(to) } : {}) } }
-          : {}),
-      };
+      const gte = from ? toUtcDay(from) : null;
+      const lte = to ? toUtcDay(to) : null;
 
       if (kind === "invoice") {
-        const invoices = await db.invoice.findMany({
-          where: {
-            ...where,
-            ...(query ? { OR: [{ number: { contains: query, mode: "insensitive" as const } }, { customer: { name: { contains: query, mode: "insensitive" as const } } }] } : {}),
-          },
-          include: { customer: { select: { name: true } } },
-          orderBy: [{ issueDate: "desc" }, { number: "desc" }],
-        });
+        const all = await invoicesRepo.list(ctx.companyId);
+        const names = new Map<string, string>();
+        await Promise.all(
+          [...new Set(all.map((i) => i.customerId))].map(async (id) => {
+            names.set(id, (await getCustomer(ctx.companyId, id))?.name ?? "");
+          }),
+        );
+        const invoices = all
+          .filter((i) => !status || i.status === status)
+          .filter((i) => (!gte || i.issueDate >= gte) && (!lte || i.issueDate <= lte))
+          .filter(
+            (i) =>
+              !query ||
+              i.number.toLowerCase().includes(query) ||
+              (names.get(i.customerId) ?? "").toLowerCase().includes(query),
+          )
+          .sort((a, b) => b.issueDate.getTime() - a.issueDate.getTime() || b.number.localeCompare(a.number))
+          .map((i) => ({ ...i, customer: { name: names.get(i.customerId) ?? "" } }));
         type Row = (typeof invoices)[number];
         const columns: CsvColumn<Row>[] = [
           { header: "Invoice number", value: (r) => r.number },
@@ -744,14 +754,24 @@ function documentListExport(kind: "invoice" | "bill"): ExportDefinition {
         return { filename: asOfFilename("invoices", today()), body: csvFile(invoices, columns) };
       }
 
-      const bills = await db.bill.findMany({
-        where: {
-          ...where,
-          ...(query ? { OR: [{ number: { contains: query, mode: "insensitive" as const } }, { vendor: { name: { contains: query, mode: "insensitive" as const } } }] } : {}),
-        },
-        include: { vendor: { select: { name: true } } },
-        orderBy: [{ issueDate: "desc" }, { number: "desc" }],
-      });
+      const allBills = await billsRepo.list(ctx.companyId);
+      const vNames = new Map<string, string>();
+      await Promise.all(
+        [...new Set(allBills.map((b) => b.vendorId))].map(async (id) => {
+          vNames.set(id, (await getVendor(ctx.companyId, id))?.name ?? "");
+        }),
+      );
+      const bills = allBills
+        .filter((b) => !status || b.status === status)
+        .filter((b) => (!gte || b.issueDate >= gte) && (!lte || b.issueDate <= lte))
+        .filter(
+          (b) =>
+            !query ||
+            b.number.toLowerCase().includes(query) ||
+            (vNames.get(b.vendorId) ?? "").toLowerCase().includes(query),
+        )
+        .sort((a, b) => b.issueDate.getTime() - a.issueDate.getTime() || b.number.localeCompare(a.number))
+        .map((b) => ({ ...b, vendor: { name: vNames.get(b.vendorId) ?? "" } }));
       type Row = (typeof bills)[number];
       const columns: CsvColumn<Row>[] = [
         { header: "Bill number", value: (r) => r.number },
@@ -773,11 +793,7 @@ function documentListExport(kind: "invoice" | "bill"): ExportDefinition {
 const chartOfAccountsExport: ExportDefinition = {
   capability: CAPABILITIES.COA,
   build: async (ctx) => {
-    const accounts = await db.account.findMany({
-      where: { companyId: ctx.companyId },
-      orderBy: { code: "asc" },
-      select: { code: true, name: true, type: true, subtype: true, isActive: true, isSystem: true, description: true },
-    });
+    const accounts = (await listAccounts(ctx.companyId)).slice().sort((a, b) => a.code.localeCompare(b.code));
     type Row = (typeof accounts)[number];
     const columns: CsvColumn<Row>[] = [
       { header: "Account code", value: (r) => r.code },
@@ -795,11 +811,9 @@ const chartOfAccountsExport: ExportDefinition = {
 const glOpeningBalancesTemplateExport: ExportDefinition = {
   capability: CAPABILITIES.COA,
   build: async (ctx) => {
-    const accounts = await db.account.findMany({
-      where: { companyId: ctx.companyId, isActive: true },
-      orderBy: { code: "asc" },
-      select: { code: true, name: true, type: true },
-    });
+    const accounts = (await listAccounts(ctx.companyId))
+      .filter((a) => a.isActive)
+      .sort((a, b) => a.code.localeCompare(b.code));
     type Row = (typeof accounts)[number];
     const columns: CsvColumn<Row>[] = [
       { header: "Account code", value: (r) => r.code },
@@ -817,16 +831,23 @@ const glOpeningBalancesTemplateExport: ExportDefinition = {
 const productsServicesExport: ExportDefinition = {
   capability: CAPABILITIES.COMPANY_SETTINGS,
   build: async (ctx) => {
-    const items = await db.serviceItem.findMany({
-      where: { companyId: ctx.companyId },
-      orderBy: [{ isActive: "desc" }, { code: "asc" }],
-      include: {
-        incomeAccount: { select: { code: true, name: true } },
-        expenseAccount: { select: { code: true, name: true } },
-        taxCode: { select: { code: true } },
-        purchaseTaxCode: { select: { code: true } },
-      },
-    });
+    const [rawItems, accs, codes] = await Promise.all([
+      listItems(ctx.companyId),
+      listAccounts(ctx.companyId),
+      listTaxCodes(ctx.companyId),
+    ]);
+    const accById = new Map(accs.map((a) => [a.id, a]));
+    const codeById = new Map(codes.map((c) => [c.id, c]));
+    const items = rawItems
+      .slice()
+      .sort((a, b) => Number(b.isActive) - Number(a.isActive) || a.code.localeCompare(b.code))
+      .map((i) => ({
+        ...i,
+        incomeAccount: i.incomeAccountId ? accById.get(i.incomeAccountId) ?? null : null,
+        expenseAccount: i.expenseAccountId ? accById.get(i.expenseAccountId) ?? null : null,
+        taxCode: i.taxCodeId ? codeById.get(i.taxCodeId) ?? null : null,
+        purchaseTaxCode: i.purchaseTaxCodeId ? codeById.get(i.purchaseTaxCodeId) ?? null : null,
+      }));
     type Row = (typeof items)[number];
     const columns: CsvColumn<Row>[] = [
       { header: "Code", value: (r) => r.code },
