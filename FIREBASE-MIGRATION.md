@@ -244,11 +244,18 @@ Documented as a deliberate deviation from strict single-transaction atomicity.
   `estimates-fs.ts` (`createEstimate`, `setEstimateStatus`,
   `convertEstimateToInvoice`). Same two-phase / multi-transaction shape as
   invoices-fs. `tsc` + `eslint` clean.
-- [ ] **Phase 5b — reports** rewritten against `accountPeriodBalances` (full
-  months) + `journalLines` line-scan for the partial boundary months:
-  `financials-fs.ts` (trial balance, balance sheet, P&L, cash flow, GL),
-  `aging-fs.ts` (AR/AP), `tax-fs.ts` (summary/detail), `dashboard-fs.ts`,
-  `closeChecklist`; CSV export.
+- [x] **Phase 5b — core reports.** `reports/ledger-fs.ts` — the shared read
+  primitive: `sumsUpTo` / `sumsInRange` / `accountRawBalanceAsOf` combine the
+  `accountPeriodBalances` roll-up (whole months, one indexed query) with a
+  `journalLines` line-scan for the cutoff's own partial month; a range is
+  `sumsUpTo(to, incl) − sumsUpTo(from, excl)`. `reports/financials-fs.ts`
+  (trial balance, income statement / P&L, monthly performance, balance sheet,
+  cash flow, general ledger, `currentFiscalRange`, `accountBalance`) — section
+  classification copied verbatim. `reports/aging-fs.ts` (AR/AP aging with
+  as-of-date balances, unapplied receipts + open credit notes, control-account
+  reconciliation). Indexes added.
+- [ ] **Phase 5c — tax reports** (`taxSummary`/`taxDetail`), `dashboard-fs.ts`,
+  `closeChecklist`, `partyStatement`, CSV export (`reports/exports.ts`).
 - [ ] **Phase 5c — banking & reconciliation, HR, payroll, recurring, projects,
   budgets, attachments, notifications.**
 - [ ] **Phase 6 — rewire call sites**: every `src/app/**/actions.ts`, page and
