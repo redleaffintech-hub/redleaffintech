@@ -502,6 +502,22 @@ Documented as a deliberate deviation from strict single-transaction atomicity.
        company-doc read) — would have broken **every credit-note creation**. Now
        reads the counter in the read phase and writes the increment alongside
        `commitPosting`, matching how `recordPayment` already did it.
+  - [x] **8a-scripts — port the operational scripts off Prisma.**
+    `scripts/verify.ts` (`npm run verify`, the §35 acceptance suite) now runs on
+    Firestore repos — `listAllCompanies` + `checkLedgerIntegrity(companyId)` for
+    the per-company reconciliation, `listEntries().filter()` for the
+    individually-balanced check, reports unchanged. The Postgres write-probes
+    that ran inside a rolled-back transaction became read-only invariants over
+    the stored data (valid base currency, well-formed tax registrations, valid
+    item type, company-scoped code uniqueness, revenue income accounts,
+    price-snapshotting on item-linked lines). Aging reconciliation runs as-of
+    the current instant so a payment applied earlier today is not a phantom gap.
+    `scripts/create-platform-admin.ts` uses `listAllUsers` / `getUserByEmail` /
+    `createUser` / `updateUser` / `recordPlatformAudit`. New
+    `tsconfig.scripts.json` + `npm run typecheck:scripts` (scripts/ is excluded
+    from the main tsconfig). Verified on the emulator: 61/61 checks pass on the
+    smoke dataset; the admin bootstrap creates, promotes, and refuses a second
+    unforced run.
   - [ ] **8b — deploy (needs the account owner).** Enable Blaze on
     `redleaf-fintech-e4c4d`; `firebase apphosting:secrets:set SESSION_SECRET`;
     with a service-account key, `npm run migrate:firestore -- --yes` (reads the
@@ -510,9 +526,9 @@ Documented as a deliberate deviation from strict single-transaction atomicity.
     apphosting:backends:create` / push to the connected branch to build & deploy;
     smoke-test sign-in, a posted invoice, a report, a bank import; move DNS.
   - [ ] **8c — final Prisma removal (after 8b succeeds).** Delete
-    `scripts/migrate-to-firestore.ts` and the other Prisma-only scripts
-    (`verify.ts`, `census.ts`, `backfill-*.ts`, `seed-plans.ts`,
-    `create-platform-admin.ts`, `prisma/seed.ts`) or port them to Firestore;
+    `scripts/migrate-to-firestore.ts` and the remaining Prisma-only scripts
+    (`census.ts`, `backfill-*.ts`, `seed-plans.ts`, `prisma/seed.ts`) or port
+    them to Firestore (`verify.ts` and `create-platform-admin.ts` are done);
     `src/lib/db.ts`, `prisma/`, `src/generated/prisma`; `@prisma/client`,
     `@prisma/adapter-pg`, `prisma`, `pg`, `@types/pg` from `package.json`;
     `postinstall` and `db:migrate` scripts; the `DATABASE_URL` env.
