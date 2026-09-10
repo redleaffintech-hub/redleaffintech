@@ -61,7 +61,7 @@ export const PLAN_INCLUDE = {
 
 /** Adapt a stored Firestore Plan doc (features/modules as ordered string[]) to
  *  the child-relation shape `planShapeFromRow` expects. */
-function toPlanWithChildren(p: PlanDoc): PlanWithChildren {
+export function toPlanWithChildren(p: PlanDoc): PlanWithChildren {
   return {
     id: p.id,
     code: p.code,

@@ -16,12 +16,35 @@
 
 import "server-only";
 import { revalidatePath } from "next/cache";
-import { db } from "@/lib/db";
+import {
+  listPlanVersions,
+  planVersions as planVersionsRepo,
+  plans as plansRepo,
+  subscriptions as subsRepo,
+} from "@/server/db/platform";
+import { newId } from "@/server/db/firestore";
+import type { Plan as PlanDoc, PlanVersion } from "@/server/db/types";
 import { isSupportedCurrency, normalizeCurrency } from "@/lib/currency";
 import { BILLING_CYCLES, MODULES, type BillingCycle, type ModuleId } from "@/lib/plans";
 import { AUDIT_ACTIONS, recordPlatformAudit } from "@/server/admin/audit";
 import type { AdminActor } from "@/server/admin/guard";
-import { PLAN_INCLUDE, planShapeFromRow, serializeSnapshot } from "./catalogue";
+import { planShapeFromRow, serializeSnapshot, toPlanWithChildren } from "./catalogue";
+
+async function planCounts(planId: string): Promise<{ subscriptions: number; versions: number }> {
+  const [subs, versions] = await Promise.all([
+    subsRepo.list({ where: [["planId", "==", planId]] }),
+    listPlanVersions(planId),
+  ]);
+  return { subscriptions: subs.length, versions: versions.length };
+}
+
+/** The admin-page shape: the plan doc with `_count` and (optionally) versions. */
+async function withAdminShape(p: PlanDoc, includeVersions = false) {
+  const _count = await planCounts(p.id);
+  const versions = includeVersions ? (await listPlanVersions(p.id)).slice(0, 10) : [];
+  const children = toPlanWithChildren(p);
+  return { ...p, prices: children.prices, features: children.features, modules: children.modules, _count, versions };
+}
 
 export class PlanError extends Error {
   constructor(message: string) {
@@ -42,25 +65,17 @@ function revalidatePricing() {
 }
 
 export async function listPlansForAdmin() {
-  const plans = await db.plan.findMany({
-    orderBy: [{ archivedAt: "asc" }, { sortOrder: "asc" }],
-    include: {
-      ...PLAN_INCLUDE,
-      _count: { select: { subscriptions: true, versions: true } },
-    },
-  });
-  return plans;
+  const all = await plansRepo.list({ orderBy: "sortOrder" });
+  all.sort(
+    (a, b) =>
+      Number(Boolean(a.archivedAt)) - Number(Boolean(b.archivedAt)) || a.sortOrder - b.sortOrder,
+  );
+  return Promise.all(all.map((p) => withAdminShape(p)));
 }
 
 export async function getPlanForAdmin(planId: string) {
-  return db.plan.findUnique({
-    where: { id: planId },
-    include: {
-      ...PLAN_INCLUDE,
-      versions: { orderBy: { version: "desc" }, take: 10 },
-      _count: { select: { subscriptions: true } },
-    },
-  });
+  const p = await plansRepo.get(planId);
+  return p ? withAdminShape(p, true) : null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -189,33 +204,20 @@ function planScalars(input: PlanInput) {
   };
 }
 
-async function writeChildren(planId: string, input: PlanInput, tx: Parameters<Parameters<typeof db.$transaction>[0]>[0]) {
-  // Prices, features and modules are small, ordered sets with no identity of
-  // their own — replacing them wholesale is simpler and less error-prone than
-  // diffing, and it happens inside the same transaction as the parent write.
-  await tx.planPrice.deleteMany({ where: { planId } });
-  await tx.planPrice.createMany({
-    data: BILLING_CYCLES.map((cycle) => ({
-      planId,
+/**
+ * Prices, features and modules are small ordered sets embedded on the plan doc,
+ * so an edit just replaces the three arrays alongside the scalar write.
+ */
+function childrenPayload(input: PlanInput) {
+  return {
+    prices: BILLING_CYCLES.map((cycle) => ({
       cycle,
       cycleAmountCents: input.prices[cycle].cycleAmountCents,
       monthlyEquivalentCents: input.prices[cycle].monthlyEquivalentCents,
     })),
-  });
-
-  await tx.planFeature.deleteMany({ where: { planId } });
-  if (input.features.length > 0) {
-    await tx.planFeature.createMany({
-      data: input.features.map((label, index) => ({ planId, label, sortOrder: index * 10 })),
-    });
-  }
-
-  await tx.planModule.deleteMany({ where: { planId } });
-  if (input.modules.length > 0) {
-    await tx.planModule.createMany({
-      data: input.modules.map((moduleId) => ({ planId, moduleId })),
-    });
-  }
+    features: input.features,
+    modules: input.modules,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -225,15 +227,19 @@ async function writeChildren(planId: string, input: PlanInput, tx: Parameters<Pa
 export async function createPlan(actor: AdminActor, raw: PlanInput) {
   const input = validate(raw);
 
-  const clash = await db.plan.findUnique({ where: { code: input.code }, select: { id: true } });
+  const clash = (await plansRepo.list({ where: [["code", "==", input.code]], limit: 1 }))[0];
   if (clash) throw new PlanError(`A plan with the code ${input.code} already exists.`);
 
-  const plan = await db.$transaction(async (tx) => {
-    const created = await tx.plan.create({
-      data: { ...planScalars(input), status: "DRAFT", hasDraftChanges: true },
-    });
-    await writeChildren(created.id, input, tx);
-    return created;
+  const id = newId();
+  const plan = await plansRepo.create({
+    id,
+    ...planScalars(input),
+    ...childrenPayload(input),
+    status: "DRAFT",
+    hasDraftChanges: true,
+    publishedAt: null,
+    publishedVersionId: null,
+    archivedAt: null,
   });
 
   await recordPlatformAudit({
@@ -253,11 +259,11 @@ export async function createPlan(actor: AdminActor, raw: PlanInput) {
 export async function updatePlan(actor: AdminActor, planId: string, raw: PlanInput) {
   const input = validate(raw);
 
-  const before = await db.plan.findUnique({ where: { id: planId }, include: PLAN_INCLUDE });
+  const before = await plansRepo.get(planId);
   if (!before) throw new PlanError("That plan no longer exists.");
 
   if (before.code !== input.code) {
-    const referenced = await db.subscription.count({ where: { planId } });
+    const referenced = (await subsRepo.list({ where: [["planId", "==", planId]] })).length;
     if (referenced > 0) {
       // The code is the identifier entitlement checks and stored subscriptions
       // use. Renaming it under a live subscription silently unlinks them.
@@ -265,23 +271,16 @@ export async function updatePlan(actor: AdminActor, planId: string, raw: PlanInp
         `${referenced} subscription${referenced === 1 ? "" : "s"} reference this plan, so its code cannot change. Create a new plan instead.`,
       );
     }
-    const clash = await db.plan.findUnique({ where: { code: input.code }, select: { id: true } });
+    const clash = (await plansRepo.list({ where: [["code", "==", input.code]], limit: 1 }))[0];
     if (clash) throw new PlanError(`A plan with the code ${input.code} already exists.`);
   }
 
-  const updated = await db.$transaction(async (tx) => {
-    const row = await tx.plan.update({
-      where: { id: planId },
-      data: {
-        ...planScalars(input),
-        // The edit is a draft change until it is published — even on a plan that
-        // is already live, whose visitors keep seeing the last published version.
-        hasDraftChanges: true,
-      },
-    });
-    await writeChildren(planId, input, tx);
-    return row;
+  await plansRepo.update(planId, {
+    ...planScalars(input),
+    ...childrenPayload(input),
+    hasDraftChanges: true,
   });
+  const updated = await plansRepo.get(planId);
 
   await recordPlatformAudit({
     actorUserId: actor.id,
@@ -290,7 +289,7 @@ export async function updatePlan(actor: AdminActor, planId: string, raw: PlanInp
     entityType: "Plan",
     entityId: planId,
     summary: `Plan ${input.code} edited (unpublished)`,
-    before: planShapeFromRow(before),
+    before: planShapeFromRow(toPlanWithChildren(before)),
     after: input,
   });
 
@@ -304,41 +303,30 @@ export async function updatePlan(actor: AdminActor, planId: string, raw: PlanInp
 // Publishing
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function publishPlan(actor: AdminActor, planId: string) {
-  const plan = await db.plan.findUnique({ where: { id: planId }, include: PLAN_INCLUDE });
+export async function publishPlan(actor: AdminActor, planId: string): Promise<PlanVersion> {
+  const plan = await plansRepo.get(planId);
   if (!plan) throw new PlanError("That plan no longer exists.");
   if (plan.archivedAt) throw new PlanError("Reactivate this plan before publishing it.");
 
-  const shape = planShapeFromRow(plan);
+  const shape = planShapeFromRow(toPlanWithChildren(plan));
   if (!plan.contactOnly && BILLING_CYCLES.some((cycle) => shape.prices[cycle].cycleAmountCents === 0)) {
     throw new PlanError("Every billing cycle needs a price before this plan can be published.");
   }
 
-  const version = await db.$transaction(async (tx) => {
-    const last = await tx.planVersion.findFirst({
-      where: { planId },
-      orderBy: { version: "desc" },
-      select: { version: true },
-    });
-    const created = await tx.planVersion.create({
-      data: {
-        planId,
-        version: (last?.version ?? 0) + 1,
-        snapshot: serializeSnapshot(shape),
-        publishedById: actor.id,
-      },
-    });
-    await tx.plan.update({
-      where: { id: planId },
-      data: {
-        status: "PUBLISHED",
-        publishedAt: new Date(),
-        publishedVersionId: created.id,
-        hasDraftChanges: false,
-        archivedAt: null,
-      },
-    });
-    return created;
+  const last = (await listPlanVersions(planId))[0];
+  const version = (await planVersionsRepo.create({
+    id: newId(),
+    planId,
+    version: (last?.version ?? 0) + 1,
+    snapshot: serializeSnapshot(shape),
+    publishedById: actor.id,
+  })) as PlanVersion;
+  await plansRepo.update(planId, {
+    status: "PUBLISHED",
+    publishedAt: new Date(),
+    publishedVersionId: version.id,
+    hasDraftChanges: false,
+    archivedAt: null,
   });
 
   await recordPlatformAudit({
@@ -359,16 +347,11 @@ export async function archivePlan(actor: AdminActor, planId: string, reason: str
   const trimmed = reason?.trim();
   if (!trimmed) throw new PlanError("Record why this plan is being withdrawn from sale.");
 
-  const plan = await db.plan.findUnique({
-    where: { id: planId },
-    select: { id: true, code: true, status: true, _count: { select: { subscriptions: true } } },
-  });
+  const plan = await plansRepo.get(planId);
   if (!plan) throw new PlanError("That plan no longer exists.");
+  const subCount = (await subsRepo.list({ where: [["planId", "==", planId]] })).length;
 
-  await db.plan.update({
-    where: { id: planId },
-    data: { status: "ARCHIVED", archivedAt: new Date(), isPublic: false },
-  });
+  await plansRepo.update(planId, { status: "ARCHIVED", archivedAt: new Date(), isPublic: false });
 
   await recordPlatformAudit({
     actorUserId: actor.id,
@@ -376,9 +359,7 @@ export async function archivePlan(actor: AdminActor, planId: string, reason: str
     action: AUDIT_ACTIONS.PLAN_ARCHIVED,
     entityType: "Plan",
     entityId: planId,
-    summary: `Plan ${plan.code} archived (${plan._count.subscriptions} subscription${
-      plan._count.subscriptions === 1 ? "" : "s"
-    } keep their agreed terms)`,
+    summary: `Plan ${plan.code} archived (${subCount} subscription${subCount === 1 ? "" : "s"} keep their agreed terms)`,
     reason: trimmed,
     before: { status: plan.status },
     after: { status: "ARCHIVED" },
@@ -388,20 +369,12 @@ export async function archivePlan(actor: AdminActor, planId: string, reason: str
 }
 
 export async function reactivatePlan(actor: AdminActor, planId: string) {
-  const plan = await db.plan.findUnique({
-    where: { id: planId },
-    select: { id: true, code: true, publishedVersionId: true },
-  });
+  const plan = await plansRepo.get(planId);
   if (!plan) throw new PlanError("That plan no longer exists.");
 
-  await db.plan.update({
-    where: { id: planId },
-    data: {
-      archivedAt: null,
-      // A plan that was never published comes back as a draft, not as something
-      // suddenly on sale again.
-      status: plan.publishedVersionId ? "PUBLISHED" : "DRAFT",
-    },
+  await plansRepo.update(planId, {
+    archivedAt: null,
+    status: plan.publishedVersionId ? "PUBLISHED" : "DRAFT",
   });
 
   await recordPlatformAudit({
@@ -417,10 +390,10 @@ export async function reactivatePlan(actor: AdminActor, planId: string) {
 }
 
 export async function setPlanVisibility(actor: AdminActor, planId: string, isPublic: boolean) {
-  const plan = await db.plan.findUnique({ where: { id: planId }, select: { code: true, isPublic: true } });
+  const plan = await plansRepo.get(planId);
   if (!plan) throw new PlanError("That plan no longer exists.");
 
-  await db.plan.update({ where: { id: planId }, data: { isPublic } });
+  await plansRepo.update(planId, { isPublic });
 
   await recordPlatformAudit({
     actorUserId: actor.id,
@@ -440,10 +413,8 @@ export async function reorderPlans(actor: AdminActor, order: { planId: string; s
   const clean = order.filter((entry) => Number.isInteger(entry.sortOrder) && entry.sortOrder >= 0);
   if (clean.length === 0) throw new PlanError("Nothing to reorder.");
 
-  await db.$transaction(
-    clean.map((entry) =>
-      db.plan.update({ where: { id: entry.planId }, data: { sortOrder: entry.sortOrder } }),
-    ),
+  await Promise.all(
+    clean.map((entry) => plansRepo.update(entry.planId, { sortOrder: entry.sortOrder })),
   );
 
   await recordPlatformAudit({
@@ -466,30 +437,22 @@ export async function reorderPlans(actor: AdminActor, order: { planId: string; s
  * subscription references would take that customer's agreed price with it.
  */
 export async function deletePlan(actor: AdminActor, planId: string) {
-  const plan = await db.plan.findUnique({
-    where: { id: planId },
-    select: {
-      id: true,
-      code: true,
-      status: true,
-      publishedVersionId: true,
-      _count: { select: { subscriptions: true, versions: true } },
-    },
-  });
+  const plan = await plansRepo.get(planId);
   if (!plan) throw new PlanError("That plan no longer exists.");
+  const counts = await planCounts(planId);
 
-  if (plan._count.subscriptions > 0) {
+  if (counts.subscriptions > 0) {
     throw new PlanError(
-      `${plan._count.subscriptions} subscription${
-        plan._count.subscriptions === 1 ? " references" : "s reference"
+      `${counts.subscriptions} subscription${
+        counts.subscriptions === 1 ? " references" : "s reference"
       } this plan. Archive it instead — deleting it would take their agreed pricing with it.`,
     );
   }
-  if (plan._count.versions > 0 || plan.publishedVersionId) {
+  if (counts.versions > 0 || plan.publishedVersionId) {
     throw new PlanError("This plan has been published before. Archive it instead so its history survives.");
   }
 
-  await db.plan.delete({ where: { id: planId } });
+  await plansRepo.remove(planId);
 
   await recordPlatformAudit({
     actorUserId: actor.id,

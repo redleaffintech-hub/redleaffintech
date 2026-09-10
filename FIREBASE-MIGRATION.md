@@ -355,8 +355,14 @@ Documented as a deliberate deviation from strict single-transaction atomicity.
     9-point `closeChecklist` on the repos + the `-fs` reports —
     `checkLedgerIntegrity`, `arAging`/`apAging`, `taxControlReconciliation`,
     uncategorised-holding via `accountRawBalanceAsOf`).
-  - [ ] **6c‑4 — admin data modules**: `admin/clients.ts`, `admin/subscriptions.ts`,
-    `admin/users.ts`, `plans/admin.ts`.
+  - [x] **6c‑4 — plan catalogue admin.** `plans/admin.ts` — `listPlansForAdmin` /
+    `getPlanForAdmin` (+ `_count` computed from `planId` queries), `createPlan` /
+    `updatePlan` (prices/features/modules collapse to three embedded arrays on
+    the plan doc — no child tables), `publishPlan` (writes a new `planVersions`
+    doc + the `publishedVersionId` pointer), `archivePlan` / `reactivatePlan` /
+    `setPlanVisibility` / `reorderPlans` / `deletePlan`. Validation pure.
+  - [ ] **6c‑5 — admin data modules**: `admin/clients.ts`,
+    `admin/subscriptions.ts`, `admin/users.ts`.
   - [ ] **6d–6h — `src/app/**`**: sales, purchases, accounting/banking/tax,
     company/hr/payroll/inventory, reports/dashboard, admin pages, login + api
     routes + marketing. `reports/exports.ts` folds in here.
