@@ -1,66 +1,68 @@
 import { NextResponse } from "next/server";
-import { db } from "@/lib/db";
 import { requireCompany } from "@/server/auth/context";
 import { formatMoney } from "@/lib/money";
-import { contains } from "@/lib/search";
+import { listCustomers } from "@/server/db/customers";
+import { listVendors } from "@/server/db/vendors";
+import { invoices as invoicesRepo } from "@/server/db/invoices";
+import { bills as billsRepo } from "@/server/db/bills";
+import { listAccounts } from "@/server/db/accounts";
 
 /**
  * ⌘K search. Scoped to the caller's active company on the server — a company id
- * is never accepted from the client (§3, §27).
+ * is never accepted from the client (§3, §27). Firestore has no text search, so
+ * each collection is read and matched in memory.
  */
 export async function GET(request: Request) {
   const { company } = await requireCompany();
   const currency = company.baseCurrency;
   const query = new URL(request.url).searchParams.get("q")?.trim() ?? "";
   if (query.length < 2) return NextResponse.json([]);
+  const q = query.toLowerCase();
 
-  const [customers, vendors, invoices, bills, accounts] = await Promise.all([
-    db.customer.findMany({
-      where: { companyId: company.id, name: contains(query) },
-      take: 4,
-      select: { id: true, name: true, email: true },
-    }),
-    db.vendor.findMany({
-      where: { companyId: company.id, name: contains(query) },
-      take: 3,
-      select: { id: true, name: true },
-    }),
-    db.invoice.findMany({
-      where: {
-        companyId: company.id,
-        OR: [{ number: contains(query) }, { customer: { name: contains(query) } }],
-      },
-      take: 5,
-      orderBy: { issueDate: "desc" },
-      select: { id: true, number: true, totalCents: true, status: true, customer: { select: { name: true } } },
-    }),
-    db.bill.findMany({
-      where: {
-        companyId: company.id,
-        OR: [{ number: contains(query) }, { vendor: { name: contains(query) } }],
-      },
-      take: 4,
-      orderBy: { issueDate: "desc" },
-      select: { id: true, number: true, totalCents: true, status: true, vendor: { select: { name: true } } },
-    }),
-    db.account.findMany({
-      where: { companyId: company.id, OR: [{ name: contains(query) }, { code: contains(query) }] },
-      take: 4,
-      select: { id: true, code: true, name: true, type: true },
-    }),
+  const [allCustomers, allVendors, allInvoices, allBills, allAccounts] = await Promise.all([
+    listCustomers(company.id),
+    listVendors(company.id),
+    invoicesRepo.list(company.id),
+    billsRepo.list(company.id),
+    listAccounts(company.id),
   ]);
+
+  const customerName = new Map(allCustomers.map((c) => [c.id, c.name]));
+  const vendorName = new Map(allVendors.map((v) => [v.id, v.name]));
+
+  const customers = allCustomers.filter((c) => c.name.toLowerCase().includes(q)).slice(0, 4);
+  const vendors = allVendors.filter((v) => v.name.toLowerCase().includes(q)).slice(0, 3);
+  const invoices = allInvoices
+    .filter(
+      (i) =>
+        i.number.toLowerCase().includes(q) ||
+        (customerName.get(i.customerId) ?? "").toLowerCase().includes(q),
+    )
+    .sort((a, b) => b.issueDate.getTime() - a.issueDate.getTime())
+    .slice(0, 5);
+  const bills = allBills
+    .filter(
+      (b) =>
+        b.number.toLowerCase().includes(q) ||
+        (vendorName.get(b.vendorId) ?? "").toLowerCase().includes(q),
+    )
+    .sort((a, b) => b.issueDate.getTime() - a.issueDate.getTime())
+    .slice(0, 4);
+  const accounts = allAccounts
+    .filter((a) => a.name.toLowerCase().includes(q) || a.code.toLowerCase().includes(q))
+    .slice(0, 4);
 
   return NextResponse.json([
     ...invoices.map((i) => ({
       type: "Invoice",
-      label: `${i.number} — ${i.customer.name}`,
+      label: `${i.number} — ${customerName.get(i.customerId) ?? "—"}`,
       sublabel: i.status.replace(/_/g, " ").toLowerCase(),
       href: `/sales/invoices/${i.id}`,
       amount: formatMoney(i.totalCents, { currency }),
     })),
     ...bills.map((b) => ({
       type: "Bill",
-      label: `${b.number} — ${b.vendor.name}`,
+      label: `${b.number} — ${vendorName.get(b.vendorId) ?? "—"}`,
       sublabel: b.status.replace(/_/g, " ").toLowerCase(),
       href: `/purchases/bills/${b.id}`,
       amount: formatMoney(b.totalCents, { currency }),

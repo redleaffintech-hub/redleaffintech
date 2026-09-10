@@ -53,6 +53,12 @@ export async function getUserByEmail(email: string): Promise<User | null> {
   return snap.empty ? null : decode(snap.docs[0].data(), snap.docs[0].id);
 }
 
+/** Every user (platform admin lists + the demo-account picker). */
+export async function listAllUsers(): Promise<User[]> {
+  const snap = await col().orderBy("createdAt").get();
+  return mapDocs(snap, decode);
+}
+
 export async function listUsersByIds(ids: string[]): Promise<User[]> {
   const unique = [...new Set(ids)];
   if (unique.length === 0) return [];

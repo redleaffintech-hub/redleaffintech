@@ -1,7 +1,9 @@
 import Image from "next/image";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { db } from "@/lib/db";
+import { listAllUsers } from "@/server/db/users";
+import { listMembershipsForUser } from "@/server/db/company-users";
+import { getCompany } from "@/server/db/companies";
 import { getCurrentUser } from "@/server/auth/context";
 import { Icon } from "@/components/shell/icons";
 import { LoginForm } from "./login-form";
@@ -20,14 +22,18 @@ export default async function LoginPage() {
   if (await getCurrentUser()) redirect("/dashboard");
 
   const demoUsers = SHOW_DEMO_ACCOUNTS
-    ? await db.user.findMany({
-        orderBy: { createdAt: "asc" },
-        select: {
-          email: true,
-          name: true,
-          companyUsers: { select: { role: true, company: { select: { name: true } } } },
-        },
-      })
+    ? await Promise.all(
+        (await listAllUsers()).map(async (u) => {
+          const memberships = await listMembershipsForUser(u.id);
+          const companyUsers = await Promise.all(
+            memberships.map(async (m) => ({
+              role: m.role,
+              company: { name: (await getCompany(m.companyId))?.name ?? "No company" },
+            })),
+          );
+          return { email: u.email, name: u.name, companyUsers };
+        }),
+      )
     : [];
 
   return (

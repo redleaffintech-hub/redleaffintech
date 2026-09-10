@@ -1,5 +1,10 @@
 import Link from "next/link";
-import { db } from "@/lib/db";
+import { listPayments } from "@/server/db/payments";
+import { listAllocationsForPayment } from "@/server/db/payment-allocations";
+import { getCustomer } from "@/server/db/customers";
+import { getVendor } from "@/server/db/vendors";
+import { invoices as invoicesRepo } from "@/server/db/invoices";
+import { bills as billsRepo } from "@/server/db/bills";
 import { formatDate, fiscalYearOf, fiscalYearRange, isoDate, toUtcDay, today } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
 import { Badge, Card, EmptyState, LinkButton, Money, PageHeader, Table, Td, Th, Tr } from "@/components/ui";
@@ -32,16 +37,47 @@ export async function PaymentListPage({
   const from = toUtcDay(typeof searchParams.from === "string" ? searchParams.from : isoDate(defaults.start));
   const to = toUtcDay(typeof searchParams.to === "string" ? searchParams.to : isoDate(today()));
 
-  const payments = await db.payment.findMany({
-    where: { companyId, type, date: { gte: from, lte: to } },
-    include: {
-      customer: { select: { id: true, name: true } },
-      vendor: { select: { id: true, name: true } },
-      allocations: { include: { invoice: { select: { id: true, number: true } }, bill: { select: { id: true, number: true } } } },
-    },
-    orderBy: { date: "desc" },
-    take: 200,
-  });
+  const inPeriod = (await listPayments(companyId, { type }))
+    .filter((p) => p.date >= from && p.date <= to)
+    .slice(0, 200);
+
+  const [allInvoices, allBills] = await Promise.all([
+    invoicesRepo.list(companyId),
+    billsRepo.list(companyId),
+  ]);
+  const invoiceById = new Map(allInvoices.map((i) => [i.id, i]));
+  const billById = new Map(allBills.map((b) => [b.id, b]));
+  const partyName = new Map<string, string>();
+  await Promise.all(
+    inPeriod.flatMap((p) => [
+      p.customerId ? getCustomer(companyId, p.customerId).then((c) => c && partyName.set(p.customerId!, c.name)) : null,
+      p.vendorId ? getVendor(companyId, p.vendorId).then((v) => v && partyName.set(p.vendorId!, v.name)) : null,
+    ]).filter(Boolean) as Promise<unknown>[],
+  );
+
+  const payments = await Promise.all(
+    inPeriod.map(async (p) => {
+      const allocations = (await listAllocationsForPayment(companyId, p.id)).map((a) => ({
+        ...a,
+        invoice: a.invoiceId
+          ? invoiceById.get(a.invoiceId)
+            ? { id: a.invoiceId, number: invoiceById.get(a.invoiceId)!.number }
+            : null
+          : null,
+        bill: a.billId
+          ? billById.get(a.billId)
+            ? { id: a.billId, number: billById.get(a.billId)!.number }
+            : null
+          : null,
+      }));
+      return {
+        ...p,
+        customer: p.customerId ? { id: p.customerId, name: partyName.get(p.customerId) ?? "—" } : null,
+        vendor: p.vendorId ? { id: p.vendorId, name: partyName.get(p.vendorId) ?? "—" } : null,
+        allocations,
+      };
+    }),
+  );
 
   const isReceipt = type === "RECEIPT";
   const detailHref = isReceipt ? "/sales/receipts" : "/purchases/payments";

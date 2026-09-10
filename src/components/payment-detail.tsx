@@ -1,5 +1,11 @@
 import Link from "next/link";
-import { db } from "@/lib/db";
+import { getPayment } from "@/server/db/payments";
+import { listAllocationsForPayment } from "@/server/db/payment-allocations";
+import { getCustomer } from "@/server/db/customers";
+import { getVendor } from "@/server/db/vendors";
+import { getAccount } from "@/server/db/accounts";
+import { invoices as invoicesRepo } from "@/server/db/invoices";
+import { bills as billsRepo } from "@/server/db/bills";
 import { formatDate } from "@/lib/dates";
 import { Badge, Card, EmptyState, Money, PageHeader, Table, Td, Th, Tr } from "@/components/ui";
 import { PaymentDetailActions } from "./payment-detail-actions";
@@ -29,21 +35,9 @@ export async function PaymentDetailPage({
   applyAction: (paymentId: string, payload: string) => Promise<{ error?: string; ok?: boolean }>;
   openDocumentsAction: (partyId: string) => Promise<OpenDocument[]>;
 }) {
-  const payment = await db.payment.findFirst({
-    where: { id: paymentId, companyId, type },
-    include: {
-      customer: { select: { id: true, name: true } },
-      vendor: { select: { id: true, name: true } },
-      allocations: {
-        include: {
-          invoice: { select: { id: true, number: true, balanceCents: true } },
-          bill: { select: { id: true, number: true, balanceCents: true } },
-        },
-      },
-    },
-  });
+  const raw = await getPayment(companyId, paymentId);
 
-  if (!payment) {
+  if (!raw || raw.type !== type) {
     return (
       <>
         <PageHeader title={type === "RECEIPT" ? "Receipt" : "Payment"} breadcrumb={[{ label: companyName }]} />
@@ -52,11 +46,33 @@ export async function PaymentDetailPage({
     );
   }
 
-  // Payment.bankAccountId is a plain FK with no Prisma relation field.
-  const bankAccount = await db.account.findUnique({
-    where: { id: payment.bankAccountId },
-    select: { name: true },
-  });
+  const [allocDocs, customerDoc, vendorDoc, bankAccount] = await Promise.all([
+    listAllocationsForPayment(companyId, raw.id),
+    raw.customerId ? getCustomer(companyId, raw.customerId) : Promise.resolve(null),
+    raw.vendorId ? getVendor(companyId, raw.vendorId) : Promise.resolve(null),
+    getAccount(companyId, raw.bankAccountId),
+  ]);
+  const allocations = await Promise.all(
+    allocDocs.map(async (a) => ({
+      ...a,
+      invoice: a.invoiceId
+        ? await invoicesRepo.get(companyId, a.invoiceId).then((i) =>
+            i ? { id: i.id, number: i.number, balanceCents: i.balanceCents } : null,
+          )
+        : null,
+      bill: a.billId
+        ? await billsRepo.get(companyId, a.billId).then((b) =>
+            b ? { id: b.id, number: b.number, balanceCents: b.balanceCents } : null,
+          )
+        : null,
+    })),
+  );
+  const payment = {
+    ...raw,
+    customer: raw.customerId ? { id: raw.customerId, name: customerDoc?.name ?? "—" } : null,
+    vendor: raw.vendorId ? { id: raw.vendorId, name: vendorDoc?.name ?? "—" } : null,
+    allocations,
+  };
 
   const isReceipt = type === "RECEIPT";
   const party = isReceipt ? payment.customer : payment.vendor;

@@ -7,7 +7,7 @@ import clsx from "clsx";
 import { Badge, Button, Card, CardHeader, Field, inputClass } from "@/components/ui";
 import { formatMoney } from "@/lib/money";
 import { formatDate } from "@/lib/dates";
-import type { ReconciliationWorkspace, WorkspaceRow, MonthEndReport } from "@/server/banking/reconcile";
+import type { ReconciliationWorkspace, WorkspaceRow, MonthEndReport } from "@/server/banking/reconcile-fs";
 import {
   completeReconciliationAction,
   matchSelectedAction,

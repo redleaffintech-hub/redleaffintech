@@ -3,8 +3,9 @@
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 import { z } from "zod";
-import { db } from "@/lib/db";
 import { createSession, verifyPassword } from "@/server/auth/session";
+import { getUserByEmail } from "@/server/db/users";
+import { recordAudit } from "@/server/db/audit-logs";
 
 const schema = z.object({
   email: z.string().email("Enter a valid email address."),
@@ -18,7 +19,7 @@ export async function loginAction(formData: FormData) {
   });
   if (!parsed.success) return { error: parsed.error.issues[0].message };
 
-  const user = await db.user.findUnique({ where: { email: parsed.data.email.toLowerCase() } });
+  const user = await getUserByEmail(parsed.data.email.toLowerCase());
   // Same message either way so the form never confirms which emails exist.
   const invalid = { error: "Those credentials do not match an account." };
   if (!user) return invalid;
@@ -30,16 +31,16 @@ export async function loginAction(formData: FormData) {
     ip: headerList.get("x-forwarded-for") ?? undefined,
   });
 
-  await db.auditLog.create({
-    data: {
+  if (user.activeCompanyId) {
+    await recordAudit({
+      companyId: user.activeCompanyId,
       userId: user.id,
       action: "LOGIN",
       entityType: "User",
       entityId: user.id,
       summary: `${user.email} signed in`,
-      companyId: user.activeCompanyId,
-    },
-  });
+    });
+  }
 
   redirect("/dashboard");
 }
