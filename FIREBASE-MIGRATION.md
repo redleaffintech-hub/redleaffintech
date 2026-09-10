@@ -209,9 +209,18 @@ Documented as a deliberate deviation from strict single-transaction atomicity.
   roll-up, incremented per line inside every posting tx). Composite indexes
   declared. `closeChecklist` deferred to Phase 5. Year-end close over ~240
   income-statement accounts still needs the BulkWriter fallback (§6).
-- [ ] **Phase 3 — documents.** invoices, bills, expenses, estimates, credit
-  notes, payments + their server actions.
-- [ ] **Phase 4 — banking & reconciliation, tax engine, HR, payroll.**
+- [x] **Phase 3 — document data layer.** Repos for the master data documents
+  need: `customers.ts`, `vendors.ts`, `items.ts` (+ `itemCodes` guard). Shared
+  `_doc-repo.ts` factory (embedded `lines[]`, `journalEntryId`) backing
+  `invoices.ts`, `estimates.ts`, `bills.ts`, `expenses.ts`, `credit-notes.ts`.
+  `payments.ts` + `payment-allocations.ts` (own collection — aging queries it by
+  invoiceId/billId). `companies.peekSequence`. Converter helper in `firestore.ts`
+  cuts per-repo boilerplate.
+  **Deferred to Phase 4:** the posting-path service functions
+  (`createInvoice`/`postInvoice`/`voidInvoice`/`recordPayment`/…) — they call the
+  tax engine and inventory costing, which land in Phase 4.
+- [ ] **Phase 4 — tax engine, inventory, then wire document posting; banking &
+  reconciliation; HR; payroll.**
 - [ ] **Phase 5 — reports** rewritten against `accountPeriodBalances` +
   collection queries; CSV export.
 - [ ] **Phase 6 — auth** (§5): Firebase Auth, session cookies, guards, MFA.

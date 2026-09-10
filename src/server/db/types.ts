@@ -217,3 +217,291 @@ export interface AccountPeriodBalance {
   debitCents: number;
   creditCents: number;
 }
+
+// ── Phase 3: master data + documents ────────────────────────────────────────
+
+export interface Contact {
+  id: string;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  role: string | null;
+  isPrimary: boolean;
+}
+
+export interface Customer {
+  id: string;
+  companyId: string;
+  name: string;
+  displayName: string | null;
+  email: string | null;
+  phone: string | null;
+  website: string | null;
+  addressLine1: string | null;
+  addressLine2: string | null;
+  city: string | null;
+  province: string | null;
+  postalCode: string | null;
+  country: string;
+  shipToLine1: string | null;
+  shipToLine2: string | null;
+  shipToCity: string | null;
+  shipToProvince: string | null;
+  shipToPostalCode: string | null;
+  shipToCountry: string | null;
+  taxCodeId: string | null;
+  paymentTermsDays: number;
+  notes: string | null;
+  isActive: boolean;
+  openingBalanceCents: number;
+  contacts: Contact[];
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface Vendor {
+  id: string;
+  companyId: string;
+  name: string;
+  displayName: string | null;
+  email: string | null;
+  phone: string | null;
+  addressLine1: string | null;
+  city: string | null;
+  province: string | null;
+  postalCode: string | null;
+  country: string;
+  taxCodeId: string | null;
+  paymentTermsDays: number;
+  businessNumber: string | null;
+  notes: string | null;
+  isActive: boolean;
+  openingBalanceCents: number;
+  contacts: Contact[];
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface ServiceItem {
+  id: string;
+  companyId: string;
+  type: string; // SERVICE | PRODUCT
+  code: string;
+  name: string;
+  description: string | null;
+  unitPriceCents: number;
+  unit: string;
+  discountPercentMicro: number;
+  incomeAccountId: string | null;
+  expenseAccountId: string | null;
+  taxCodeId: string | null;
+  purchaseTaxCodeId: string | null;
+  isActive: boolean;
+  trackInventory: boolean;
+  quantityOnHandMilli: number;
+  averageCostCents: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/** Shared shape of a computed document line (invoice/estimate/bill/credit note). */
+export interface DocumentLine {
+  lineNo: number;
+  itemId: string | null;
+  accountId: string;
+  description: string;
+  quantityMilli: number;
+  unitPriceCents: number;
+  discountPercentMicro: number;
+  netCents: number;
+  taxCodeId: string | null;
+  taxCents: number;
+  totalCents: number;
+  projectId?: string | null;
+  isBillable?: boolean;
+  customerId?: string | null;
+}
+
+export interface Invoice {
+  id: string;
+  companyId: string;
+  customerId: string;
+  number: string;
+  issueDate: Date;
+  dueDate: Date;
+  status: string;
+  memo: string | null;
+  terms: string | null;
+  poNumber: string | null;
+  currency: string;
+  billToName: string | null;
+  billToLine1: string | null;
+  billToLine2: string | null;
+  billToCity: string | null;
+  billToProvince: string | null;
+  billToPostalCode: string | null;
+  billToCountry: string | null;
+  shipToName: string | null;
+  shipToLine1: string | null;
+  shipToLine2: string | null;
+  shipToCity: string | null;
+  shipToProvince: string | null;
+  shipToPostalCode: string | null;
+  shipToCountry: string | null;
+  taxInclusive: boolean;
+  subtotalCents: number;
+  discountCents: number;
+  taxCents: number;
+  totalCents: number;
+  amountPaidCents: number;
+  balanceCents: number;
+  writtenOffCents: number;
+  journalEntryId: string | null;
+  estimateId: string | null;
+  recurringId: string | null;
+  projectId: string | null;
+  createdById: string | null;
+  postedAt: Date | null;
+  sentAt: Date | null;
+  voidedAt: Date | null;
+  lines: DocumentLine[];
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface Estimate {
+  id: string;
+  companyId: string;
+  customerId: string;
+  number: string;
+  issueDate: Date;
+  expiryDate: Date | null;
+  status: string;
+  memo: string | null;
+  terms: string | null;
+  taxInclusive: boolean;
+  subtotalCents: number;
+  taxCents: number;
+  totalCents: number;
+  convertedInvoiceId: string | null;
+  lines: DocumentLine[];
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface Bill {
+  id: string;
+  companyId: string;
+  vendorId: string;
+  number: string;
+  vendorInvoiceNo: string | null;
+  issueDate: Date;
+  dueDate: Date;
+  status: string;
+  approvalStatus: string;
+  approvedById: string | null;
+  approvedAt: Date | null;
+  memo: string | null;
+  taxInclusive: boolean;
+  subtotalCents: number;
+  taxCents: number;
+  totalCents: number;
+  amountPaidCents: number;
+  balanceCents: number;
+  journalEntryId: string | null;
+  recurringId: string | null;
+  projectId: string | null;
+  createdById: string | null;
+  postedAt: Date | null;
+  voidedAt: Date | null;
+  lines: DocumentLine[];
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface Expense {
+  id: string;
+  companyId: string;
+  number: string;
+  date: Date;
+  vendorId: string | null;
+  payeeName: string | null;
+  paymentAccountId: string;
+  paymentMethod: string;
+  reference: string | null;
+  memo: string | null;
+  status: string;
+  approvalStatus: string;
+  approvedById: string | null;
+  approvedAt: Date | null;
+  taxInclusive: boolean;
+  subtotalCents: number;
+  taxCents: number;
+  totalCents: number;
+  journalEntryId: string | null;
+  bankTransactionId: string | null;
+  createdById: string | null;
+  postedAt: Date | null;
+  lines: DocumentLine[];
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface CreditNote {
+  id: string;
+  companyId: string;
+  type: string; // CUSTOMER | VENDOR
+  customerId: string | null;
+  vendorId: string | null;
+  number: string;
+  issueDate: Date;
+  status: string;
+  reason: string | null;
+  memo: string | null;
+  taxInclusive: boolean;
+  subtotalCents: number;
+  taxCents: number;
+  totalCents: number;
+  appliedCents: number;
+  balanceCents: number;
+  journalEntryId: string | null;
+  postedAt: Date | null;
+  lines: DocumentLine[];
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface Payment {
+  id: string;
+  companyId: string;
+  type: string; // RECEIPT | PAYMENT
+  number: string;
+  date: Date;
+  customerId: string | null;
+  vendorId: string | null;
+  bankAccountId: string;
+  method: string;
+  reference: string | null;
+  memo: string | null;
+  amountCents: number;
+  appliedCents: number;
+  unappliedCents: number;
+  status: string;
+  journalEntryId: string | null;
+  bankTransactionId: string | null;
+  createdById: string | null;
+  postedAt: Date | null;
+  createdAt: Date;
+}
+
+export interface PaymentAllocation {
+  id: string;
+  companyId: string;
+  paymentId: string | null;
+  invoiceId: string | null;
+  billId: string | null;
+  creditNoteId: string | null;
+  kind: string; // PAYMENT | CREDIT | WRITE_OFF
+  amountCents: number;
+  date: Date;
+}

@@ -110,4 +110,22 @@ export async function bumpSequenceTx(
   return `${prefix}${body}`;
 }
 
+/**
+ * The number the next document *would* take, without consuming it — for the
+ * editor's "this will be INV-1042" hint. Nothing is reserved.
+ */
+export async function peekSequence(
+  companyId: string,
+  which: NumberSequence,
+): Promise<string> {
+  const spec = SEQUENCE_FIELDS[which];
+  const snap = await companyRef(companyId).get();
+  if (!snap.exists) throw new Error(`Company ${companyId} not found.`);
+  const data = snap.data()!;
+  const current = Number(data[spec.next] ?? 1);
+  const prefix = String(data[spec.prefix] ?? "");
+  const body = spec.pad > 0 ? String(current).padStart(spec.pad, "0") : String(current);
+  return `${prefix}${body}`;
+}
+
 export { runTransaction };

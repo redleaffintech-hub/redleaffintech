@@ -102,4 +102,27 @@ export function mapDocs<T>(
   );
 }
 
+/**
+ * Build `decode`/`encode` for a flat document type given the names of its `Date`
+ * fields. `decode` turns a stored doc into the plain type (Timestamp -> Date,
+ * adds `id`); `encode` prepares a partial for writing (Date -> Timestamp, drops
+ * `id`). Cuts the per-repository boilerplate.
+ */
+export function converter<T extends { id: string }>(dateFields: readonly string[]) {
+  const set = new Set<string>(dateFields);
+  return {
+    decode(raw: FirebaseFirestore.DocumentData, id: string): T {
+      const out: Record<string, unknown> = { id, ...raw };
+      for (const f of set) if (f in out) out[f] = fromTimestamp(out[f] as Timestamp | null);
+      return out as unknown as T;
+    },
+    encode(data: Partial<T>): FirebaseFirestore.DocumentData {
+      const out: FirebaseFirestore.DocumentData = { ...data };
+      delete out.id;
+      for (const f of set) if (f in out) out[f] = toTimestamp(out[f] as Date | null);
+      return out;
+    },
+  };
+}
+
 export { FieldValue, Timestamp };
