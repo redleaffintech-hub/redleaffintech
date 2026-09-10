@@ -76,3 +76,7 @@ firestore-debug.log
 ui-debug.log
 firestore-export/
 .firebase/
+
+# Local copy of the generated App Hosting session secret (also in Secret Manager)
+.firebase-session-secret.local
+apphosting-debug.log

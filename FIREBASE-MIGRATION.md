@@ -518,13 +518,30 @@ Documented as a deliberate deviation from strict single-transaction atomicity.
     from the main tsconfig). Verified on the emulator: 61/61 checks pass on the
     smoke dataset; the admin bootstrap creates, promotes, and refuses a second
     unforced run.
-  - [ ] **8b — deploy (needs the account owner).** Enable Blaze on
-    `redleaf-fintech-e4c4d`; `firebase apphosting:secrets:set SESSION_SECRET`;
-    with a service-account key, `npm run migrate:firestore -- --yes` (reads the
-    live Neon DB — Prisma + `src/lib/db.ts` + `prisma/schema.prisma` are kept
-    for exactly this) and confirm the verification pass is clean; `firebase
-    apphosting:backends:create` / push to the connected branch to build & deploy;
-    smoke-test sign-in, a posted invoice, a report, a bank import; move DNS.
+  - [ ] **8b — deploy (needs the account owner).** Run
+    `npm run deploy:firebase` (`scripts/deploy-firebase.mjs`) — it orchestrates
+    the scriptable steps and stops with an `ACTION REQUIRED` block at each
+    owner-only step, then is safe to re-run:
+      - phase 0 preflight — firebase/gcloud auth, **Blaze** (owner-only: add a
+        card at `console.firebase.google.com/project/redleaf-fintech-e4c4d/usage/details`,
+        or `gcloud billing projects link` an existing account)
+      - phase 1 `gcloud services enable` the App Hosting / Run / Build /
+        Artifact Registry / Secret Manager / Developer Connect APIs
+      - phase 2 generate + store `SESSION_SECRET` in Secret Manager
+        (`.firebase-session-secret.local`, gitignored, keeps a copy)
+      - phase 3 `npm run migrate:firestore` — dry-run by default, real copy with
+        `--migrate` (reads the live Neon DB — Prisma + `src/lib/db.ts` +
+        `prisma/schema.prisma` are kept for exactly this); needs
+        `gcloud auth application-default login` or a `roles/datastore.user` key
+      - phase 4 `apphosting:backends:create` (owner-only, one-time: a browser
+        OAuth that installs the Firebase GitHub app on
+        `redleaffintech-hub/redleaffintech`; answer region `us-central1`, branch
+        `firebase-migration`, root `/`, id `redleaf`)
+      - phase 5 `apphosting:secrets:grantaccess` for the backend
+      - phase 6 `apphosting:rollouts:create redleaf --git-branch firebase-migration`
+      - phase 7 smoke test — `GET /api/health`, `/`, `/login`, `/admin/login`
+      - phase 8 DNS — manual, registrar-dependent, do last (keep Netlify live as
+        rollback until the new site is verified)
   - [ ] **8c — final Prisma removal (after 8b succeeds).** Delete
     `scripts/migrate-to-firestore.ts` and the remaining Prisma-only scripts
     (`census.ts`, `backfill-*.ts`, `seed-plans.ts`, `prisma/seed.ts`) or port
