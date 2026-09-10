@@ -2,12 +2,13 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { db } from "@/lib/db";
 import { toCents } from "@/lib/money";
 import { CAPABILITIES } from "@/lib/permissions";
 import { recordAudit, requireCapability } from "@/server/auth/context";
-import { createEstimate, setEstimateStatus } from "@/server/documents/estimates";
-import { peekNumber } from "@/server/documents/numbering";
+import { createEstimate, setEstimateStatus } from "@/server/documents/estimates-fs";
+import { peekSequence } from "@/server/db/companies";
+import { estimates as estimatesRepo } from "@/server/db/estimates";
+import { getCustomer } from "@/server/db/customers";
 
 const lineSchema = z.object({
   description: z.string().min(1),
@@ -46,15 +47,14 @@ export async function createQuoteAction(payload: string) {
 
   // Same rule as the invoice editor: handing back the suggested number means
   // "allocate it at save time", so concurrent quotes cannot take the same one.
-  const suggested = await peekNumber(db, company.id, "estimate");
+  const suggested = await peekSequence(company.id, "estimate");
   const supplied = parsed.data.number?.trim();
   const explicitNumber = supplied && supplied !== suggested ? supplied : undefined;
 
   if (explicitNumber) {
-    const clash = await db.estimate.findFirst({
-      where: { companyId: company.id, number: explicitNumber },
-      select: { id: true },
-    });
+    const clash = (
+      await estimatesRepo.list(company.id, { where: [["number", "==", explicitNumber]], limit: 1 })
+    )[0];
     if (clash) return { error: `Quote ${explicitNumber} already exists. Choose another number.` };
   }
 
@@ -80,13 +80,14 @@ export async function createQuoteAction(payload: string) {
       })),
     });
 
+    const customer = await getCustomer(company.id, quote.customerId);
     await recordAudit({
       companyId: company.id,
       userId: user.id,
       action: "CREATE",
       entityType: "Estimate",
       entityId: quote.id,
-      summary: `Created sales quote ${quote.number} for ${quote.customer.name}`,
+      summary: `Created sales quote ${quote.number} for ${customer?.name ?? "customer"}`,
     });
 
     revalidatePath("/sales/quotes");

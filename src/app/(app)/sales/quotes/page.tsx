@@ -1,6 +1,6 @@
 import Link from "next/link";
-import { db } from "@/lib/db";
-import { contains } from "@/lib/search";
+import { estimates as estimatesRepo } from "@/server/db/estimates";
+import { getCustomer } from "@/server/db/customers";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
 import { formatDate, today, daysBetween, dateRangeWhere } from "@/lib/dates";
@@ -21,22 +21,34 @@ export default async function QuotesPage({ searchParams }: PageProps<"/sales/quo
   const query = typeof params.q === "string" ? params.q : "";
   const issuedBetween = dateRangeWhere(params.from, params.to);
 
-  const [quotes, counts] = await Promise.all([
-    db.estimate.findMany({
-      where: {
-        companyId: company.id,
-        ...(status ? { status } : {}),
-        ...(query ? { OR: [{ number: contains(query) }, { customer: { name: contains(query) } }] } : {}),
-        ...(issuedBetween ? { issueDate: issuedBetween } : {}),
-      },
-      include: { customer: { select: { id: true, name: true } }, lines: { select: { id: true } } },
-      orderBy: [{ issueDate: "desc" }, { number: "desc" }],
-      take: 150,
-    }),
-    db.estimate.groupBy({ by: ["status"], where: { companyId: company.id }, _count: true }),
-  ]);
+  const q = query.toLowerCase();
+  const from = issuedBetween?.gte ?? null;
+  const to = issuedBetween?.lte ?? null;
 
-  const countOf = (s: string) => counts.find((c) => c.status === s)?._count ?? 0;
+  const allQuotes = await estimatesRepo.list(company.id, { orderBy: "issueDate", direction: "desc" });
+  const customerNames = new Map<string, string>();
+  await Promise.all(
+    [...new Set(allQuotes.map((e) => e.customerId))].map(async (id) => {
+      customerNames.set(id, (await getCustomer(company.id, id))?.name ?? "—");
+    }),
+  );
+
+  const statusCount = new Map<string, number>();
+  for (const e of allQuotes) statusCount.set(e.status, (statusCount.get(e.status) ?? 0) + 1);
+  const countOf = (s: string) => statusCount.get(s) ?? 0;
+
+  const quotes = allQuotes
+    .filter((e) => !status || e.status === status)
+    .filter(
+      (e) =>
+        !q ||
+        e.number.toLowerCase().includes(q) ||
+        (customerNames.get(e.customerId) ?? "").toLowerCase().includes(q),
+    )
+    .filter((e) => (!from || e.issueDate >= from) && (!to || e.issueDate <= to))
+    .slice(0, 150)
+    .map((e) => ({ ...e, customer: { id: e.customerId, name: customerNames.get(e.customerId) ?? "—" } }));
+
   const pipelineCents = quotes
     .filter((quote) => ["SENT", "ACCEPTED"].includes(quote.status))
     .reduce((sum, quote) => sum + quote.totalCents, 0);

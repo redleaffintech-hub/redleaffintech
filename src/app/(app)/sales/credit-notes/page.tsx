@@ -1,5 +1,8 @@
 import Link from "next/link";
-import { db } from "@/lib/db";
+import { creditNotes as creditNotesRepo } from "@/server/db/credit-notes";
+import { getCustomer } from "@/server/db/customers";
+import { getVendor } from "@/server/db/vendors";
+import { listAccounts } from "@/server/db/accounts";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
 import { formatDate, dateRangeWhere } from "@/lib/dates";
@@ -17,23 +20,39 @@ export default async function CreditNotesPage({ searchParams }: PageProps<"/sale
   const type = typeof params.type === "string" ? params.type : "";
   const issuedBetween = dateRangeWhere(params.from, params.to);
 
-  const [creditNotes, counts] = await Promise.all([
-    db.creditNote.findMany({
-      where: {
-        companyId: company.id,
-        ...(type ? { type } : {}),
-        ...(issuedBetween ? { issueDate: issuedBetween } : {}),
-      },
-      include: {
-        customer: { select: { id: true, name: true } },
-        vendor: { select: { id: true, name: true } },
-        lines: { include: { account: { select: { code: true, name: true } } } },
-      },
-      orderBy: { issueDate: "desc" },
-      take: 100,
-    }),
-    db.creditNote.groupBy({ by: ["type"], where: { companyId: company.id }, _count: true }),
+  const from = issuedBetween?.gte ?? null;
+  const to = issuedBetween?.lte ?? null;
+
+  const [allNotes, accounts] = await Promise.all([
+    creditNotesRepo.list(company.id, { orderBy: "issueDate", direction: "desc" }),
+    listAccounts(company.id),
   ]);
+  const accountById = new Map(accounts.map((a) => [a.id, a]));
+  const counts = { CUSTOMER: 0, VENDOR: 0 } as Record<string, number>;
+  for (const n of allNotes) counts[n.type] = (counts[n.type] ?? 0) + 1;
+
+  const filtered = allNotes
+    .filter((n) => !type || n.type === type)
+    .filter((n) => (!from || n.issueDate >= from) && (!to || n.issueDate <= to))
+    .slice(0, 100);
+
+  const partyNames = new Map<string, string>();
+  await Promise.all(
+    filtered.map(async (n) => {
+      if (n.customerId) partyNames.set(n.customerId, (await getCustomer(company.id, n.customerId))?.name ?? "—");
+      if (n.vendorId) partyNames.set(n.vendorId, (await getVendor(company.id, n.vendorId))?.name ?? "—");
+    }),
+  );
+
+  const creditNotes = filtered.map((n) => ({
+    ...n,
+    customer: n.customerId ? { id: n.customerId, name: partyNames.get(n.customerId) ?? "—" } : null,
+    vendor: n.vendorId ? { id: n.vendorId, name: partyNames.get(n.vendorId) ?? "—" } : null,
+    lines: n.lines.map((l) => ({
+      ...l,
+      account: accountById.get(l.accountId) ?? { code: "", name: "" },
+    })),
+  }));
 
   const openCents = creditNotes.reduce((s, c) => s + c.balanceCents, 0);
 
@@ -55,8 +74,8 @@ export default async function CreditNotesPage({ searchParams }: PageProps<"/sale
         paramName="type"
         tabs={[
           { label: "All", value: "" },
-          { label: "Customer credits", value: "CUSTOMER", count: counts.find((c) => c.type === "CUSTOMER")?._count ?? 0 },
-          { label: "Vendor credits", value: "VENDOR", count: counts.find((c) => c.type === "VENDOR")?._count ?? 0 },
+          { label: "Customer credits", value: "CUSTOMER", count: counts.CUSTOMER ?? 0 },
+          { label: "Vendor credits", value: "VENDOR", count: counts.VENDOR ?? 0 },
         ]}
         extra={<DateRangeFilter label="Credit date" />}
       />

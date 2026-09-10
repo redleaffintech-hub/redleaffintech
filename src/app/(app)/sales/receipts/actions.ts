@@ -2,27 +2,25 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { db } from "@/lib/db";
 import { toCents } from "@/lib/money";
 import { CAPABILITIES } from "@/lib/permissions";
 import { requireCapability } from "@/server/auth/context";
-import { applyPayment, openDocumentsForParty, recordPayment, voidPayment } from "@/server/documents/payments";
+import { applyPayment, openDocumentsForParty, recordPayment, voidPayment } from "@/server/documents/payments-fs";
+import { listCustomers } from "@/server/db/customers";
+import { listAccounts } from "@/server/db/accounts";
 import type { OpenDocument } from "@/components/payment-form";
 
 export async function receiptFormOptions() {
   const { company } = await requireCapability(CAPABILITIES.PAYMENTS);
-  const [customers, bankAccounts] = await Promise.all([
-    db.customer.findMany({
-      where: { companyId: company.id, isActive: true },
-      orderBy: { name: "asc" },
-      select: { id: true, name: true },
-    }),
-    db.account.findMany({
-      where: { companyId: company.id, subtype: { in: ["BANK", "CASH"] }, isActive: true },
-      orderBy: { code: "asc" },
-      select: { id: true, name: true },
-    }),
+  const [customerRows, accounts] = await Promise.all([
+    listCustomers(company.id, { activeOnly: true }),
+    listAccounts(company.id),
   ]);
+  const customers = customerRows.map((c) => ({ id: c.id, name: c.name }));
+  const bankAccounts = accounts
+    .filter((a) => a.isActive && ["BANK", "CASH"].includes(a.subtype))
+    .sort((a, b) => a.code.localeCompare(b.code))
+    .map((a) => ({ id: a.id, name: a.name }));
   return { customers, bankAccounts };
 }
 

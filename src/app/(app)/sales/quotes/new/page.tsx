@@ -1,8 +1,7 @@
-import { db } from "@/lib/db";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
-import { peekNumber } from "@/server/documents/numbering";
-import { DEFAULT_QUOTE_VALIDITY_DAYS } from "@/server/documents/estimates";
+import { peekSequence } from "@/server/db/companies";
+import { DEFAULT_QUOTE_VALIDITY_DAYS } from "@/server/documents/estimates-fs";
 import { PageHeader } from "@/components/ui";
 import { DocumentForm } from "@/components/document-form";
 import { invoiceFormOptions } from "../../invoices/actions";
@@ -13,7 +12,7 @@ export const metadata = { title: "New sales quote" };
 export default async function NewQuotePage() {
   const { company } = await requireCapability(CAPABILITIES.INVOICES);
   const options = await invoiceFormOptions();
-  const suggestedNumber = await peekNumber(db, company.id, "estimate");
+  const suggestedNumber = await peekSequence(company.id, "estimate");
 
   return (
     <>
