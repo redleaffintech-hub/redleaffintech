@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import clsx from "clsx";
 import { formatMoney } from "@/lib/money";
-import type { IncomeStatement, StatementSection, StatementSubtotal } from "@/server/reports/financials";
+import type { IncomeStatement, StatementSection, StatementSubtotal } from "@/server/reports/financials-fs";
 
 /**
  * The income statement as a period-comparison grid.

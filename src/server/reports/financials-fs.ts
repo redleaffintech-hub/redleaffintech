@@ -177,13 +177,20 @@ export interface StatementSection {
   totals: number[];
 }
 
+/** A calculated line — gross profit, EBITDA, EBIT, EBT, net income. */
+export interface StatementSubtotal {
+  key: string;
+  label: string;
+  amounts: number[];
+}
+
 export interface IncomeStatement {
   periods: ReportPeriod[];
   currency: string;
   sections: StatementSection[];
   subtotals: Record<
     "GROSS_PROFIT" | "EBITDA" | "EBIT" | "EBT" | "NET_INCOME",
-    { key: string; label: string; amounts: number[] }
+    StatementSubtotal
   >;
   margins: Record<"GROSS" | "EBITDA" | "EBIT" | "NET", (number | null)[]>;
 }

@@ -1,9 +1,10 @@
-import { db } from "@/lib/db";
+import { budgets as budgetsRepo } from "@/server/db/supporting";
+import { listAccounts } from "@/server/db/accounts";
+import { balancesInRange } from "@/server/db/account-balances";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
 import { NORMAL_BALANCE, type AccountType } from "@/lib/enums";
-import { fiscalYearOf, fiscalYearRange, isoDate, today, toUtcDay } from "@/lib/dates";
-import { formatMoney } from "@/lib/money";
+import { fiscalYearOf, fiscalYearRange, today, toUtcDay } from "@/lib/dates";
 import { EmptyState, Money, PageHeader } from "@/components/ui";
 import { PrintButton } from "@/components/filter-bar";
 import { ExportCsvButton } from "@/components/export-csv-button";
@@ -19,12 +20,9 @@ export default async function BudgetVsActualPage({ searchParams }: PageProps<"/r
   const { start, end } = fiscalYearRange(fiscalYear, company.fiscalYearStartMonth);
   const to = toUtcDay(today()) < end ? toUtcDay(today()) : end;
 
-  const budget = await db.budget.findFirst({
-    where: { companyId: company.id, fiscalYear },
-    include: { lines: { include: { account: true } } },
-  });
+  const rawBudget = (await budgetsRepo.list(company.id)).find((b) => b.fiscalYear === fiscalYear) ?? null;
 
-  if (!budget) {
+  if (!rawBudget) {
     return (
       <>
         <PageHeader title="Budget vs actual" breadcrumb={[{ label: "Reports", href: "/reports" }, { label: "Budget vs actual" }]} />
@@ -42,14 +40,27 @@ export default async function BudgetVsActualPage({ searchParams }: PageProps<"/r
     (to.getUTCFullYear() - start.getUTCFullYear()) * 12 + (to.getUTCMonth() - start.getUTCMonth()) + 1,
   );
 
-  const actuals = await db.journalLine.groupBy({
-    by: ["accountId"],
-    where: { companyId: company.id, date: { gte: start, lte: to }, accountType: { in: ["REVENUE", "EXPENSE"] } },
-    _sum: { debitCents: true, creditCents: true },
-  });
-  const actualById = new Map(
-    actuals.map((a) => [a.accountId, { debit: a._sum.debitCents ?? 0, credit: a._sum.creditCents ?? 0 }]),
-  );
+  const [accounts, balances] = await Promise.all([
+    listAccounts(company.id),
+    balancesInRange(company.id, start, to),
+  ]);
+  const accountById = new Map(accounts.map((a) => [a.id, a]));
+  const budget = {
+    ...rawBudget,
+    lines: rawBudget.lines.map((l) => ({
+      ...l,
+      account: accountById.get(l.accountId) ?? { code: "", name: "", type: "" },
+    })),
+  };
+
+  const actualById = new Map<string, { debit: number; credit: number }>();
+  for (const b of balances) {
+    if (!["REVENUE", "EXPENSE"].includes(b.accountType)) continue;
+    const cur = actualById.get(b.accountId) ?? { debit: 0, credit: 0 };
+    cur.debit += b.debitCents;
+    cur.credit += b.creditCents;
+    actualById.set(b.accountId, cur);
+  }
 
   const byAccount = new Map<string, { code: string; name: string; type: string; budgetCents: number }>();
   for (const line of budget.lines) {

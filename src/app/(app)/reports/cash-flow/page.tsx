@@ -1,6 +1,6 @@
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
-import { cashFlow } from "@/server/reports/financials";
+import { cashFlow } from "@/server/reports/financials-fs";
 import { fiscalYearOf, fiscalYearRange, isoDate, toUtcDay, today } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
 import { PageHeader } from "@/components/ui";
