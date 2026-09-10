@@ -5,7 +5,7 @@ import { z } from "zod";
 import { toCents } from "@/lib/money";
 import { CAPABILITIES } from "@/lib/permissions";
 import { recordAudit, requireCapability } from "@/server/auth/context";
-import { adjustStock } from "@/server/inventory/costing-fs";
+import { adjustStock } from "@/server/inventory/costing";
 import { listAccounts } from "@/server/db/accounts";
 
 export async function inventoryAdjustmentFormOptions() {

@@ -16,7 +16,7 @@ import {
   commitPosting,
   planPosting,
   reverseJournal,
-} from "@/server/accounting/ledger-fs";
+} from "@/server/accounting/ledger";
 import { findTaxPeriodTx, loadTaxCodesTx, recordTaxEntriesTx } from "@/server/tax/engine-fs";
 import { computeDocument, splitPurchaseDebits } from "@/server/documents/lines";
 

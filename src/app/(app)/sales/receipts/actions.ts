@@ -5,7 +5,7 @@ import { z } from "zod";
 import { toCents } from "@/lib/money";
 import { CAPABILITIES } from "@/lib/permissions";
 import { requireCapability } from "@/server/auth/context";
-import { applyPayment, openDocumentsForParty, recordPayment, voidPayment } from "@/server/documents/payments-fs";
+import { applyPayment, openDocumentsForParty, recordPayment, voidPayment } from "@/server/documents/payments";
 import { listCustomers } from "@/server/db/customers";
 import { listAccounts } from "@/server/db/accounts";
 import type { OpenDocument } from "@/components/payment-form";

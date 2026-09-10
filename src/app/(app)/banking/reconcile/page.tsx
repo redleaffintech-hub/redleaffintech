@@ -1,6 +1,6 @@
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
-import { buildWorkspace, reconciliationHistory } from "@/server/banking/reconcile-fs";
+import { buildWorkspace, reconciliationHistory } from "@/server/banking/reconcile";
 import { bankAccounts as bankAccountsRepo, bankReconciliations, reconciliationId } from "@/server/db/banking";
 import { today, formatMonthLong } from "@/lib/dates";
 import { EmptyState, PageHeader } from "@/components/ui";

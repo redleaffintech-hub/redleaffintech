@@ -5,8 +5,8 @@ import { z } from "zod";
 import { toCents } from "@/lib/money";
 import { CAPABILITIES } from "@/lib/permissions";
 import { requireCapability, requireCompany } from "@/server/auth/context";
-import { postManualJournal } from "@/server/accounting/journals-fs";
-import { reverseJournal } from "@/server/accounting/ledger-fs";
+import { postManualJournal } from "@/server/accounting/journals";
+import { reverseJournal } from "@/server/accounting/ledger";
 import { runTransaction } from "@/server/db/firestore";
 import { listAccounts } from "@/server/db/accounts";
 

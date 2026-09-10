@@ -5,18 +5,18 @@ import { z } from "zod";
 import { toCents } from "@/lib/money";
 import { CAPABILITIES } from "@/lib/permissions";
 import { requireCapability, requireCompany } from "@/server/auth/context";
-import { categorizeTransaction, unmatchTransaction } from "@/server/banking/categorize-fs";
+import { categorizeTransaction, unmatchTransaction } from "@/server/banking/categorize";
 import {
   confirmTransfer, detectTransfers, matchTransactionToDocuments, suggestMatches, suggestRule,
-} from "@/server/banking/matching-fs";
-import { importTransactions, parseCsv, parseOfx } from "@/server/banking/import-fs";
+} from "@/server/banking/matching";
+import { importTransactions, parseCsv, parseOfx } from "@/server/banking/import";
 import {
   completeReconciliation,
   getOrStartReconciliation,
   matchSelected,
   removeMatch,
   saveStatementBalances,
-} from "@/server/banking/reconcile-fs";
+} from "@/server/banking/reconcile";
 import { bankTransactions, bankRules } from "@/server/db/banking";
 import { listAccounts } from "@/server/db/accounts";
 import { listTaxCodes } from "@/server/db/tax-codes";

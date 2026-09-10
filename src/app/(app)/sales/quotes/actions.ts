@@ -5,7 +5,7 @@ import { z } from "zod";
 import { toCents } from "@/lib/money";
 import { CAPABILITIES } from "@/lib/permissions";
 import { recordAudit, requireCapability } from "@/server/auth/context";
-import { createEstimate, setEstimateStatus } from "@/server/documents/estimates-fs";
+import { createEstimate, setEstimateStatus } from "@/server/documents/estimates";
 import { peekSequence } from "@/server/db/companies";
 import { estimates as estimatesRepo } from "@/server/db/estimates";
 import { getCustomer } from "@/server/db/customers";

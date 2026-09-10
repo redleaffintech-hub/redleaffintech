@@ -2,7 +2,7 @@ import { bankAccounts as bankAccountsRepo, bankReconciliations, listBankTransact
 import { listAccounts } from "@/server/db/accounts";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES, can } from "@/lib/permissions";
-import { accountBalance } from "@/server/reports/financials-fs";
+import { accountBalance } from "@/server/reports/financials";
 import { formatDate, today } from "@/lib/dates";
 import { Badge, Card, LinkButton, Money, PageHeader, Table, Td, Th, Tr } from "@/components/ui";
 import { EditBankAccountButton } from "./edit-bank-account";

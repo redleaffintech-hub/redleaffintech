@@ -2,7 +2,7 @@ import { listFiscalPeriods } from "@/server/db/fiscal-periods";
 import { listEntries } from "@/server/db/journal-entries";
 import { requireCompany } from "@/server/auth/context";
 import { CAPABILITIES, can } from "@/lib/permissions";
-import { closeChecklist } from "@/server/accounting/journals-fs";
+import { closeChecklist } from "@/server/accounting/journals";
 import { fiscalYearOf, today, formatDate, formatDateTime } from "@/lib/dates";
 import { Badge, Callout, Card, CardHeader, Money, PageHeader, StatusBadge, Table, Td, Th, Tr } from "@/components/ui";
 import { PeriodActions, YearEndButton } from "./period-actions";

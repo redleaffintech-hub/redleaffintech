@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
-import { taxDetail } from "@/server/reports/tax-fs";
+import { taxDetail } from "@/server/reports/tax";
 import { fiscalYearOf, fiscalYearRange, isoDate, toUtcDay, today, formatDate } from "@/lib/dates";
 import { formatRate } from "@/lib/money";
 import { Badge, Money, PageHeader } from "@/components/ui";

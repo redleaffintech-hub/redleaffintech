@@ -28,7 +28,7 @@ const ADMIN_COOKIE = "rlf_admin";
 /** Paths under /admin that must stay reachable without a session. */
 const ADMIN_PUBLIC = ["/admin/login"];
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   if (pathname === "/") {

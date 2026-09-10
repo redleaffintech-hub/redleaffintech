@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
-import { partyStatement } from "@/server/reports/aging-fs";
+import { partyStatement } from "@/server/reports/aging";
 import { getCompanyOrThrow } from "@/server/db/companies";
 import { getCustomer } from "@/server/db/customers";
 import { getTaxCode } from "@/server/db/tax-codes";

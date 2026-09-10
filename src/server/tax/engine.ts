@@ -11,7 +11,6 @@
  * non-recoverable provincial tax.
  */
 
-import type { Tx } from "@/lib/db";
 import { MICRO } from "@/lib/money";
 
 export class TaxError extends Error {
@@ -172,79 +171,6 @@ export function assertEffective(taxCode: TaxCodeSpec, date: Date) {
       `Tax code ${taxCode.code} expired on ${taxCode.effectiveTo.toISOString().slice(0, 10)}. Choose a current code.`,
     );
   }
-}
-
-/** Load the codes a document needs, tenant-scoped, with components attached. */
-export async function loadTaxCodes(tx: Tx, companyId: string, ids: (string | null | undefined)[]) {
-  const unique = [...new Set(ids.filter((id): id is string => Boolean(id)))];
-  if (unique.length === 0) return new Map<string, TaxCodeSpec>();
-
-  const codes = await tx.taxCode.findMany({
-    where: { id: { in: unique }, companyId },
-    include: { components: true },
-  });
-  if (codes.length !== unique.length) {
-    throw new TaxError("One or more tax codes do not exist in this company.");
-  }
-  return new Map(codes.map((c) => [c.id, c as TaxCodeSpec]));
-}
-
-/** The open tax period covering a date, if the company has defined one. */
-export async function findTaxPeriod(tx: Tx, companyId: string, date: Date) {
-  return tx.taxPeriod.findFirst({
-    where: { companyId, startDate: { lte: date }, endDate: { gte: date } },
-  });
-}
-
-export interface TaxEntryInput {
-  companyId: string;
-  date: Date;
-  direction: "SALE" | "PURCHASE";
-  sourceType: string;
-  sourceId: string;
-  sourceNumber?: string | null;
-  lineId?: string | null;
-  taxCodeId: string;
-  jurisdiction: string;
-  partyName?: string | null;
-  journalEntryId?: string | null;
-  components: ComponentTax[];
-  /** Reverse the sign — used by credit notes. */
-  negate?: boolean;
-}
-
-/**
- * Write the per-component tax audit rows that Tax Summary, Tax Detail and the
- * tax control-account reconciliation all read from.
- */
-export async function recordTaxEntries(tx: Tx, input: TaxEntryInput) {
-  if (input.components.length === 0) return;
-  const period = await findTaxPeriod(tx, input.companyId, input.date);
-  const sign = input.negate ? -1 : 1;
-
-  await tx.taxEntry.createMany({
-    data: input.components.map((c) => ({
-      companyId: input.companyId,
-      date: input.date,
-      direction: input.direction,
-      sourceType: input.sourceType,
-      sourceId: input.sourceId,
-      sourceNumber: input.sourceNumber ?? null,
-      lineId: input.lineId ?? null,
-      taxCodeId: input.taxCodeId,
-      taxComponentId: c.componentId,
-      jurisdiction: input.jurisdiction,
-      kind: c.kind,
-      rateMicro: c.rateMicro,
-      taxableCents: c.taxableCents * sign,
-      taxCents: c.taxCents * sign,
-      recoverableCents:
-        input.direction === "PURCHASE" && c.isRecoverable ? c.taxCents * sign : 0,
-      journalEntryId: input.journalEntryId ?? null,
-      taxPeriodId: period?.id ?? null,
-      partyName: input.partyName ?? null,
-    })),
-  });
 }
 
 /**

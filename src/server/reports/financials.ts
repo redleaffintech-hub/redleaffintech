@@ -1,15 +1,36 @@
+import "server-only";
+
 /**
- * Financial statements (spec §12).
+ * Financial statements (§12) — Firestore implementation.
  *
- * CRITICAL RULE (§12): every figure below is aggregated from `journal_lines`.
- * Nothing reads an invoice, a bill or any UI state. That is what makes every
- * total drill down to the transactions that produced it, and what keeps the
- * subledgers reconciled to their control accounts.
+ * CRITICAL RULE (§12) preserved: every figure is aggregated from ledger lines
+ * (here via the `accountPeriodBalances` roll-up + partial-month scan in
+ * ./ledger-fs). Nothing reads an invoice, a bill or any UI state.
+ *
+ * The classification logic (PL sections, BS sections, cash-flow buckets) is
+ * copied verbatim from src/server/reports/financials.ts.
  */
 
-import { db } from "@/lib/db";
-import { CASH_ASSET_SUBTYPES, INCOME_STATEMENT_SUBTYPES, NORMAL_BALANCE, type AccountType } from "@/lib/enums";
-import { fiscalYearRange, fiscalYearOf, monthsBetween, endOfMonth } from "@/lib/dates";
+import {
+  CASH_ASSET_SUBTYPES,
+  INCOME_STATEMENT_SUBTYPES,
+  NORMAL_BALANCE,
+  type AccountType,
+} from "@/lib/enums";
+import {
+  endOfMonth,
+  fiscalYearOf,
+  fiscalYearRange,
+  monthsBetween,
+  startOfMonth,
+} from "@/lib/dates";
+import { getCompanyOrThrow } from "@/server/db/companies";
+import { listAccounts } from "@/server/db/accounts";
+import { listCustomers } from "@/server/db/customers";
+import { listVendors } from "@/server/db/vendors";
+import { sub, toTimestamp } from "@/server/db/firestore";
+import { accountRawBalanceAsOf, sumsInRange, sumsUpTo, type AccountSum } from "./ledger";
+import type { Account } from "@/server/db/types";
 
 export interface DateRange {
   from: Date;
@@ -24,25 +45,10 @@ export interface AccountBalance {
   subtype: string;
   debitCents: number;
   creditCents: number;
-  /** Positive in the account's natural direction. */
   balanceCents: number;
 }
 
-async function balancesFor(companyId: string, where: object): Promise<AccountBalance[]> {
-  const [grouped, accounts] = await Promise.all([
-    db.journalLine.groupBy({
-      by: ["accountId"],
-      where: { companyId, ...where },
-      _sum: { debitCents: true, creditCents: true },
-    }),
-    db.account.findMany({
-      where: { companyId },
-      select: { id: true, code: true, name: true, type: true, subtype: true },
-      orderBy: { code: "asc" },
-    }),
-  ]);
-
-  const sums = new Map(grouped.map((g) => [g.accountId, g._sum]));
+function join(accounts: Account[], sums: Map<string, AccountSum>): AccountBalance[] {
   return accounts.map((a) => {
     const s = sums.get(a.id);
     const debitCents = s?.debitCents ?? 0;
@@ -63,9 +69,27 @@ async function balancesFor(companyId: string, where: object): Promise<AccountBal
   });
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Trial balance
-// ─────────────────────────────────────────────────────────────────────────────
+async function balancesInRange(companyId: string, from: Date, to: Date): Promise<AccountBalance[]> {
+  const [accounts, sums] = await Promise.all([
+    listAccounts(companyId),
+    sumsInRange(companyId, from, to),
+  ]);
+  return join(accounts, sums);
+}
+
+async function balancesUpTo(
+  companyId: string,
+  cutoff: Date,
+  opts: { inclusive?: boolean } = {},
+): Promise<AccountBalance[]> {
+  const [accounts, sums] = await Promise.all([
+    listAccounts(companyId),
+    sumsUpTo(companyId, cutoff, opts),
+  ]);
+  return join(accounts, sums);
+}
+
+// ── Trial balance ───────────────────────────────────────────────────────────
 
 export interface TrialBalanceRow extends AccountBalance {
   openingCents: number;
@@ -76,15 +100,14 @@ export interface TrialBalanceRow extends AccountBalance {
 
 export async function trialBalance(companyId: string, range: DateRange) {
   const [opening, period] = await Promise.all([
-    balancesFor(companyId, { date: { lt: range.from } }),
-    balancesFor(companyId, { date: { gte: range.from, lte: range.to } }),
+    balancesUpTo(companyId, range.from, { inclusive: false }),
+    balancesInRange(companyId, range.from, range.to),
   ]);
   const openingById = new Map(opening.map((o) => [o.accountId, o]));
 
   const rows: TrialBalanceRow[] = period
     .map((p) => {
-      const open = openingById.get(p.accountId);
-      const openingCents = open?.balanceCents ?? 0;
+      const openingCents = openingById.get(p.accountId)?.balanceCents ?? 0;
       return {
         ...p,
         openingCents,
@@ -97,14 +120,14 @@ export async function trialBalance(companyId: string, range: DateRange) {
 
   const totalDebitCents = rows.reduce((s, r) => s + r.periodDebitCents, 0);
   const totalCreditCents = rows.reduce((s, r) => s + r.periodCreditCents, 0);
-
-  // Closing figures restated as debit/credit columns for presentation.
   const closingDebitCents = rows.reduce(
-    (s, r) => s + (NORMAL_BALANCE[r.type] === "DEBIT" ? Math.max(r.closingCents, 0) : Math.max(-r.closingCents, 0)),
+    (s, r) =>
+      s + (NORMAL_BALANCE[r.type] === "DEBIT" ? Math.max(r.closingCents, 0) : Math.max(-r.closingCents, 0)),
     0,
   );
   const closingCreditCents = rows.reduce(
-    (s, r) => s + (NORMAL_BALANCE[r.type] === "CREDIT" ? Math.max(r.closingCents, 0) : Math.max(-r.closingCents, 0)),
+    (s, r) =>
+      s + (NORMAL_BALANCE[r.type] === "CREDIT" ? Math.max(r.closingCents, 0) : Math.max(-r.closingCents, 0)),
     0,
   );
 
@@ -114,33 +137,13 @@ export async function trialBalance(companyId: string, range: DateRange) {
     totalCreditCents,
     closingDebitCents,
     closingCreditCents,
-    balanced: totalDebitCents === totalCreditCents && closingDebitCents === closingCreditCents,
+    balanced:
+      totalDebitCents === totalCreditCents && closingDebitCents === closingCreditCents,
   };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Profit & Loss
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Profit & Loss ───────────────────────────────────────────────────────────
 
-/**
- * The income statement, in presentation order.
- *
- *   net sales - material expenses = gross profit
- *   gross profit - SG&A           = EBITDA
- *   EBITDA - depreciation & amortization = EBIT
- *   EBIT - interest expense + interest income
- *        + other non-operating income - other non-operating expense = EBT
- *   EBT - taxes = net income
- *
- * Every membership decision is by durable account subtype (src/lib/enums.ts),
- * never by account name or code range at report runtime. An account called
- * "Interest received" must not fall below EBITDA because of its label, and a
- * chart that gets renamed must not silently change the shape of the statement.
- *
- * The four things EBITDA is "before" — interest, tax, depreciation,
- * amortization — therefore each need a subtype of their own. So does interest
- * income, which is revenue but belongs below EBIT, not inside it.
- */
 const PL_SECTIONS = [
   { key: "NET_SALES", label: "Net sales", subtypes: [...INCOME_STATEMENT_SUBTYPES.NET_SALES], negate: false },
   { key: "MATERIAL_EXPENSE", label: "Material expenses", subtypes: [...INCOME_STATEMENT_SUBTYPES.MATERIAL_EXPENSE], negate: true },
@@ -153,9 +156,6 @@ const PL_SECTIONS = [
   { key: "TAXES", label: "Taxes", subtypes: [...INCOME_STATEMENT_SUBTYPES.TAXES], negate: true },
 ] as const;
 
-export type PlSectionKey = (typeof PL_SECTIONS)[number]["key"];
-
-/** One reporting period, with the label its column carries. */
 export interface ReportPeriod {
   label: string;
   from: Date;
@@ -167,11 +167,6 @@ export interface StatementAccountRow {
   code: string;
   name: string;
   subtype: string;
-  /**
-   * One figure per period, in the same order as `periods`, already signed the
-   * way the statement presents it: expenses are negative so a column can be
-   * summed straight down.
-   */
   amounts: number[];
 }
 
@@ -179,7 +174,6 @@ export interface StatementSection {
   key: string;
   label: string;
   rows: StatementAccountRow[];
-  /** Section total per period, signed as presented. */
   totals: number[];
 }
 
@@ -194,18 +188,13 @@ export interface IncomeStatement {
   periods: ReportPeriod[];
   currency: string;
   sections: StatementSection[];
-  subtotals: Record<"GROSS_PROFIT" | "EBITDA" | "EBIT" | "EBT" | "NET_INCOME", StatementSubtotal>;
-  /** Percentages per period; null where net sales is zero. */
+  subtotals: Record<
+    "GROSS_PROFIT" | "EBITDA" | "EBIT" | "EBT" | "NET_INCOME",
+    StatementSubtotal
+  >;
   margins: Record<"GROSS" | "EBITDA" | "EBIT" | "NET", (number | null)[]>;
 }
 
-/**
- * The income statement across one or more periods.
- *
- * Each period is aggregated independently through the SAME classification, so a
- * comparison column can never be built on different rules from the column it is
- * compared against.
- */
 export async function incomeStatement(
   companyId: string,
   periods: ReportPeriod[],
@@ -213,17 +202,13 @@ export async function incomeStatement(
 ): Promise<IncomeStatement> {
   const perPeriod = await Promise.all(
     periods.map((period) =>
-      balancesFor(companyId, {
-        date: { gte: period.from, lte: period.to },
-        accountType: { in: ["REVENUE", "EXPENSE"] },
-      }),
+      balancesInRange(companyId, period.from, period.to).then((bs) =>
+        bs.filter((b) => b.type === "REVENUE" || b.type === "EXPENSE"),
+      ),
     ),
   );
 
-  // accountId -> balance, one map per period.
   const byPeriod = perPeriod.map((balances) => new Map(balances.map((b) => [b.accountId, b])));
-  // Every account that moved in ANY period, so a column is never missing a row
-  // its neighbour has.
   const seen = new Map<string, AccountBalance>();
   for (const balances of perPeriod) {
     for (const b of balances) if (!seen.has(b.accountId)) seen.set(b.accountId, b);
@@ -231,17 +216,15 @@ export async function incomeStatement(
 
   const sections: StatementSection[] = [];
   for (const section of PL_SECTIONS) {
-    const members = [...seen.values()].filter((a) => (section.subtypes as readonly string[]).includes(a.subtype));
-
+    const members = [...seen.values()].filter((a) =>
+      (section.subtypes as readonly string[]).includes(a.subtype),
+    );
     const rows: StatementAccountRow[] = members
       .map((account) => ({
         accountId: account.accountId,
         code: account.code,
         name: account.name,
         subtype: account.subtype,
-        // `balanceCents` is positive in the account's natural direction, so an
-        // expense of 550 arrives as +550. The statement shows costs as
-        // negative, hence the flip.
         amounts: byPeriod.map((map) => {
           const value = map.get(account.accountId)?.balanceCents ?? 0;
           return section.negate ? -value : value;
@@ -269,15 +252,14 @@ export async function incomeStatement(
   const otherExpense = total("OTHER_EXPENSE");
   const taxes = total("TAXES");
 
-  // Every cost section is already negative, so each step is an addition. That
-  // keeps the arithmetic identical to reading the printed column downwards.
   const each = <T,>(fn: (i: number) => T) => periods.map((_, i) => fn(i));
   const grossProfit = each((i) => netSales[i] + material[i]);
   const ebitda = each((i) => grossProfit[i] + sga[i]);
   const ebit = each((i) => ebitda[i] + da[i]);
-  const ebt = each((i) => ebit[i] + interestExpense[i] + interestIncome[i] + otherIncome[i] + otherExpense[i]);
+  const ebt = each(
+    (i) => ebit[i] + interestExpense[i] + interestIncome[i] + otherIncome[i] + otherExpense[i],
+  );
   const netIncome = each((i) => ebt[i] + taxes[i]);
-
   const margin = (values: number[]) =>
     each((i) => (netSales[i] === 0 ? null : (values[i] / netSales[i]) * 100));
 
@@ -301,29 +283,13 @@ export async function incomeStatement(
   };
 }
 
-/**
- * Single-period figures in the shape the dashboard and cash-flow statement
- * expect.
- *
- * Kept as a thin wrapper over `incomeStatement` so there is exactly one
- * classification and one net-income calculation in the codebase — a second
- * implementation is how a dashboard and a statement start disagreeing.
- */
-export async function profitAndLoss(
-  companyId: string,
-  range: DateRange,
-  comparison?: DateRange,
-) {
+export async function profitAndLoss(companyId: string, range: DateRange, comparison?: DateRange) {
   const periods: ReportPeriod[] = [{ label: "Current", ...range }];
   if (comparison) periods.push({ label: "Prior", ...comparison });
-
   const statement = await incomeStatement(companyId, periods);
-  const now = (values: number[]) => values[0];
-  const was = (values: number[]) => (comparison ? values[1] : 0);
+  const now = (v: number[]) => v[0];
+  const was = (v: number[]) => (comparison ? v[1] : 0);
   const section = (key: string) => statement.sections.find((s) => s.key === key)!;
-
-  // Costs are negative inside the statement; the legacy shape reports them as
-  // positive magnitudes, which is what existing callers expect.
   const expenseTotal = (key: string) => -now(section(key).totals);
 
   return {
@@ -341,7 +307,6 @@ export async function profitAndLoss(
     comparisonIncomeBeforeTaxCents: was(statement.subtotals.EBT.amounts),
     netIncomeCents: now(statement.subtotals.NET_INCOME.amounts),
     comparisonNetIncomeCents: was(statement.subtotals.NET_INCOME.amounts),
-    /** EBIT. Kept under its previous name for callers that read operating income. */
     operatingIncomeCents: now(statement.subtotals.EBIT.amounts),
     revenueCents: now(section("NET_SALES").totals),
     comparisonRevenueCents: was(section("NET_SALES").totals),
@@ -358,36 +323,28 @@ export async function profitAndLoss(
   };
 }
 
-/** Month-by-month revenue / expense / net income for trend charts and columns. */
 export async function monthlyPerformance(companyId: string, range: DateRange) {
-  const lines = await db.journalLine.groupBy({
-    by: ["accountType", "date"],
-    where: { companyId, date: { gte: range.from, lte: range.to }, accountType: { in: ["REVENUE", "EXPENSE"] } },
-    _sum: { debitCents: true, creditCents: true },
-  });
-
   const buckets = new Map<string, { month: Date; revenueCents: number; expenseCents: number }>();
   for (const month of monthsBetween(range.from, range.to)) {
     buckets.set(month.toISOString(), { month, revenueCents: 0, expenseCents: 0 });
   }
-
-  for (const line of lines) {
-    const month = new Date(Date.UTC(line.date.getUTCFullYear(), line.date.getUTCMonth(), 1));
-    const bucket = buckets.get(month.toISOString());
-    if (!bucket) continue;
-    const value = NORMAL_BALANCE[line.accountType as AccountType] === "CREDIT"
-      ? (line._sum.creditCents ?? 0) - (line._sum.debitCents ?? 0)
-      : (line._sum.debitCents ?? 0) - (line._sum.creditCents ?? 0);
-    if (line.accountType === "REVENUE") bucket.revenueCents += value;
-    else bucket.expenseCents += value;
+  for (const month of monthsBetween(range.from, range.to)) {
+    const balances = (await balancesInRange(companyId, startOfMonth(month), endOfMonth(month))).filter(
+      (b) => b.type === "REVENUE" || b.type === "EXPENSE",
+    );
+    const bucket = buckets.get(month.toISOString())!;
+    for (const b of balances) {
+      if (b.type === "REVENUE") bucket.revenueCents += b.balanceCents;
+      else bucket.expenseCents += b.balanceCents;
+    }
   }
-
-  return [...buckets.values()].map((b) => ({ ...b, netIncomeCents: b.revenueCents - b.expenseCents }));
+  return [...buckets.values()].map((b) => ({
+    ...b,
+    netIncomeCents: b.revenueCents - b.expenseCents,
+  }));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Balance Sheet
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Balance Sheet ───────────────────────────────────────────────────────────
 
 const BS_SECTIONS = [
   { key: "CURRENT_ASSETS", label: "Current assets", type: "ASSET", subtypes: ["BANK", "CASH", "ACCOUNTS_RECEIVABLE", "OTHER_CURRENT_ASSET", "PREPAID_EXPENSE", "INVENTORY", "TAX_RECOVERABLE"] },
@@ -399,8 +356,10 @@ const BS_SECTIONS = [
 
 export async function balanceSheet(companyId: string, asOf: Date, comparisonDate?: Date) {
   const [current, prior] = await Promise.all([
-    balancesFor(companyId, { date: { lte: asOf } }),
-    comparisonDate ? balancesFor(companyId, { date: { lte: comparisonDate } }) : Promise.resolve([] as AccountBalance[]),
+    balancesUpTo(companyId, asOf, { inclusive: true }),
+    comparisonDate
+      ? balancesUpTo(companyId, comparisonDate, { inclusive: true })
+      : Promise.resolve([] as AccountBalance[]),
   ]);
   const priorById = new Map(prior.map((p) => [p.accountId, p.balanceCents]));
 
@@ -418,12 +377,6 @@ export async function balanceSheet(companyId: string, asOf: Date, comparisonDate
     };
   });
 
-  /**
-   * Earnings not yet swept into Retained Earnings by a year-end close. Because
-   * closing entries zero the P&L accounts, the all-time revenue-less-expense
-   * balance IS the unclosed amount — no fiscal-year arithmetic needed, and it
-   * makes the equation tie for companies mid-year or never closed.
-   */
   const currentEarningsCents =
     current.filter((a) => a.type === "REVENUE").reduce((s, a) => s + a.balanceCents, 0) -
     current.filter((a) => a.type === "EXPENSE").reduce((s, a) => s + a.balanceCents, 0);
@@ -433,7 +386,8 @@ export async function balanceSheet(companyId: string, asOf: Date, comparisonDate
 
   const find = (key: string) => sections.find((s) => s.key === key)!;
   const totalAssetsCents = find("CURRENT_ASSETS").totalCents + find("FIXED_ASSETS").totalCents;
-  const totalLiabilitiesCents = find("CURRENT_LIABILITIES").totalCents + find("LONG_TERM_LIABILITIES").totalCents;
+  const totalLiabilitiesCents =
+    find("CURRENT_LIABILITIES").totalCents + find("LONG_TERM_LIABILITIES").totalCents;
   const totalEquityCents = find("EQUITY").totalCents + currentEarningsCents;
 
   return {
@@ -446,82 +400,11 @@ export async function balanceSheet(companyId: string, asOf: Date, comparisonDate
     totalLiabilitiesCents,
     totalEquityCents,
     totalLiabilitiesAndEquityCents: totalLiabilitiesCents + totalEquityCents,
-    /** Must be zero. Anything else is a ledger integrity exception (§5.3). */
     outOfBalanceCents: totalAssetsCents - (totalLiabilitiesCents + totalEquityCents),
   };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// General Ledger
-// ─────────────────────────────────────────────────────────────────────────────
-
-export async function generalLedger(
-  companyId: string,
-  range: DateRange,
-  options: { accountIds?: string[]; sourceType?: string; limit?: number } = {},
-) {
-  const accounts = await db.account.findMany({
-    where: { companyId, ...(options.accountIds?.length ? { id: { in: options.accountIds } } : {}) },
-    orderBy: { code: "asc" },
-  });
-
-  const opening = await db.journalLine.groupBy({
-    by: ["accountId"],
-    where: { companyId, date: { lt: range.from }, ...(options.accountIds?.length ? { accountId: { in: options.accountIds } } : {}) },
-    _sum: { debitCents: true, creditCents: true },
-  });
-  const openingById = new Map(
-    opening.map((o) => [o.accountId, (o._sum.debitCents ?? 0) - (o._sum.creditCents ?? 0)]),
-  );
-
-  const lines = await db.journalLine.findMany({
-    where: {
-      companyId,
-      date: { gte: range.from, lte: range.to },
-      ...(options.accountIds?.length ? { accountId: { in: options.accountIds } } : {}),
-      ...(options.sourceType ? { journalEntry: { sourceType: options.sourceType } } : {}),
-    },
-    include: {
-      journalEntry: { select: { entryNo: true, sourceType: true, sourceNumber: true, memo: true, status: true } },
-      customer: { select: { name: true } },
-      vendor: { select: { name: true } },
-    },
-    orderBy: [{ date: "asc" }, { journalEntryId: "asc" }, { lineNo: "asc" }],
-    take: options.limit ?? 5000,
-  });
-
-  const byAccount = new Map<string, typeof lines>();
-  for (const line of lines) {
-    const list = byAccount.get(line.accountId) ?? [];
-    list.push(line);
-    byAccount.set(line.accountId, list);
-  }
-
-  return accounts
-    .map((account) => {
-      const accountLines = byAccount.get(account.id) ?? [];
-      const isDebitNatural = NORMAL_BALANCE[account.type as AccountType] === "DEBIT";
-      const openingSigned = openingById.get(account.id) ?? 0;
-      let running = openingSigned;
-      const rows = accountLines.map((line) => {
-        running += line.debitCents - line.creditCents;
-        return { ...line, runningBalanceCents: isDebitNatural ? running : -running };
-      });
-      return {
-        account,
-        openingBalanceCents: isDebitNatural ? openingSigned : -openingSigned,
-        rows,
-        totalDebitCents: rows.reduce((s, r) => s + r.debitCents, 0),
-        totalCreditCents: rows.reduce((s, r) => s + r.creditCents, 0),
-        closingBalanceCents: isDebitNatural ? running : -running,
-      };
-    })
-    .filter((g) => g.rows.length > 0 || g.openingBalanceCents !== 0);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Cash Flow (indirect)
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Cash flow (indirect) ────────────────────────────────────────────────────
 
 const CASH_FLOW_CLASS: Record<string, "OPERATING" | "INVESTING" | "FINANCING"> = {
   ACCOUNTS_RECEIVABLE: "OPERATING",
@@ -529,8 +412,6 @@ const CASH_FLOW_CLASS: Record<string, "OPERATING" | "INVESTING" | "FINANCING"> =
   PREPAID_EXPENSE: "OPERATING",
   TAX_RECOVERABLE: "OPERATING",
   INVENTORY: "OPERATING",
-  // Accumulated depreciation sits in operating so the depreciation expense in
-  // net income is added back rather than showing up as an investing inflow.
   ACCUMULATED_DEPRECIATION: "OPERATING",
   ACCOUNTS_PAYABLE: "OPERATING",
   CREDIT_CARD: "OPERATING",
@@ -545,26 +426,23 @@ const CASH_FLOW_CLASS: Record<string, "OPERATING" | "INVESTING" | "FINANCING"> =
   DRAWINGS: "FINANCING",
 };
 
-/**
- * Built mechanically: for every non-cash account, the negative of its net debit
- * movement is a cash effect. Summing all of them necessarily equals the actual
- * movement in the bank accounts, so this statement always ties to cash.
- */
 export async function cashFlow(companyId: string, range: DateRange) {
-  const movements = await balancesFor(companyId, { date: { gte: range.from, lte: range.to } });
-  const openingCash = await balancesFor(companyId, { date: { lt: range.from } });
+  const [movements, openingCash] = await Promise.all([
+    balancesInRange(companyId, range.from, range.to),
+    balancesUpTo(companyId, range.from, { inclusive: false }),
+  ]);
 
-  const sections: Record<"OPERATING" | "INVESTING" | "FINANCING", { name: string; code: string; amountCents: number }[]> = {
-    OPERATING: [], INVESTING: [], FINANCING: [],
-  };
+  const sections: Record<
+    "OPERATING" | "INVESTING" | "FINANCING",
+    { name: string; code: string; amountCents: number }[]
+  > = { OPERATING: [], INVESTING: [], FINANCING: [] };
 
   let netIncomeCents = 0;
   for (const account of movements) {
     const netDebit = account.debitCents - account.creditCents;
     if ((CASH_ASSET_SUBTYPES as readonly string[]).includes(account.subtype)) continue;
-
     if (account.type === "REVENUE" || account.type === "EXPENSE") {
-      netIncomeCents += account.type === "REVENUE" ? -netDebit : -netDebit;
+      netIncomeCents += -netDebit;
       continue;
     }
     if (netDebit === 0) continue;
@@ -593,29 +471,158 @@ export async function cashFlow(companyId: string, range: DateRange) {
     netChangeCents: operatingCents + investingCents + financingCents,
     cashOpeningCents,
     cashClosingCents: cashOpeningCents + cashMovementCents,
-    /** Sanity check — should be zero. */
     tieOutCents: operatingCents + investingCents + financingCents - cashMovementCents,
   };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Shared helpers
-// ─────────────────────────────────────────────────────────────────────────────
+// ── General ledger (line-level) ─────────────────────────────────────────────
+
+export async function generalLedger(
+  companyId: string,
+  range: DateRange,
+  options: { accountIds?: string[]; sourceType?: string; limit?: number } = {},
+) {
+  const accounts = await listAccounts(companyId);
+  const wanted = options.accountIds?.length
+    ? accounts.filter((a) => options.accountIds!.includes(a.id))
+    : accounts;
+
+  const opening = await sumsUpTo(companyId, range.from, { inclusive: false });
+
+  const snap = await sub(companyId, "journalLines")
+    .where("date", ">=", toTimestamp(range.from))
+    .where("date", "<=", toTimestamp(range.to))
+    .orderBy("date")
+    .get();
+
+  interface GlLine {
+    id: string;
+    accountId: string;
+    journalEntryId: string;
+    lineNo: number;
+    date: Date;
+    debitCents: number;
+    creditCents: number;
+    description: string | null;
+    customerId: string | null;
+    vendorId: string | null;
+  }
+  const allLines: GlLine[] = snap.docs.map((d) => {
+    const raw = d.data();
+    return {
+      id: d.id,
+      accountId: raw.accountId,
+      journalEntryId: raw.journalEntryId,
+      lineNo: raw.lineNo ?? 0,
+      date: (raw.date as FirebaseFirestore.Timestamp).toDate(),
+      debitCents: raw.debitCents ?? 0,
+      creditCents: raw.creditCents ?? 0,
+      description: raw.description ?? null,
+      customerId: raw.customerId ?? null,
+      vendorId: raw.vendorId ?? null,
+    };
+  });
+
+  // The entry each line belongs to, plus the names of any party tagged on a
+  // line — the ledger view links to the source document and shows who it was.
+  const entrySnap = await sub(companyId, "journalEntries")
+    .where("date", ">=", toTimestamp(range.from))
+    .where("date", "<=", toTimestamp(range.to))
+    .get();
+  const entryById = new Map<
+    string,
+    { entryNo: string; memo: string | null; status: string; sourceType: string; sourceNumber: string | null }
+  >();
+  for (const d of entrySnap.docs) {
+    const raw = d.data();
+    entryById.set(d.id, {
+      entryNo: raw.entryNo ?? "",
+      memo: raw.memo ?? null,
+      status: raw.status ?? "POSTED",
+      sourceType: raw.sourceType ?? "",
+      sourceNumber: raw.sourceNumber ?? null,
+    });
+  }
+  const [customers, vendors] = await Promise.all([
+    getCustomerNames(companyId, allLines.map((l) => l.customerId)),
+    getVendorNames(companyId, allLines.map((l) => l.vendorId)),
+  ]);
+
+  const byAccount = new Map<string, GlLine[]>();
+  for (const line of allLines) {
+    if (options.accountIds?.length && !options.accountIds.includes(line.accountId)) continue;
+    const list = byAccount.get(line.accountId) ?? [];
+    list.push(line);
+    byAccount.set(line.accountId, list);
+  }
+
+  return wanted
+    .map((account) => {
+      const lines = (byAccount.get(account.id) ?? []).sort(
+        (a, b) => a.date.getTime() - b.date.getTime() || a.lineNo - b.lineNo,
+      );
+      const isDebitNatural = NORMAL_BALANCE[account.type as AccountType] === "DEBIT";
+      const o = opening.get(account.id);
+      const openingSigned = (o?.debitCents ?? 0) - (o?.creditCents ?? 0);
+      let running = openingSigned;
+      const rows = lines.map((line) => {
+        running += line.debitCents - line.creditCents;
+        const je = entryById.get(line.journalEntryId) ?? {
+          entryNo: "",
+          memo: null,
+          status: "POSTED",
+          sourceType: "",
+          sourceNumber: null,
+        };
+        return {
+          ...line,
+          runningBalanceCents: isDebitNatural ? running : -running,
+          journalEntry: je,
+          customer: line.customerId ? { name: customers.get(line.customerId) ?? "" } : null,
+          vendor: line.vendorId ? { name: vendors.get(line.vendorId) ?? "" } : null,
+        };
+      });
+      return {
+        account,
+        openingBalanceCents: isDebitNatural ? openingSigned : -openingSigned,
+        rows,
+        totalDebitCents: rows.reduce((s, r) => s + r.debitCents, 0),
+        totalCreditCents: rows.reduce((s, r) => s + r.creditCents, 0),
+        closingBalanceCents: isDebitNatural ? running : -running,
+      };
+    })
+    .filter((g) => g.rows.length > 0 || g.openingBalanceCents !== 0);
+}
+
+// ── Shared helpers ─────────────────────────────────────────────────────────
+
+async function getCustomerNames(
+  companyId: string,
+  ids: (string | null)[],
+): Promise<Map<string, string>> {
+  const wanted = new Set(ids.filter((x): x is string => Boolean(x)));
+  if (wanted.size === 0) return new Map();
+  const rows = await listCustomers(companyId);
+  return new Map(rows.filter((r) => wanted.has(r.id)).map((r) => [r.id, r.name]));
+}
+
+async function getVendorNames(
+  companyId: string,
+  ids: (string | null)[],
+): Promise<Map<string, string>> {
+  const wanted = new Set(ids.filter((x): x is string => Boolean(x)));
+  if (wanted.size === 0) return new Map();
+  const rows = await listVendors(companyId);
+  return new Map(rows.filter((r) => wanted.has(r.id)).map((r) => [r.id, r.name]));
+}
 
 export async function currentFiscalRange(companyId: string, asOf = new Date()): Promise<DateRange> {
-  const company = await db.company.findUniqueOrThrow({
-    where: { id: companyId },
-    select: { fiscalYearStartMonth: true },
-  });
+  const company = await getCompanyOrThrow(companyId);
   const year = fiscalYearOf(asOf, company.fiscalYearStartMonth);
   const { start, end } = fiscalYearRange(year, company.fiscalYearStartMonth);
   return { from: start, to: end < asOf ? end : endOfMonth(asOf) };
 }
 
 export async function accountBalance(companyId: string, accountId: string, asOf: Date) {
-  const result = await db.journalLine.aggregate({
-    where: { companyId, accountId, date: { lte: asOf } },
-    _sum: { debitCents: true, creditCents: true },
-  });
-  return (result._sum.debitCents ?? 0) - (result._sum.creditCents ?? 0);
+  return accountRawBalanceAsOf(companyId, accountId, asOf);
 }

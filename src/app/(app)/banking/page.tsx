@@ -3,7 +3,7 @@ import { listBankTransactions, bankAccounts as bankAccountsRepo } from "@/server
 import { getAccountsBySystemKeys, listAccounts } from "@/server/db/accounts";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
-import { detectTransfers } from "@/server/banking/matching-fs";
+import { detectTransfers } from "@/server/banking/matching";
 import { formatDate } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
 import { Card, CardHeader, LinkButton, Money, PageHeader, StatusBadge, Table, Td, Th, Tr } from "@/components/ui";

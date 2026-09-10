@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { requireCompany } from "@/server/auth/context";
-import { dashboardData } from "@/server/reports/dashboard-fs";
+import { dashboardData } from "@/server/reports/dashboard";
 import { formatDate, formatDateLong } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
 import { SOURCE_LABELS } from "@/lib/enums";

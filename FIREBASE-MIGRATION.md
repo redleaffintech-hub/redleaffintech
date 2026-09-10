@@ -451,9 +451,47 @@ Documented as a deliberate deviation from strict single-transaction atomicity.
   (2 companies, demo data). Live write needs a `redleaf-fintech-e4c4d` service
   account (`GOOGLE_APPLICATION_CREDENTIALS` / `FIREBASE_SERVICE_ACCOUNT`) — set
   at cutover.
-- [ ] **Phase 8 — cutover**: enable Blaze, deploy App Hosting backend, smoke
-  test, move DNS, remove Prisma/`prisma/`, `@prisma/*`, `pg`, `src/lib/db.ts`,
-  `src/generated/prisma`, `netlify.toml`, `render.yaml`.
+- **Phase 8 — cutover**
+  - [x] **8a — code cutover (done, buildable).**
+    - `reports/exports.ts` (CSV) rewired onto the `-fs` reports + repos.
+    - **Deleted** the 19 old Prisma engine modules
+      (`accounting/{fiscal-calendar,journals,ledger}`,
+      `banking/{import,matching,reconcile}`,
+      `documents/{bills,credit-notes,estimates,expenses,invoices,payments,numbering}`,
+      `inventory/costing`, `payroll/pay-runs`,
+      `reports/{aging,dashboard,financials,tax}`).
+    - **Renamed** every `*-fs.ts` → its canonical name (`ledger-fs.ts` →
+      `ledger.ts`, `financials-fs.ts` → `financials.ts`, …) and rewrote every
+      `@/server/**-fs` / `./x-fs` import across `src/`. `reports/ledger-fs.ts`
+      → `reports/ledger.ts`; `banking/categorize-fs.ts` → `banking/categorize.ts`.
+      **Kept `tax/engine-fs.ts`** (its twin `tax/engine.ts` is the *pure*
+      arithmetic, imported by client components — cannot carry `server-only`).
+    - `tax/engine.ts` stripped of its three Prisma-`Tx` helpers (`loadTaxCodes`
+      / `findTaxPeriod` / `recordTaxEntries`) — now pure.
+    - `banking/import.ts` re-inlines the pure CSV/OFX parsers that lived in the
+      deleted twin.
+    - `src/middleware.ts` → `src/proxy.ts` (`export function proxy` — Next 16
+      native; the Netlify-adapter `middleware` name is gone).
+    - Deleted `netlify.toml`, `render.yaml`. `package.json` `build` →
+      `next build --webpack` (no `prisma migrate deploy`; App Hosting builds
+      without a database connection). `apphosting.yaml` already configured for
+      `redleaf-fintech-e4c4d` + ADC + Cloud Secret Manager `SESSION_SECRET`.
+    - **No file under `src/`** imports `@/lib/db` any more. Production build
+      green.
+  - [ ] **8b — deploy (needs the account owner).** Enable Blaze on
+    `redleaf-fintech-e4c4d`; `firebase apphosting:secrets:set SESSION_SECRET`;
+    with a service-account key, `npm run migrate:firestore -- --yes` (reads the
+    live Neon DB — Prisma + `src/lib/db.ts` + `prisma/schema.prisma` are kept
+    for exactly this) and confirm the verification pass is clean; `firebase
+    apphosting:backends:create` / push to the connected branch to build & deploy;
+    smoke-test sign-in, a posted invoice, a report, a bank import; move DNS.
+  - [ ] **8c — final Prisma removal (after 8b succeeds).** Delete
+    `scripts/migrate-to-firestore.ts` and the other Prisma-only scripts
+    (`verify.ts`, `census.ts`, `backfill-*.ts`, `seed-plans.ts`,
+    `create-platform-admin.ts`, `prisma/seed.ts`) or port them to Firestore;
+    `src/lib/db.ts`, `prisma/`, `src/generated/prisma`; `@prisma/client`,
+    `@prisma/adapter-pg`, `prisma`, `pg`, `@types/pg` from `package.json`;
+    `postinstall` and `db:migrate` scripts; the `DATABASE_URL` env.
 
 ## 8. Rollback
 

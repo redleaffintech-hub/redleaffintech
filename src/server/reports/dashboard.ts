@@ -1,94 +1,124 @@
+import "server-only";
+
 /**
- * Dashboard aggregates (spec §4 Dashboard: KPIs, cash, revenue, expenses,
- * AR/AP, tax, alerts).
+ * Dashboard aggregates (§4) — Firestore implementation. Every number is a view
+ * onto the same ledger/subledger data the statements use.
  *
- * Every number here is derived from the ledger or the subledgers — the tiles
- * are a view onto the same data the statements use, never a separate tally.
+ * `bankQueue` and `unpaidRecurring` read collections that Phase 5d migrates
+ * (banking, recurring); before then they are simply 0.
  */
 
-import { db } from "@/lib/db";
 import { CASH_ASSET_SUBTYPES } from "@/lib/enums";
-import { addDays, addMonths, endOfMonth, monthsBetween, startOfMonth, today, utcDate, fiscalYearOf, fiscalYearRange } from "@/lib/dates";
-import { arAging, apAging, DEFAULT_BUCKETS, bucketLabels } from "./aging";
+import {
+  addDays,
+  addMonths,
+  endOfMonth,
+  fiscalYearOf,
+  fiscalYearRange,
+  monthsBetween,
+  startOfMonth,
+  today,
+} from "@/lib/dates";
+import { getCompanyOrThrow } from "@/server/db/companies";
+import { listAccounts } from "@/server/db/accounts";
+import { listFiscalPeriods } from "@/server/db/fiscal-periods";
+import { sub } from "@/server/db/firestore";
+import { apAging, arAging, bucketLabels, DEFAULT_BUCKETS } from "./aging";
 import { monthlyPerformance, profitAndLoss } from "./financials";
+import { accountRawBalanceAsOf } from "./ledger";
 import { taxSummary } from "./tax";
+
+function shortMonth(date: Date): string {
+  return new Intl.DateTimeFormat("en-CA", { month: "short", timeZone: "UTC" }).format(date);
+}
+function monthsElapsed(from: Date, to: Date): number {
+  return (to.getUTCFullYear() - from.getUTCFullYear()) * 12 + (to.getUTCMonth() - from.getUTCMonth());
+}
 
 export async function dashboardData(companyId: string) {
   const asOf = today();
-  const company = await db.company.findUniqueOrThrow({
-    where: { id: companyId },
-    select: { fiscalYearStartMonth: true, province: true },
-  });
+  const company = await getCompanyOrThrow(companyId);
 
   const fiscalYear = fiscalYearOf(asOf, company.fiscalYearStartMonth);
   const { start: fyStart } = fiscalYearRange(fiscalYear, company.fiscalYearStartMonth);
   const priorFy = fiscalYearRange(fiscalYear - 1, company.fiscalYearStartMonth);
   const ytd = { from: fyStart, to: asOf };
-  // Charts cover the fiscal year to date, extended backwards only if the year
-  // is young, so the axis never opens with a run of empty months.
   const chartRange = {
-    from: monthsBetween(fyStart, asOf).length >= 4 ? fyStart : startOfMonth(addMonths(asOf, -5)),
+    from:
+      monthsBetween(fyStart, asOf).length >= 4
+        ? fyStart
+        : startOfMonth(addMonths(asOf, -5)),
     to: asOf,
   };
 
-  const [pl, priorPl, performance, ar, ap, cashAccounts, bankQueue, tax, recentEntries, periods, unpaidRecurring] =
-    await Promise.all([
-      profitAndLoss(companyId, ytd),
-      profitAndLoss(companyId, { from: priorFy.start, to: addMonths(priorFy.start, monthsElapsed(fyStart, asOf)) }),
-      monthlyPerformance(companyId, chartRange),
-      arAging(companyId, asOf),
-      apAging(companyId, asOf),
-      db.account.findMany({
-        where: { companyId, subtype: { in: [...CASH_ASSET_SUBTYPES, "CREDIT_CARD"] }, isActive: true },
-        select: { id: true, code: true, name: true, subtype: true, type: true },
-        orderBy: { code: "asc" },
-      }),
-      db.bankTransaction.count({ where: { companyId, status: "UNMATCHED" } }),
-      currentTaxPosition(companyId, asOf),
-      db.journalEntry.findMany({
-        where: { companyId },
-        orderBy: [{ date: "desc" }, { createdAt: "desc" }],
-        take: 8,
-        select: { id: true, entryNo: true, date: true, memo: true, sourceType: true, sourceNumber: true, totalDebitCents: true, status: true },
-      }),
-      db.fiscalPeriod.findMany({
-        where: { companyId, fiscalYear },
-        orderBy: { periodNumber: "asc" },
-        select: { id: true, name: true, status: true, startDate: true, endDate: true, periodNumber: true },
-      }),
-      db.recurringTemplate.count({ where: { companyId, isActive: true } }),
-    ]);
-
-  // Cash: closing balance per month across every bank & cash account.
+  const accounts = await listAccounts(companyId);
   const cashSubtypes = CASH_ASSET_SUBTYPES as readonly string[];
-  const cashLines = await db.journalLine.findMany({
-    where: { companyId, accountId: { in: cashAccounts.filter((a) => cashSubtypes.includes(a.subtype)).map((a) => a.id) } },
-    select: { date: true, debitCents: true, creditCents: true },
-    orderBy: { date: "asc" },
-  });
+  const cashAccounts = accounts.filter(
+    (a) => a.isActive && [...cashSubtypes, "CREDIT_CARD"].includes(a.subtype),
+  );
+
+  const [pl, priorPl, performance, ar, ap, tax] = await Promise.all([
+    profitAndLoss(companyId, ytd),
+    profitAndLoss(companyId, {
+      from: priorFy.start,
+      to: addMonths(priorFy.start, monthsElapsed(fyStart, asOf)),
+    }),
+    monthlyPerformance(companyId, chartRange),
+    arAging(companyId, asOf),
+    apAging(companyId, asOf),
+    currentTaxPosition(companyId, asOf),
+  ]);
+
+  // Cash on hand + monthly trend from the bank/cash account balances.
+  const cashAccountIds = cashAccounts
+    .filter((a) => cashSubtypes.includes(a.subtype))
+    .map((a) => a.id);
+  const cardAccountIds = cashAccounts.filter((a) => a.subtype === "CREDIT_CARD").map((a) => a.id);
 
   const months = monthsBetween(chartRange.from, asOf);
-  let running = 0;
-  let cursor = 0;
-  const cashTrend = months.map((month) => {
-    const cutoff = endOfMonth(month);
-    while (cursor < cashLines.length && cashLines[cursor].date <= cutoff) {
-      running += cashLines[cursor].debitCents - cashLines[cursor].creditCents;
-      cursor++;
+  const cashTrend: { label: string; value: number }[] = [];
+  for (const month of months) {
+    let total = 0;
+    for (const id of cashAccountIds) {
+      total += await accountRawBalanceAsOf(companyId, id, endOfMonth(month));
     }
-    return { label: shortMonth(month), value: running };
-  });
-  const cashOnHandCents = cashLines.reduce((s, l) => s + l.debitCents - l.creditCents, 0);
+    cashTrend.push({ label: shortMonth(month), value: total });
+  }
+  let cashOnHandCents = 0;
+  for (const id of cashAccountIds) cashOnHandCents += await accountRawBalanceAsOf(companyId, id, asOf);
+  let creditCardOwingCents = 0;
+  for (const id of cardAccountIds) creditCardOwingCents += -(await accountRawBalanceAsOf(companyId, id, asOf));
 
-  const cardBalances = await db.journalLine.groupBy({
-    by: ["accountId"],
-    where: { companyId, accountId: { in: cashAccounts.filter((a) => a.subtype === "CREDIT_CARD").map((a) => a.id) } },
-    _sum: { debitCents: true, creditCents: true },
+  const recentSnap = await sub(companyId, "journalEntries").orderBy("date", "desc").limit(8).get();
+  const recentEntries = recentSnap.docs.map((d) => {
+    const r = d.data();
+    return {
+      id: d.id,
+      entryNo: r.entryNo,
+      date: (r.date as FirebaseFirestore.Timestamp).toDate(),
+      memo: r.memo ?? null,
+      sourceType: r.sourceType,
+      sourceNumber: r.sourceNumber ?? null,
+      totalDebitCents: r.totalDebitCents ?? 0,
+      status: r.status,
+    };
   });
-  const creditCardOwingCents = cardBalances.reduce(
-    (s, c) => s + ((c._sum.creditCents ?? 0) - (c._sum.debitCents ?? 0)),
-    0,
-  );
+
+  const periods = (await listFiscalPeriods(companyId, { fiscalYear })).map((p) => ({
+    id: p.id,
+    name: p.name,
+    status: p.status,
+    startDate: p.startDate,
+    endDate: p.endDate,
+    periodNumber: p.periodNumber,
+  }));
+
+  const bankQueue = (
+    await sub(companyId, "bankTransactions").where("status", "==", "UNMATCHED").get()
+  ).size;
+  const unpaidRecurring = (
+    await sub(companyId, "recurring").where("isActive", "==", true).get()
+  ).size;
 
   const dueSoonCents = ap.rows
     .flatMap((r) => r.documents)
@@ -110,7 +140,8 @@ export async function dashboardData(companyId: string) {
       priorExpenseCents: priorPl.totalExpenseCents,
       netIncomeCents: pl.netIncomeCents,
       priorNetIncomeCents: priorPl.netIncomeCents,
-      grossMarginPercent: pl.revenueCents > 0 ? (pl.grossProfitCents / pl.revenueCents) * 100 : 0,
+      grossMarginPercent:
+        pl.revenueCents > 0 ? (pl.grossProfitCents / pl.revenueCents) * 100 : 0,
     },
     cashTrend,
     chartFrom: chartRange.from,
@@ -149,20 +180,25 @@ export async function dashboardData(companyId: string) {
 }
 
 async function currentTaxPosition(companyId: string, asOf: Date) {
-  const period = await db.taxPeriod.findFirst({
-    where: { companyId, startDate: { lte: asOf }, endDate: { gte: asOf } },
-  });
-  if (!period) return null;
+  const snap = await sub(companyId, "taxPeriods")
+    .where("startDate", "<=", asOf)
+    .orderBy("startDate", "desc")
+    .limit(1)
+    .get();
+  if (snap.empty) return null;
+  const p = snap.docs[0].data();
+  const startDate = (p.startDate as FirebaseFirestore.Timestamp).toDate();
+  const endDate = (p.endDate as FirebaseFirestore.Timestamp).toDate();
+  if (endDate < asOf) return null;
 
-  const summary = await taxSummary(companyId, { from: period.startDate, to: period.endDate });
-  const dueDate = addDays(endOfMonth(addMonths(period.endDate, 1)), 0);
-
+  const summary = await taxSummary(companyId, { from: startDate, to: endDate });
+  const dueDate = endOfMonth(addMonths(endDate, 1));
   return {
-    periodId: period.id,
-    periodName: period.name,
-    status: period.status,
-    startDate: period.startDate,
-    endDate: period.endDate,
+    periodId: snap.docs[0].id,
+    periodName: p.name,
+    status: p.status,
+    startDate,
+    endDate,
     dueDate,
     daysUntilDue: Math.round((dueDate.getTime() - asOf.getTime()) / 86_400_000),
     collectedCents: summary.totals.taxCollectedCents,
@@ -171,13 +207,3 @@ async function currentTaxPosition(companyId: string, asOf: Date) {
     reconciled: summary.reconciliation.reconciled,
   };
 }
-
-function monthsElapsed(from: Date, to: Date): number {
-  return (to.getUTCFullYear() - from.getUTCFullYear()) * 12 + (to.getUTCMonth() - from.getUTCMonth());
-}
-
-function shortMonth(date: Date): string {
-  return new Intl.DateTimeFormat("en-CA", { month: "short", timeZone: "UTC" }).format(date);
-}
-
-export { utcDate };

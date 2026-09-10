@@ -3,7 +3,7 @@ import { listTaxPeriods } from "@/server/db/tax-periods";
 import { listTaxCodes } from "@/server/db/tax-codes";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES, can } from "@/lib/permissions";
-import { taxPeriodReturn } from "@/server/reports/tax-fs";
+import { taxPeriodReturn } from "@/server/reports/tax";
 import { addMonths, endOfMonth, formatDate, today } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
 import { taxRegistrationLines } from "@/lib/tax-registration";

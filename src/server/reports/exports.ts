@@ -20,9 +20,9 @@ import {
   incomeStatement,
   trialBalance,
   type ReportPeriod,
-} from "./financials-fs";
-import { apAging, arAging, partyStatement } from "./aging-fs";
-import { taxDetail, taxSummary } from "./tax-fs";
+} from "./financials";
+import { apAging, arAging, partyStatement } from "./aging";
+import { taxDetail, taxSummary } from "./tax";
 import { listAccounts } from "@/server/db/accounts";
 import { getCustomer } from "@/server/db/customers";
 import { getVendor } from "@/server/db/vendors";

@@ -1,7 +1,7 @@
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
 import { peekSequence } from "@/server/db/companies";
-import { DEFAULT_QUOTE_VALIDITY_DAYS } from "@/server/documents/estimates-fs";
+import { DEFAULT_QUOTE_VALIDITY_DAYS } from "@/server/documents/estimates";
 import { PageHeader } from "@/components/ui";
 import { DocumentForm } from "@/components/document-form";
 import { invoiceFormOptions } from "../../invoices/actions";

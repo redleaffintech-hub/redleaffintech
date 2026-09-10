@@ -7,7 +7,7 @@ import { listBillsForVendor } from "@/server/db/bills";
 import { listPayments } from "@/server/db/payments";
 import { expenses as expensesRepo } from "@/server/db/expenses";
 import { CAPABILITIES } from "@/lib/permissions";
-import { partyStatement } from "@/server/reports/aging-fs";
+import { partyStatement } from "@/server/reports/aging";
 import { fiscalYearOf, fiscalYearRange, isoDate, toUtcDay, today, formatDate } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
 import { Card, CardHeader, DefinitionList, LinkButton, Money, PageHeader } from "@/components/ui";

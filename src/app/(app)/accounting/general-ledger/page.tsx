@@ -2,7 +2,7 @@ import Link from "next/link";
 import { listAccounts } from "@/server/db/accounts";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
-import { generalLedger } from "@/server/reports/financials-fs";
+import { generalLedger } from "@/server/reports/financials";
 import { SOURCE_LABELS } from "@/lib/enums";
 import { fiscalYearOf, fiscalYearRange, isoDate, toUtcDay, today, formatDate } from "@/lib/dates";
 import { LinkButton, Money, PageHeader, EmptyState } from "@/components/ui";

@@ -1,6 +1,6 @@
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
-import { incomeStatement, type ReportPeriod } from "@/server/reports/financials-fs";
+import { incomeStatement, type ReportPeriod } from "@/server/reports/financials";
 import { fiscalYearOf, fiscalYearRange, isoDate, toUtcDay, today } from "@/lib/dates";
 import { PageHeader } from "@/components/ui";
 import { RangePicker, PrintButton } from "@/components/filter-bar";

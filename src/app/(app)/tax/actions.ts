@@ -6,7 +6,7 @@ import { addDays, addMonths, toUtcDay, utcDate } from "@/lib/dates";
 import { PROVINCES, SYSTEM_ACCOUNTS, TAX_KINDS } from "@/lib/enums";
 import { CAPABILITIES } from "@/lib/permissions";
 import { recordAudit, requireCapability } from "@/server/auth/context";
-import { setTaxPeriodStatus } from "@/server/reports/tax-fs";
+import { setTaxPeriodStatus } from "@/server/reports/tax";
 import { createProvincialTaxCodes } from "@/server/setup/provision";
 import { PROVINCIAL_TAX_CODES } from "@/server/setup/templates";
 import {

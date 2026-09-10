@@ -1,20 +1,46 @@
+import "server-only";
+
 /**
- * Vendor bills (spec §9, §33 Vendor Bill workflow).
+ * Vendor bills (§9) — Firestore implementation.
  *
- * Posting rule
  *   Dr  Expense / Asset account(s)   line net + any NON-recoverable tax
  *   Dr  GST/HST Recoverable (ITC)    recoverable tax
  *     Cr  Accounts Payable             bill total
+ *
+ * Same two-phase / multi-transaction shape as invoices-fs.ts (see its header).
  */
 
-import { db, type Tx } from "@/lib/db";
 import { SYSTEM_ACCOUNTS } from "@/lib/enums";
 import { addDays, toUtcDay } from "@/lib/dates";
-import { getSystemAccount, postJournal, reverseJournal } from "@/server/accounting/ledger";
-import { loadTaxCodes, recordTaxEntries } from "@/server/tax/engine";
-import { receiveStock, reverseStockMovement } from "@/server/inventory/costing";
+import { recordAudit } from "@/server/db/audit-logs";
+import { bumpSequenceTx, runTransaction } from "@/server/db/companies";
+import { getVendorTx } from "@/server/db/vendors";
+import { bills } from "@/server/db/bills";
+import { getTrackedItemsTx } from "@/server/db/items";
+import {
+  createTaxEntriesTx,
+  listTaxEntriesForSourceTx,
+} from "@/server/db/tax-entries";
+import {
+  linkMovementsToEntryTx,
+  listMovementsForSourceTx,
+} from "@/server/db/inventory-movements";
+import type { Tx } from "@/server/db/firestore";
+import type { Bill, DocumentLine } from "@/server/db/types";
+import {
+  commitPosting,
+  getSystemAccount,
+  planPosting,
+  reverseJournal,
+} from "@/server/accounting/ledger";
+import { findTaxPeriodTx, loadTaxCodesTx, recordTaxEntriesTx } from "@/server/tax/engine-fs";
+import {
+  commitReceiveStock,
+  commitReverseMovement,
+  planReceiveStock,
+  planReverseMovement,
+} from "@/server/inventory/costing";
 import { computeDocument, splitPurchaseDebits, type RawLine } from "./lines";
-import { nextNumber } from "./numbering";
 
 export interface BillInput {
   companyId: string;
@@ -32,90 +58,7 @@ export interface BillInput {
   post?: boolean;
 }
 
-export async function createBill(input: BillInput) {
-  return db.$transaction(async (tx) => {
-    const bill = await createBillInTx(tx, input);
-    if (input.post) return postBillInTx(tx, bill.id, input.companyId, input.userId);
-    return bill;
-  });
-}
-
-export async function createBillInTx(tx: Tx, input: BillInput) {
-  const issueDate = toUtcDay(input.issueDate);
-  const vendor = await tx.vendor.findFirst({
-    where: { id: input.vendorId, companyId: input.companyId },
-  });
-  if (!vendor) throw new Error("Vendor not found in this company.");
-
-  // Duplicate bill detection (§9) — same vendor, same vendor invoice number.
-  if (input.vendorInvoiceNo) {
-    const duplicate = await tx.bill.findFirst({
-      where: {
-        companyId: input.companyId,
-        vendorId: input.vendorId,
-        vendorInvoiceNo: input.vendorInvoiceNo,
-        status: { not: "VOID" },
-      },
-    });
-    if (duplicate) {
-      throw new Error(
-        `${vendor.name} invoice ${input.vendorInvoiceNo} is already recorded as ${duplicate.number}.`,
-      );
-    }
-  }
-
-  const dueDate = input.dueDate ? toUtcDay(input.dueDate) : addDays(issueDate, vendor.paymentTermsDays);
-  const taxCodes = await loadTaxCodes(tx, input.companyId, input.lines.map((l) => l.taxCodeId));
-  const doc = computeDocument(input.lines, taxCodes, input.taxInclusive ?? false, issueDate);
-  const number = input.number ?? (await nextNumber(tx, input.companyId, "bill"));
-
-  return tx.bill.create({
-    data: {
-      companyId: input.companyId,
-      vendorId: input.vendorId,
-      number,
-      vendorInvoiceNo: input.vendorInvoiceNo,
-      issueDate,
-      dueDate,
-      status: input.requiresApproval ? "AWAITING_APPROVAL" : "DRAFT",
-      approvalStatus: input.requiresApproval ? "PENDING" : "NOT_REQUIRED",
-      memo: input.memo,
-      projectId: input.projectId ?? null,
-      taxInclusive: input.taxInclusive ?? false,
-      subtotalCents: doc.subtotalCents,
-      taxCents: doc.taxCents,
-      totalCents: doc.totalCents,
-      balanceCents: doc.totalCents,
-      createdById: input.userId ?? null,
-      lines: {
-        create: doc.lines.map((l) => ({
-          lineNo: l.lineNo,
-          // The catalogue item this line came from, if any. A snapshot of the
-          // link, not a live lookup: the price, description and discount below
-          // are what was actually charged, and editing the item later must not
-          // change them.
-          itemId: l.itemId ?? null,
-          accountId: l.accountId,
-          description: l.description,
-          quantityMilli: l.quantityMilli,
-          unitPriceCents: l.unitPriceCents,
-          discountPercentMicro: l.discountPercentMicro,
-          netCents: l.netCents,
-          taxCodeId: l.taxCodeId ?? null,
-          taxCents: l.taxCents,
-          totalCents: l.totalCents,
-          isBillable: l.isBillable ?? false,
-          customerId: l.customerId ?? null,
-          projectId: l.projectId ?? null,
-        })),
-      },
-    },
-    include: { lines: true, vendor: true },
-  });
-}
-
-/** The `BillLine` rows for a computed document, in create order. */
-function billLineCreateData(doc: ReturnType<typeof computeDocument>) {
+function toDocumentLines(doc: ReturnType<typeof computeDocument>): DocumentLine[] {
   return doc.lines.map((l) => ({
     lineNo: l.lineNo,
     itemId: l.itemId ?? null,
@@ -134,76 +77,355 @@ function billLineCreateData(doc: ReturnType<typeof computeDocument>) {
   }));
 }
 
-export interface BillUpdateInput extends BillInput {
-  billId: string;
-}
+// ── Create draft ────────────────────────────────────────────────────────────
 
-/**
- * Edit an existing bill.
- *
- * A draft (or a bill awaiting approval) is rewritten in place. A posted bill
- * with no payments applied is unwound exactly as {@link voidBill} would — its
- * journal, tax rows and stock movements reversed — then rebuilt from the new
- * inputs and re-posted, keeping the same bill number. Editing is refused for a
- * void bill or one with money against it. The bill number is never changed here.
- */
-export async function updateBill(input: BillUpdateInput) {
-  return db.$transaction(async (tx) => {
-    const existing = await tx.bill.findFirst({
-      where: { id: input.billId, companyId: input.companyId },
-      include: { allocations: true },
-    });
-    if (!existing) throw new Error("Bill not found in this company.");
-    if (existing.status === "VOID") {
-      throw new Error(`Bill ${existing.number} is void. Record a new bill instead of editing it.`);
-    }
-    if (existing.allocations.length > 0 || existing.amountPaidCents !== 0) {
-      throw new Error(`Bill ${existing.number} has payments applied. Unapply them before editing it.`);
-    }
-
-    const vendor = await tx.vendor.findFirst({
-      where: { id: input.vendorId, companyId: input.companyId },
-    });
+export async function createBill(input: BillInput): Promise<Bill> {
+  const draft = await runTransaction(async (tx) => {
+    const issueDate = toUtcDay(input.issueDate);
+    const vendor = await getVendorTx(tx, input.companyId, input.vendorId);
     if (!vendor) throw new Error("Vendor not found in this company.");
 
-    // Duplicate detection, ignoring this bill itself.
     if (input.vendorInvoiceNo) {
-      const duplicate = await tx.bill.findFirst({
-        where: {
-          companyId: input.companyId,
-          vendorId: input.vendorId,
-          vendorInvoiceNo: input.vendorInvoiceNo,
-          status: { not: "VOID" },
-          NOT: { id: existing.id },
-        },
-      });
-      if (duplicate) {
+      const dup = (
+        await bills.list(input.companyId, {
+          where: [
+            ["vendorId", "==", input.vendorId],
+            ["vendorInvoiceNo", "==", input.vendorInvoiceNo],
+          ],
+        })
+      ).find((b) => b.status !== "VOID");
+      if (dup) {
         throw new Error(
-          `${vendor.name} invoice ${input.vendorInvoiceNo} is already recorded as ${duplicate.number}.`,
+          `${vendor.name} invoice ${input.vendorInvoiceNo} is already recorded as ${dup.number}.`,
         );
       }
     }
 
-    const wasPosted = Boolean(existing.journalEntryId);
+    const dueDate = input.dueDate
+      ? toUtcDay(input.dueDate)
+      : addDays(issueDate, vendor.paymentTermsDays);
+    const taxCodes = await loadTaxCodesTx(tx, input.companyId, input.lines.map((l) => l.taxCodeId));
+    const doc = computeDocument(input.lines, taxCodes, input.taxInclusive ?? false, issueDate);
+    const number = input.number ?? (await bumpSequenceTx(tx, input.companyId, "bill"));
 
-    if (wasPosted) {
-      await reverseJournal(tx, existing.journalEntryId!, {
-        companyId: input.companyId,
-        memo: `Edit bill ${existing.number}`,
-        userId: input.userId,
+    return bills.createTx(tx, {
+      companyId: input.companyId,
+      vendorId: input.vendorId,
+      number,
+      vendorInvoiceNo: input.vendorInvoiceNo ?? null,
+      issueDate,
+      dueDate,
+      status: input.requiresApproval ? "AWAITING_APPROVAL" : "DRAFT",
+      approvalStatus: input.requiresApproval ? "PENDING" : "NOT_REQUIRED",
+      approvedById: null,
+      approvedAt: null,
+      memo: input.memo ?? null,
+      projectId: input.projectId ?? null,
+      taxInclusive: input.taxInclusive ?? false,
+      subtotalCents: doc.subtotalCents,
+      taxCents: doc.taxCents,
+      totalCents: doc.totalCents,
+      amountPaidCents: 0,
+      balanceCents: doc.totalCents,
+      journalEntryId: null,
+      recurringId: null,
+      createdById: input.userId ?? null,
+      postedAt: null,
+      voidedAt: null,
+      lines: toDocumentLines(doc),
+    } as Partial<Bill> & { companyId: string });
+  });
+
+  if (input.post) return postBill(draft.id, input.companyId, input.userId);
+  return draft;
+}
+
+export async function approveBill(billId: string, companyId: string, userId: string): Promise<Bill> {
+  await runTransaction(async (tx) => {
+    const bill = await bills.getTx(tx, companyId, billId);
+    if (!bill) throw new Error("Bill not found in this company.");
+    if (bill.approvalStatus !== "PENDING") throw new Error("This bill is not awaiting approval.");
+    bills.updateTx(tx, companyId, billId, {
+      approvalStatus: "APPROVED",
+      approvedById: userId,
+      approvedAt: new Date(),
+      status: "DRAFT",
+    });
+  });
+  await recordAudit({
+    companyId,
+    userId,
+    action: "UPDATE",
+    entityType: "Bill",
+    entityId: billId,
+    summary: "Approved bill",
+  });
+  return postBill(billId, companyId, userId);
+}
+
+// ── Post ────────────────────────────────────────────────────────────────────
+
+export async function postBill(
+  billId: string,
+  companyId: string,
+  userId?: string | null,
+): Promise<Bill> {
+  return runTransaction(async (tx) => {
+    const bill = await bills.getTx(tx, companyId, billId);
+    if (!bill) throw new Error("Bill not found in this company.");
+    if (bill.journalEntryId) throw new Error(`Bill ${bill.number} is already posted.`);
+    if (bill.approvalStatus === "PENDING") throw new Error(`Bill ${bill.number} needs approval first.`);
+    if (bill.lines.length === 0) throw new Error("A bill needs at least one line.");
+
+    const vendor = await getVendorTx(tx, companyId, bill.vendorId);
+    if (!vendor) throw new Error("Vendor not found in this company.");
+
+    // ── Read phase ──────────────────────────────────────────────────────────
+    const taxCodes = await loadTaxCodesTx(tx, companyId, bill.lines.map((l) => l.taxCodeId));
+    const doc = computeDocument(
+      bill.lines.map((l) => ({
+        accountId: l.accountId,
+        description: l.description,
+        quantityMilli: l.quantityMilli,
+        unitPriceCents: l.unitPriceCents,
+        discountPercentMicro: l.discountPercentMicro,
+        taxCodeId: l.taxCodeId,
+        itemId: l.itemId,
+        customerId: l.customerId,
+        projectId: l.projectId,
+        isBillable: l.isBillable,
+      })),
+      taxCodes,
+      bill.taxInclusive,
+      bill.issueDate,
+    );
+
+    const itemIds = doc.lines.map((l) => l.itemId).filter((id): id is string => Boolean(id));
+    const trackedItems = await getTrackedItemsTx(tx, companyId, itemIds);
+    const trackedLines = doc.lines.filter((l) => l.itemId && trackedItems.has(l.itemId));
+    const regularLines = doc.lines.filter((l) => !(l.itemId && trackedItems.has(l.itemId)));
+
+    const ap = await getSystemAccount(tx, companyId, SYSTEM_ACCOUNTS.ACCOUNTS_PAYABLE);
+    const { expenseByAccount, recoverableByAccount } = splitPurchaseDebits(regularLines);
+    const trackedSplit = splitPurchaseDebits(trackedLines);
+    const inventoryCostCents = [...trackedSplit.expenseByAccount.values()].reduce((s, v) => s + v, 0);
+    for (const [accountId, cents] of trackedSplit.recoverableByAccount) {
+      recoverableByAccount.set(accountId, (recoverableByAccount.get(accountId) ?? 0) + cents);
+    }
+    const inventoryAsset =
+      inventoryCostCents > 0
+        ? await getSystemAccount(tx, companyId, SYSTEM_ACCOUNTS.INVENTORY_ASSET)
+        : null;
+
+    const receivePlans = [];
+    for (const line of trackedLines) {
+      let lineCost = line.netCents;
+      for (const c of line.taxComponents) {
+        if (c.taxCents !== 0 && !c.isRecoverable) lineCost += c.taxCents;
+      }
+      receivePlans.push({
+        line,
+        plan: await planReceiveStock(tx, companyId, line.itemId!, line.quantityMilli, lineCost),
       });
-      const taxRows = await tx.taxEntry.findMany({
-        where: { companyId: input.companyId, sourceType: "BILL", sourceId: existing.id },
+    }
+
+    const taxPeriod = await findTaxPeriodTx(tx, companyId, bill.issueDate);
+
+    const plan = await planPosting(tx, {
+      companyId,
+      date: bill.issueDate,
+      memo: `Bill ${bill.number} — ${vendor.name}`,
+      sourceType: "BILL",
+      sourceId: bill.id,
+      sourceNumber: bill.number,
+      createdById: userId,
+      lines: [
+        ...[...expenseByAccount.entries()].map(([accountId, cents]) => ({
+          accountId,
+          debitCents: cents,
+          description: bill.memo ?? `Bill ${bill.number}`,
+          vendorId: bill.vendorId,
+          projectId: bill.projectId,
+        })),
+        ...(inventoryAsset
+          ? [
+              {
+                accountId: inventoryAsset.id,
+                debitCents: inventoryCostCents,
+                description: `Stock received — ${bill.number}`,
+                vendorId: bill.vendorId,
+              },
+            ]
+          : []),
+        ...[...recoverableByAccount.entries()].map(([accountId, cents]) => ({
+          accountId,
+          debitCents: cents,
+          description: `Input tax credit — ${bill.number}`,
+          vendorId: bill.vendorId,
+        })),
+        {
+          accountId: ap.id,
+          creditCents: doc.totalCents,
+          description: `${vendor.name} — ${bill.number}`,
+          vendorId: bill.vendorId,
+        },
+      ],
+    });
+
+    // ── Write phase ─────────────────────────────────────────────────────────
+    const movementIds: string[] = [];
+    for (const { plan: rp } of receivePlans) {
+      const m = commitReceiveStock(tx, companyId, rp, {
+        date: bill.issueDate,
+        sourceType: "BILL",
+        sourceId: bill.id,
+        sourceNumber: bill.number,
+        userId,
+      });
+      movementIds.push(m.id);
+    }
+
+    const entry = commitPosting(tx, plan);
+    if (movementIds.length > 0) linkMovementsToEntryTx(tx, companyId, movementIds, entry.id);
+
+    for (const line of doc.lines) {
+      if (!line.taxCodeId || line.taxComponents.length === 0) continue;
+      recordTaxEntriesTx(tx, {
+        companyId,
+        date: bill.issueDate,
+        direction: "PURCHASE",
+        sourceType: "BILL",
+        sourceId: bill.id,
+        sourceNumber: bill.number,
+        taxCodeId: line.taxCodeId,
+        jurisdiction: line.jurisdiction,
+        partyName: vendor.name,
+        journalEntryId: entry.id,
+        taxPeriodId: taxPeriod?.id ?? null,
+        components: line.taxComponents,
+      });
+    }
+
+    bills.updateTx(tx, companyId, bill.id, {
+      status: "OPEN",
+      journalEntryId: entry.id,
+      postedAt: new Date(),
+      subtotalCents: doc.subtotalCents,
+      taxCents: doc.taxCents,
+      totalCents: doc.totalCents,
+      balanceCents: doc.totalCents - bill.amountPaidCents,
+    });
+
+    return { ...bill, status: "OPEN", journalEntryId: entry.id, totalCents: doc.totalCents };
+  });
+}
+
+// ── Edit ────────────────────────────────────────────────────────────────────
+
+export interface BillUpdateInput extends BillInput {
+  billId: string;
+}
+
+/** Edit a bill — same unwind/rewrite/repost shape as updateInvoice. */
+export async function updateBill(input: BillUpdateInput): Promise<Bill> {
+  const existing = await bills.get(input.companyId, input.billId);
+  if (!existing) throw new Error("Bill not found in this company.");
+  if (existing.status === "VOID") {
+    throw new Error(`Bill ${existing.number} is void. Record a new bill instead of editing it.`);
+  }
+  if (existing.amountPaidCents !== 0) {
+    throw new Error(`Bill ${existing.number} has payments applied. Unapply them before editing it.`);
+  }
+
+  const wasPosted = Boolean(existing.journalEntryId);
+  if (wasPosted) await voidBill(input.billId, input.companyId, input.userId);
+
+  await runTransaction(async (tx) => {
+    const vendor = await getVendorTx(tx, input.companyId, input.vendorId);
+    if (!vendor) throw new Error("Vendor not found in this company.");
+    const issueDate = toUtcDay(input.issueDate);
+    const dueDate = input.dueDate
+      ? toUtcDay(input.dueDate)
+      : addDays(issueDate, vendor.paymentTermsDays);
+    const taxCodes = await loadTaxCodesTx(tx, input.companyId, input.lines.map((l) => l.taxCodeId));
+    const doc = computeDocument(input.lines, taxCodes, input.taxInclusive ?? false, issueDate);
+
+    bills.updateTx(tx, input.companyId, input.billId, {
+      vendorId: input.vendorId,
+      vendorInvoiceNo: input.vendorInvoiceNo ?? null,
+      issueDate,
+      dueDate,
+      memo: input.memo ?? null,
+      projectId: input.projectId ?? null,
+      taxInclusive: input.taxInclusive ?? false,
+      subtotalCents: doc.subtotalCents,
+      taxCents: doc.taxCents,
+      totalCents: doc.totalCents,
+      amountPaidCents: 0,
+      balanceCents: doc.totalCents,
+      status: existing.approvalStatus === "PENDING" ? "AWAITING_APPROVAL" : "DRAFT",
+      journalEntryId: null,
+      postedAt: null,
+      voidedAt: null,
+      lines: toDocumentLines(doc),
+    });
+  });
+
+  await recordAudit({
+    companyId: input.companyId,
+    userId: input.userId ?? null,
+    action: "UPDATE",
+    entityType: "Bill",
+    entityId: input.billId,
+    summary: `Edited bill ${existing.number}`,
+  });
+
+  if (wasPosted || input.post) return postBill(input.billId, input.companyId, input.userId);
+  return (await bills.get(input.companyId, input.billId))!;
+}
+
+// ── Void ────────────────────────────────────────────────────────────────────
+
+export async function voidBill(
+  billId: string,
+  companyId: string,
+  userId?: string | null,
+): Promise<Bill> {
+  const result = await runTransaction(async (tx) => {
+    const bill = await bills.getTx(tx, companyId, billId);
+    if (!bill) throw new Error("Bill not found in this company.");
+    if (bill.status === "VOID") throw new Error("Bill is already void.");
+    if (bill.amountPaidCents !== 0) {
+      throw new Error("Unapply the payments on this bill before voiding it.");
+    }
+
+    const taxRows = bill.journalEntryId
+      ? await listTaxEntriesForSourceTx(tx, companyId, "BILL", bill.id)
+      : [];
+    const movements = bill.journalEntryId
+      ? (await listMovementsForSourceTx(tx, companyId, "BILL", bill.id)).filter(
+          (m) => m.type === "PURCHASE",
+        )
+      : [];
+    const reversePlans = [];
+    for (const m of movements) reversePlans.push(await planReverseMovement(tx, companyId, m.id));
+
+    if (bill.journalEntryId) {
+      await reverseJournal(tx, bill.journalEntryId, {
+        companyId,
+        memo: `Void bill ${bill.number}`,
+        userId,
       });
       if (taxRows.length) {
-        await tx.taxEntry.createMany({
-          data: taxRows.map((t) => ({
-            companyId: input.companyId,
+        createTaxEntriesTx(
+          tx,
+          taxRows.map((t) => ({
+            companyId,
             date: t.date,
             direction: t.direction,
             sourceType: "BILL",
-            sourceId: existing.id,
-            sourceNumber: `${existing.number} (edit)`,
+            sourceId: bill.id,
+            sourceNumber: `${bill.number} (void)`,
             taxCodeId: t.taxCodeId,
             taxComponentId: t.taxComponentId,
             jurisdiction: t.jurisdiction,
@@ -215,276 +437,45 @@ export async function updateBill(input: BillUpdateInput) {
             taxPeriodId: t.taxPeriodId,
             partyName: t.partyName,
           })),
-        });
+        );
       }
-      const stockMovements = await tx.inventoryMovement.findMany({
-        where: { companyId: input.companyId, sourceType: "BILL", sourceId: existing.id, type: "PURCHASE" },
-      });
-      for (const movement of stockMovements) await reverseStockMovement(tx, movement.id, input.userId);
+      for (const plan of reversePlans) commitReverseMovement(tx, plan, userId);
     }
 
-    const issueDate = toUtcDay(input.issueDate);
-    const dueDate = input.dueDate ? toUtcDay(input.dueDate) : addDays(issueDate, vendor.paymentTermsDays);
-    const taxCodes = await loadTaxCodes(tx, input.companyId, input.lines.map((l) => l.taxCodeId));
-    const doc = computeDocument(input.lines, taxCodes, input.taxInclusive ?? false, issueDate);
-
-    await tx.billLine.deleteMany({ where: { billId: existing.id } });
-
-    await tx.bill.update({
-      where: { id: existing.id },
-      data: {
-        vendorId: input.vendorId,
-        vendorInvoiceNo: input.vendorInvoiceNo ?? null,
-        issueDate,
-        dueDate,
-        memo: input.memo ?? null,
-        projectId: input.projectId ?? null,
-        taxInclusive: input.taxInclusive ?? false,
-        subtotalCents: doc.subtotalCents,
-        taxCents: doc.taxCents,
-        totalCents: doc.totalCents,
-        balanceCents: doc.totalCents,
-        amountPaidCents: 0,
-        status: existing.approvalStatus === "PENDING" ? "AWAITING_APPROVAL" : "DRAFT",
-        journalEntryId: null,
-        postedAt: null,
-        lines: { create: billLineCreateData(doc) },
-      },
+    bills.updateTx(tx, companyId, bill.id, {
+      status: "VOID",
+      voidedAt: new Date(),
+      balanceCents: 0,
     });
-
-    await tx.auditLog.create({
-      data: {
-        companyId: input.companyId,
-        userId: input.userId ?? null,
-        action: "UPDATE",
-        entityType: "Bill",
-        entityId: existing.id,
-        summary: `Edited bill ${existing.number}`,
-      },
-    });
-
-    if (wasPosted || input.post) {
-      return postBillInTx(tx, existing.id, input.companyId, input.userId);
-    }
-    return tx.bill.findUniqueOrThrow({
-      where: { id: existing.id },
-      include: { lines: true, vendor: true },
-    });
+    return { ...bill, status: "VOID" as const };
   });
-}
 
-export async function approveBill(billId: string, companyId: string, userId: string) {
-  return db.$transaction(async (tx) => {
-    const bill = await tx.bill.findFirst({ where: { id: billId, companyId } });
-    if (!bill) throw new Error("Bill not found in this company.");
-    if (bill.approvalStatus !== "PENDING") throw new Error("This bill is not awaiting approval.");
-    await tx.auditLog.create({
-      data: {
-        companyId, userId, action: "UPDATE", entityType: "Bill", entityId: billId,
-        summary: `Approved bill ${bill.number}`,
-      },
-    });
-    await tx.bill.update({
-      where: { id: billId },
-      data: { approvalStatus: "APPROVED", approvedById: userId, approvedAt: new Date(), status: "DRAFT" },
-    });
-    return postBillInTx(tx, billId, companyId, userId);
-  });
-}
-
-export async function postBill(billId: string, companyId: string, userId?: string | null) {
-  return db.$transaction((tx) => postBillInTx(tx, billId, companyId, userId));
-}
-
-export async function postBillInTx(tx: Tx, billId: string, companyId: string, userId?: string | null) {
-  const bill = await tx.bill.findFirst({
-    where: { id: billId, companyId },
-    include: { lines: true, vendor: true },
-  });
-  if (!bill) throw new Error("Bill not found in this company.");
-  if (bill.journalEntryId) throw new Error(`Bill ${bill.number} is already posted.`);
-  if (bill.approvalStatus === "PENDING") throw new Error(`Bill ${bill.number} needs approval first.`);
-  if (bill.lines.length === 0) throw new Error("A bill needs at least one line.");
-
-  const taxCodes = await loadTaxCodes(tx, companyId, bill.lines.map((l) => l.taxCodeId));
-  const doc = computeDocument(
-    bill.lines.map((l) => ({
-      accountId: l.accountId,
-      description: l.description,
-      quantityMilli: l.quantityMilli,
-      unitPriceCents: l.unitPriceCents,
-      taxCodeId: l.taxCodeId,
-      itemId: l.itemId,
-      customerId: l.customerId,
-      projectId: l.projectId,
-      isBillable: l.isBillable,
-    })),
-    taxCodes,
-    bill.taxInclusive,
-    bill.issueDate,
-  );
-
-  // Lines that bought a tracked-inventory item post their cost to Inventory
-  // Asset instead of the line's own expense account, and add stock rather
-  // than expensing it — everything else posts exactly as before.
-  const itemIds = doc.lines.map((l) => l.itemId).filter((id): id is string => Boolean(id));
-  const trackedItemIds = itemIds.length
-    ? new Set(
-        (await tx.serviceItem.findMany({
-          where: { id: { in: itemIds }, companyId, trackInventory: true },
-          select: { id: true },
-        })).map((i) => i.id),
-      )
-    : new Set<string>();
-  const trackedLines = doc.lines.filter((l) => l.itemId && trackedItemIds.has(l.itemId));
-  const regularLines = doc.lines.filter((l) => !(l.itemId && trackedItemIds.has(l.itemId)));
-
-  const ap = await getSystemAccount(tx, companyId, SYSTEM_ACCOUNTS.ACCOUNTS_PAYABLE);
-  const { expenseByAccount, recoverableByAccount } = splitPurchaseDebits(regularLines);
-  const trackedSplit = splitPurchaseDebits(trackedLines);
-  const inventoryCostCents = [...trackedSplit.expenseByAccount.values()].reduce((s, v) => s + v, 0);
-  for (const [accountId, cents] of trackedSplit.recoverableByAccount) {
-    recoverableByAccount.set(accountId, (recoverableByAccount.get(accountId) ?? 0) + cents);
-  }
-  const inventoryAsset = inventoryCostCents > 0
-    ? await getSystemAccount(tx, companyId, SYSTEM_ACCOUNTS.INVENTORY_ASSET)
-    : null;
-
-  const entry = await postJournal(tx, {
+  await recordAudit({
     companyId,
-    date: bill.issueDate,
-    memo: `Bill ${bill.number} — ${bill.vendor.name}`,
-    sourceType: "BILL",
-    sourceId: bill.id,
-    sourceNumber: bill.number,
-    createdById: userId,
-    lines: [
-      ...[...expenseByAccount.entries()].map(([accountId, cents]) => ({
-        accountId,
-        debitCents: cents,
-        description: bill.memo ?? `Bill ${bill.number}`,
-        vendorId: bill.vendorId,
-        projectId: bill.projectId,
-      })),
-      ...(inventoryAsset
-        ? [{
-            accountId: inventoryAsset.id,
-            debitCents: inventoryCostCents,
-            description: `Stock received — ${bill.number}`,
-            vendorId: bill.vendorId,
-          }]
-        : []),
-      ...[...recoverableByAccount.entries()].map(([accountId, cents]) => ({
-        accountId,
-        debitCents: cents,
-        description: `Input tax credit — ${bill.number}`,
-        vendorId: bill.vendorId,
-      })),
-      {
-        accountId: ap.id,
-        creditCents: doc.totalCents,
-        description: `${bill.vendor.name} — ${bill.number}`,
-        vendorId: bill.vendorId,
-      },
-    ],
+    userId: userId ?? null,
+    action: "VOID",
+    entityType: "Bill",
+    entityId: billId,
+    summary: `Voided bill ${result.number}`,
   });
-
-  for (const line of trackedLines) {
-    let lineCost = line.netCents;
-    for (const c of line.taxComponents) {
-      if (c.taxCents !== 0 && !c.isRecoverable) lineCost += c.taxCents;
-    }
-    await receiveStock(tx, {
-      companyId,
-      itemId: line.itemId!,
-      date: bill.issueDate,
-      quantityMilli: line.quantityMilli,
-      totalCostCents: lineCost,
-      sourceType: "BILL",
-      sourceId: bill.id,
-      sourceNumber: bill.number,
-      journalEntryId: entry.id,
-      userId,
-    });
-  }
-
-  for (const line of doc.lines) {
-    if (!line.taxCodeId || line.taxComponents.length === 0) continue;
-    await recordTaxEntries(tx, {
-      companyId,
-      date: bill.issueDate,
-      direction: "PURCHASE",
-      sourceType: "BILL",
-      sourceId: bill.id,
-      sourceNumber: bill.number,
-      taxCodeId: line.taxCodeId,
-      jurisdiction: line.jurisdiction,
-      partyName: bill.vendor.name,
-      journalEntryId: entry.id,
-      components: line.taxComponents,
-    });
-  }
-
-  return tx.bill.update({
-    where: { id: bill.id },
-    data: {
-      status: "OPEN",
-      journalEntryId: entry.id,
-      postedAt: new Date(),
-      subtotalCents: doc.subtotalCents,
-      taxCents: doc.taxCents,
-      totalCents: doc.totalCents,
-      balanceCents: doc.totalCents - bill.amountPaidCents,
-    },
-    include: { lines: true, vendor: true },
-  });
+  return result;
 }
 
-export async function voidBill(billId: string, companyId: string, userId?: string | null) {
-  return db.$transaction(async (tx) => {
-    const bill = await tx.bill.findFirst({ where: { id: billId, companyId } });
-    if (!bill) throw new Error("Bill not found in this company.");
-    if (bill.status === "VOID") throw new Error("Bill is already void.");
-    if (bill.amountPaidCents !== 0) {
-      throw new Error("Unapply the payments on this bill before voiding it.");
-    }
-    if (bill.journalEntryId) {
-      await reverseJournal(tx, bill.journalEntryId, {
-        companyId, memo: `Void bill ${bill.number}`, userId,
-      });
-      const original = await tx.taxEntry.findMany({
-        where: { companyId, sourceType: "BILL", sourceId: bill.id },
-      });
-      if (original.length) {
-        await tx.taxEntry.createMany({
-          data: original.map((t) => ({
-            companyId, date: t.date, direction: t.direction,
-            sourceType: "BILL", sourceId: bill.id, sourceNumber: `${bill.number} (void)`,
-            taxCodeId: t.taxCodeId, taxComponentId: t.taxComponentId,
-            jurisdiction: t.jurisdiction, kind: t.kind, rateMicro: t.rateMicro,
-            taxableCents: -t.taxableCents, taxCents: -t.taxCents,
-            recoverableCents: -t.recoverableCents, taxPeriodId: t.taxPeriodId, partyName: t.partyName,
-          })),
-        });
-      }
-      const stockMovements = await tx.inventoryMovement.findMany({
-        where: { companyId, sourceType: "BILL", sourceId: bill.id, type: "PURCHASE" },
-      });
-      for (const movement of stockMovements) await reverseStockMovement(tx, movement.id, userId);
-    }
-    return tx.bill.update({
-      where: { id: bill.id },
-      data: { status: "VOID", voidedAt: new Date(), balanceCents: 0 },
-    });
-  });
-}
+// ── Status refresh (called by the payment flow) ─────────────────────────────
 
-export async function refreshBillStatus(tx: Tx, billId: string) {
-  const bill = await tx.bill.findUnique({ where: { id: billId }, include: { allocations: true } });
-  if (!bill || bill.status === "VOID" || bill.status === "DRAFT") return bill;
+export async function refreshBillStatusTx(
+  tx: Tx,
+  companyId: string,
+  billId: string,
+  allocations: { amountCents: number; kind: string }[],
+): Promise<void> {
+  const bill = await bills.getTx(tx, companyId, billId);
+  if (!bill || bill.status === "VOID" || bill.status === "DRAFT") return;
 
-  const settled = bill.allocations.reduce((s, a) => s + a.amountCents, 0);
-  const paid = bill.allocations.filter((a) => a.kind === "PAYMENT").reduce((s, a) => s + a.amountCents, 0);
+  const settled = allocations.reduce((s, a) => s + a.amountCents, 0);
+  const cashPaid = allocations
+    .filter((a) => a.kind === "PAYMENT")
+    .reduce((s, a) => s + a.amountCents, 0);
   const balance = bill.totalCents - settled;
 
   let status = bill.status;
@@ -492,8 +483,9 @@ export async function refreshBillStatus(tx: Tx, billId: string) {
   else if (settled > 0) status = "PARTIALLY_PAID";
   else status = new Date() > bill.dueDate ? "OVERDUE" : "OPEN";
 
-  return tx.bill.update({
-    where: { id: billId },
-    data: { amountPaidCents: paid, balanceCents: balance, status },
+  bills.updateTx(tx, companyId, billId, {
+    amountPaidCents: cashPaid,
+    balanceCents: balance,
+    status,
   });
 }

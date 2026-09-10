@@ -1,6 +1,6 @@
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
-import { taxSummary } from "@/server/reports/tax-fs";
+import { taxSummary } from "@/server/reports/tax";
 import { fiscalYearOf, fiscalYearRange, isoDate, toUtcDay, today } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
 import { Badge, LinkButton, Money, PageHeader } from "@/components/ui";

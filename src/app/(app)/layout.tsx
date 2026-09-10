@@ -1,5 +1,5 @@
 import { requireCompany } from "@/server/auth/context";
-import { checkLedgerIntegrity } from "@/server/accounting/ledger-fs";
+import { checkLedgerIntegrity } from "@/server/accounting/ledger";
 import { listBankTransactions } from "@/server/db/banking";
 import { invoices as invoicesRepo } from "@/server/db/invoices";
 import { bills as billsRepo } from "@/server/db/bills";

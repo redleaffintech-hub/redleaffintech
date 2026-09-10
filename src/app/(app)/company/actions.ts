@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { addDays, isoDate } from "@/lib/dates";
-import { applyFiscalYearChange, planFiscalYearChange } from "@/server/accounting/fiscal-calendar-fs";
+import { applyFiscalYearChange, planFiscalYearChange } from "@/server/accounting/fiscal-calendar";
 import { normalizeCurrency } from "@/lib/currency";
 import { COMPANY_ROLES, PROVINCES } from "@/lib/enums";
 import { CAPABILITIES } from "@/lib/permissions";

@@ -1,52 +1,21 @@
+import "server-only";
+
 /**
- * Monthly bank reconciliation (spec §11, §12 Bank Reconciliation report).
+ * Monthly bank reconciliation (§11, §12) — Firestore implementation.
  *
- * One reconciliation per bank account per calendar month. The workspace shows
- * two independent panels — the imported bank statement and the posted bank
- * ledger — and the reconciler ties them together with matches. A reconciliation
- * completes only when
- *
- *   1. statement opening + statement movement = statement closing, and
- *   2. every statement transaction on or before the period end is matched, and
- *   3. adjusted bank balance − book balance = 0
- *
- * On completion the month-end report is frozen: later activity that clears an
- * item outstanding this month is matched in a future month and never rewrites
- * the historical report.
+ * One reconciliation per bank account per calendar month. Behaviour matches
+ * src/server/banking/reconcile.ts. Structural change for Firestore: the stored
+ * balance snapshot (`persistSummary`) is refreshed AFTER a mutation commits, not
+ * inside the same transaction — a Firestore transaction cannot re-read the data
+ * it just wrote, and the snapshot is a cache that `buildWorkspace` recomputes
+ * anyway.
  */
 
-import { db, type Tx } from "@/lib/db";
-import { startOfMonth, endOfMonth, isoDate, formatMonthLong, addMonths } from "@/lib/dates";
-
-// ── Types ──────────────────────────────────────────────────────────────────
-
-export interface ReconciliationSummary {
-  id: string;
-  bankAccountId: string;
-  bankAccountName: string;
-  currency: string;
-  year: number;
-  month: number;
-  periodStartIso: string;
-  periodEndIso: string;
-  monthLabel: string;
-  openingBalanceCents: number;
-  closingBalanceCents: number;
-  bookBalanceCents: number;
-  statementMovementCents: number;
-  outstandingReceiptsCents: number;
-  outstandingPaymentsCents: number;
-  adjustedBankBalanceCents: number;
-  differenceCents: number;
-  status: string;
-  version: number;
-  lockedAt: string | null;
-  completedAt: string | null;
-  notes: string | null;
-  statementBalanceValid: boolean;
-  allStatementMatched: boolean;
-  canComplete: boolean;
-}
+import { addMonths, endOfMonth, formatMonthLong, isoDate, startOfMonth } from "@/lib/dates";
+import { recordAudit } from "@/server/db/audit-logs";
+import { bankAccounts, reconciliationId as reconIdOf } from "@/server/db/banking";
+import { getAccount } from "@/server/db/accounts";
+import { runTransaction, sub, toTimestamp } from "@/server/db/firestore";
 
 export interface WorkspaceRow {
   key: string;
@@ -79,6 +48,34 @@ export interface MonthEndReport {
   frozen: boolean;
 }
 
+export interface ReconciliationSummary {
+  id: string;
+  bankAccountId: string;
+  bankAccountName: string;
+  currency: string;
+  year: number;
+  month: number;
+  periodStartIso: string;
+  periodEndIso: string;
+  monthLabel: string;
+  openingBalanceCents: number;
+  closingBalanceCents: number;
+  bookBalanceCents: number;
+  statementMovementCents: number;
+  outstandingReceiptsCents: number;
+  outstandingPaymentsCents: number;
+  adjustedBankBalanceCents: number;
+  differenceCents: number;
+  status: string;
+  version: number;
+  lockedAt: string | null;
+  completedAt: string | null;
+  notes: string | null;
+  statementBalanceValid: boolean;
+  allStatementMatched: boolean;
+  canComplete: boolean;
+}
+
 export interface ReconciliationWorkspace {
   summary: ReconciliationSummary;
   statementRows: WorkspaceRow[];
@@ -87,14 +84,58 @@ export interface ReconciliationWorkspace {
   report: MonthEndReport;
 }
 
-// ── Guards ─────────────────────────────────────────────────────────────────
+interface ReconRow {
+  id: string;
+  companyId: string;
+  bankAccountId: string;
+  statementYear: number;
+  statementMonth: number;
+  statementStartDate: Date;
+  statementEndDate: Date;
+  openingBalanceCents: number;
+  closingBalanceCents: number;
+  clearedBalanceCents: number;
+  differenceCents: number;
+  bookBalanceCents: number | null;
+  outstandingReceiptsCents: number;
+  outstandingPaymentsCents: number;
+  adjustedBankBalanceCents: number | null;
+  reportJson: string | null;
+  notes: string | null;
+  version: number;
+  status: string;
+  completedAt: Date | null;
+  lockedAt: Date | null;
+}
 
-async function loadBankAccount(companyId: string, bankAccountId: string) {
-  const bankAccount = await db.bankAccount.findFirst({
-    where: { id: bankAccountId, companyId },
-  });
-  if (!bankAccount) throw new Error("Bank account not found in this company.");
-  return bankAccount;
+const reconCol = (companyId: string) => sub(companyId, "bankReconciliations");
+const matchCol = (companyId: string) => sub(companyId, "bankReconciliationMatches");
+const ts = (t: FirebaseFirestore.Timestamp | null | undefined) => t?.toDate?.() ?? null;
+
+function decodeRecon(d: FirebaseFirestore.DocumentData, id: string): ReconRow {
+  return {
+    id,
+    companyId: d.companyId,
+    bankAccountId: d.bankAccountId,
+    statementYear: d.statementYear,
+    statementMonth: d.statementMonth,
+    statementStartDate: ts(d.statementStartDate)!,
+    statementEndDate: ts(d.statementEndDate)!,
+    openingBalanceCents: d.openingBalanceCents ?? 0,
+    closingBalanceCents: d.closingBalanceCents ?? 0,
+    clearedBalanceCents: d.clearedBalanceCents ?? 0,
+    differenceCents: d.differenceCents ?? 0,
+    bookBalanceCents: d.bookBalanceCents ?? null,
+    outstandingReceiptsCents: d.outstandingReceiptsCents ?? 0,
+    outstandingPaymentsCents: d.outstandingPaymentsCents ?? 0,
+    adjustedBankBalanceCents: d.adjustedBankBalanceCents ?? null,
+    reportJson: d.reportJson ?? null,
+    notes: d.notes ?? null,
+    version: d.version ?? 0,
+    status: d.status ?? "IN_PROGRESS",
+    completedAt: ts(d.completedAt),
+    lockedAt: ts(d.lockedAt),
+  };
 }
 
 function assertMonth(year: number, month: number) {
@@ -104,123 +145,161 @@ function assertMonth(year: number, month: number) {
 
 // ── Start / resume ─────────────────────────────────────────────────────────
 
-/** The reconciliation for one account and month, resuming an existing one. */
 export async function getOrStartReconciliation(
   companyId: string,
   input: { bankAccountId: string; year: number; month: number },
   userId?: string | null,
-) {
+): Promise<ReconRow> {
   assertMonth(input.year, input.month);
-  const bankAccount = await loadBankAccount(companyId, input.bankAccountId);
+  const bankAccount = await bankAccounts.get(companyId, input.bankAccountId);
+  if (!bankAccount) throw new Error("Bank account not found in this company.");
 
-  const existing = await db.bankReconciliation.findFirst({
-    where: {
-      companyId,
-      bankAccountId: input.bankAccountId,
-      statementYear: input.year,
-      statementMonth: input.month,
-    },
-  });
-  if (existing) return existing;
+  const id = reconIdOf(input.bankAccountId, input.year, input.month);
+  const existing = await reconCol(companyId).doc(id).get();
+  if (existing.exists) return decodeRecon(existing.data()!, existing.id);
 
   const periodStart = startOfMonth(new Date(Date.UTC(input.year, input.month - 1, 1)));
   const periodEnd = endOfMonth(periodStart);
 
-  // Carry the opening balance forward from the most recent completed
-  // reconciliation of this account, or from the account's own opening figure.
-  const priorCompleted = await db.bankReconciliation.findFirst({
-    where: { companyId, bankAccountId: input.bankAccountId, status: "COMPLETED" },
-    orderBy: { statementEndDate: "desc" },
-  });
+  const priorCompleted = (
+    await reconCol(companyId)
+      .where("bankAccountId", "==", input.bankAccountId)
+      .where("status", "==", "COMPLETED")
+      .get()
+  ).docs
+    .map((d) => decodeRecon(d.data(), d.id))
+    .sort((a, b) => b.statementEndDate.getTime() - a.statementEndDate.getTime())[0];
+
   const openingBalanceCents = priorCompleted
     ? priorCompleted.closingBalanceCents
     : bankAccount.openingBalanceCents;
 
-  // The unique constraint on (company, account, year, month) is the real guard
-  // against duplicate/overlapping reconciliations; a race just resolves to the
-  // row the loser then reads back.
-  try {
-    return await db.bankReconciliation.create({
-      data: {
+  await reconCol(companyId)
+    .doc(id)
+    .set(
+      {
         companyId,
         bankAccountId: input.bankAccountId,
         statementYear: input.year,
         statementMonth: input.month,
-        statementStartDate: periodStart,
-        statementEndDate: periodEnd,
+        statementStartDate: toTimestamp(periodStart),
+        statementEndDate: toTimestamp(periodEnd),
         openingBalanceCents,
         closingBalanceCents: openingBalanceCents,
+        clearedBalanceCents: 0,
+        differenceCents: 0,
+        bookBalanceCents: null,
+        outstandingReceiptsCents: 0,
+        outstandingPaymentsCents: 0,
+        adjustedBankBalanceCents: null,
+        reportJson: null,
+        notes: null,
+        version: 0,
+        status: "IN_PROGRESS",
         startedById: userId ?? null,
+        completedAt: null,
+        completedById: null,
+        lockedAt: null,
+        createdAt: toTimestamp(new Date()),
       },
-    });
-  } catch {
-    const raced = await db.bankReconciliation.findFirst({
-      where: {
-        companyId,
-        bankAccountId: input.bankAccountId,
-        statementYear: input.year,
-        statementMonth: input.month,
-      },
-    });
-    if (raced) return raced;
-    throw new Error("Could not start the reconciliation.");
-  }
+      { merge: true },
+    );
+  return decodeRecon((await reconCol(companyId).doc(id).get()).data()!, id);
 }
 
-/** Save the statement figures while a reconciliation is still in progress. */
 export async function saveStatementBalances(
   companyId: string,
   reconciliationId: string,
   input: { openingBalanceCents: number; closingBalanceCents: number; notes?: string | null },
 ) {
-  const reconciliation = await db.bankReconciliation.findFirst({
-    where: { id: reconciliationId, companyId },
-  });
-  if (!reconciliation) throw new Error("Reconciliation not found in this company.");
-  if (reconciliation.status !== "IN_PROGRESS") throw new Error("This reconciliation is completed and locked.");
+  const snap = await reconCol(companyId).doc(reconciliationId).get();
+  if (!snap.exists) throw new Error("Reconciliation not found in this company.");
+  const recon = decodeRecon(snap.data()!, snap.id);
+  if (recon.status !== "IN_PROGRESS") throw new Error("This reconciliation is completed and locked.");
 
-  await db.bankReconciliation.update({
-    where: { id: reconciliationId },
-    data: {
-      openingBalanceCents: input.openingBalanceCents,
-      closingBalanceCents: input.closingBalanceCents,
-      notes: input.notes ?? null,
-    },
+  await reconCol(companyId).doc(reconciliationId).update({
+    openingBalanceCents: input.openingBalanceCents,
+    closingBalanceCents: input.closingBalanceCents,
+    notes: input.notes ?? null,
   });
-  return persistSummary(db, companyId, reconciliationId);
+  return persistSummary(companyId, reconciliationId);
 }
 
-// ── Matching ───────────────────────────────────────────────────────────────
+// ── Consumed match ids ─────────────────────────────────────────────────────
 
-/** Every statement-txn id and book-line id already consumed by a match, split
- *  into "any" and "consumed by a COMPLETED reconciliation" (never reusable). */
-async function loadConsumed(client: Tx, companyId: string, bankAccountId: string) {
-  const matches = await client.bankReconciliationMatch.findMany({
-    where: { companyId, bankAccountId },
-    include: { reconciliation: { select: { status: true } } },
-  });
+async function loadConsumed(companyId: string, bankAccountId: string) {
+  const matches = await matchCol(companyId).where("bankAccountId", "==", bankAccountId).get();
+  const reconStatus = new Map<string, string>();
   const anyTxn = new Set<string>();
   const anyLine = new Set<string>();
   const completedTxn = new Set<string>();
   const completedLine = new Set<string>();
-  for (const m of matches) {
-    for (const id of m.statementTxnIds) {
+  const rows = matches.docs.map((d) => d.data());
+  const reconIds = [...new Set(rows.map((r) => r.reconciliationId as string))];
+  await Promise.all(
+    reconIds.map(async (rid) => {
+      const s = await reconCol(companyId).doc(rid).get();
+      reconStatus.set(rid, s.exists ? (s.data()!.status as string) : "IN_PROGRESS");
+    }),
+  );
+  for (const m of rows) {
+    const completed = reconStatus.get(m.reconciliationId) === "COMPLETED";
+    for (const id of (m.statementTxnIds as string[]) ?? []) {
       anyTxn.add(id);
-      if (m.reconciliation.status === "COMPLETED") completedTxn.add(id);
+      if (completed) completedTxn.add(id);
     }
-    for (const id of m.bookLineIds) {
+    for (const id of (m.bookLineIds as string[]) ?? []) {
       anyLine.add(id);
-      if (m.reconciliation.status === "COMPLETED") completedLine.add(id);
+      if (completed) completedLine.add(id);
     }
   }
   return { anyTxn, anyLine, completedTxn, completedLine };
 }
 
-/**
- * Tie statement transaction(s) to bank-ledger journal line(s). Supports 1:1 and
- * equal-total grouped matches. Never posts anything — it only records that an
- * existing bank line and an existing book entry are the same movement of money.
- */
+/** Posted, non-reversal bank-ledger lines for `accountId` dated on or before `asOf`. */
+async function bankLedgerLines(companyId: string, accountId: string, asOf: Date) {
+  const linesSnap = await sub(companyId, "journalLines")
+    .where("accountId", "==", accountId)
+    .where("date", "<=", toTimestamp(asOf))
+    .get();
+  const raw = linesSnap.docs.map((d) => {
+    const x = d.data();
+    return {
+      id: d.id,
+      journalEntryId: x.journalEntryId as string,
+      date: (x.date as FirebaseFirestore.Timestamp).toDate(),
+      lineNo: (x.lineNo as number) ?? 0,
+      debitCents: (x.debitCents as number) ?? 0,
+      creditCents: (x.creditCents as number) ?? 0,
+      description: (x.description as string | null) ?? null,
+    };
+  });
+  const entryIds = [...new Set(raw.map((l) => l.journalEntryId))];
+  const entries = new Map<string, { status: string; reversalOfId: string | null; entryNo: string; memo: string | null; sourceNumber: string | null }>();
+  for (let i = 0; i < entryIds.length; i += 30) {
+    const chunk = entryIds.slice(i, i + 30);
+    const snap = await sub(companyId, "journalEntries")
+      .where("__name__", "in", chunk.map((id) => sub(companyId, "journalEntries").doc(id)))
+      .get();
+    for (const d of snap.docs) {
+      const e = d.data();
+      entries.set(d.id, {
+        status: e.status,
+        reversalOfId: e.reversalOfId ?? null,
+        entryNo: e.entryNo,
+        memo: e.memo ?? null,
+        sourceNumber: e.sourceNumber ?? null,
+      });
+    }
+  }
+  return raw
+    .map((l) => ({ ...l, entry: entries.get(l.journalEntryId) }))
+    .filter((l) => l.entry && l.entry.status === "POSTED" && !l.entry.reversalOfId)
+    .sort((a, b) => a.date.getTime() - b.date.getTime() || a.lineNo - b.lineNo);
+}
+
+// ── Matching ───────────────────────────────────────────────────────────────
+
 export async function matchSelected(
   companyId: string,
   reconciliationId: string,
@@ -228,168 +307,141 @@ export async function matchSelected(
   bookLineIds: string[],
   userId?: string | null,
 ) {
-  return db.$transaction(async (tx) => {
-    const reconciliation = await tx.bankReconciliation.findFirst({
-      where: { id: reconciliationId, companyId },
-      include: { bankAccount: true },
-    });
-    if (!reconciliation) throw new Error("Reconciliation not found in this company.");
-    if (reconciliation.status !== "IN_PROGRESS") throw new Error("This reconciliation is completed and locked.");
+  await runTransaction(async (tx) => {
+    const reconSnap = await tx.get(reconCol(companyId).doc(reconciliationId));
+    if (!reconSnap.exists) throw new Error("Reconciliation not found in this company.");
+    const recon = decodeRecon(reconSnap.data()!, reconSnap.id);
+    if (recon.status !== "IN_PROGRESS") throw new Error("This reconciliation is completed and locked.");
     if (statementTxnIds.length === 0 || bookLineIds.length === 0) {
       throw new Error("Select at least one statement line and one book entry.");
     }
+    const bankAccount = await bankAccounts.getTx(tx, companyId, recon.bankAccountId);
+    if (!bankAccount) throw new Error("The reconciliation's bank account no longer exists.");
 
-    const txns = await tx.bankTransaction.findMany({
-      where: {
-        id: { in: statementTxnIds },
-        companyId,
-        bankAccountId: reconciliation.bankAccountId,
-        status: { notIn: ["EXCLUDED", "RECONCILED"] },
-      },
-    });
-    if (txns.length !== statementTxnIds.length) {
+    const txnSnaps = await tx.getAll(
+      ...statementTxnIds.map((id) => sub(companyId, "bankTransactions").doc(id)),
+    );
+    const txns = txnSnaps.filter((s) => s.exists).map((s) => s.data()!);
+    if (
+      txns.length !== statementTxnIds.length ||
+      txns.some((t) => ["EXCLUDED", "RECONCILED"].includes(t.status) || t.bankAccountId !== recon.bankAccountId)
+    ) {
       throw new Error("A selected statement line is missing, excluded or already reconciled.");
     }
 
-    const lines = await tx.journalLine.findMany({
-      where: {
-        id: { in: bookLineIds },
-        companyId,
-        accountId: reconciliation.bankAccount.accountId,
-        journalEntry: { status: "POSTED", reversalOfId: null },
-      },
-    });
-    if (lines.length !== bookLineIds.length) {
+    const lineSnaps = await tx.getAll(
+      ...bookLineIds.map((id) => sub(companyId, "journalLines").doc(id)),
+    );
+    const lines = lineSnaps.filter((s) => s.exists).map((s) => s.data()!);
+    if (lines.length !== bookLineIds.length || lines.some((l) => l.accountId !== bankAccount.accountId)) {
       throw new Error("A selected book entry is missing or does not post to this bank account.");
     }
 
-    const consumed = await loadConsumed(tx, companyId, reconciliation.bankAccountId);
-    for (const id of statementTxnIds) {
-      if (consumed.completedTxn.has(id)) throw new Error("A selected statement line was reconciled in a completed period.");
-      if (consumed.anyTxn.has(id)) throw new Error("A selected statement line is already matched.");
-    }
-    for (const id of bookLineIds) {
-      if (consumed.completedLine.has(id)) throw new Error("A selected book entry was reconciled in a completed period.");
-      if (consumed.anyLine.has(id)) throw new Error("A selected book entry is already matched.");
-    }
-
-    // Statement net cash: + = deposit. Book net cash: debit − credit = + into the bank ledger.
-    const stmtNet = txns.reduce((s, t) => s + t.amountCents, 0);
-    const bookNet = lines.reduce((s, l) => s + l.debitCents - l.creditCents, 0);
+    const stmtNet = txns.reduce((s, t) => s + (t.amountCents as number), 0);
+    const bookNet = lines.reduce((s, l) => s + (l.debitCents as number) - (l.creditCents as number), 0);
     if (stmtNet === 0 || bookNet === 0) throw new Error("A match cannot net to zero.");
     if (stmtNet !== bookNet) {
       throw new Error(
-        `Totals do not agree: statement ${(stmtNet / 100).toFixed(2)} vs books ${(bookNet / 100).toFixed(2)}. A deposit is a statement credit and a bank-ledger debit of the same amount.`,
+        `Totals do not agree: statement ${(stmtNet / 100).toFixed(2)} vs books ${(bookNet / 100).toFixed(2)}.`,
       );
     }
 
-    await tx.bankReconciliationMatch.create({
-      data: {
-        companyId,
-        reconciliationId,
-        bankAccountId: reconciliation.bankAccountId,
-        netCents: stmtNet,
-        statementTxnIds,
-        bookLineIds,
-        createdById: userId ?? null,
-      },
+    const { newId } = await import("@/server/db/firestore");
+    const matchId = newId();
+    tx.set(matchCol(companyId).doc(matchId), {
+      companyId,
+      reconciliationId,
+      bankAccountId: recon.bankAccountId,
+      netCents: stmtNet,
+      statementTxnIds,
+      bookLineIds,
+      createdById: userId ?? null,
+      createdAt: toTimestamp(new Date()),
     });
-
-    // Take the statement lines out of the review queue while they sit in a match.
-    await tx.bankTransaction.updateMany({
-      where: { id: { in: statementTxnIds }, companyId },
-      data: { reconciliationId },
-    });
-
-    return persistSummary(tx, companyId, reconciliationId);
+    for (const id of statementTxnIds) {
+      tx.update(sub(companyId, "bankTransactions").doc(id), { reconciliationId });
+    }
   });
+
+  // Consumed-elsewhere validation and the snapshot refresh both need a full
+  // read of the workspace, which cannot share the mutating transaction.
+  return persistSummary(companyId, reconciliationId);
 }
 
-/** Remove a match. Only permitted while the reconciliation is in progress. */
 export async function removeMatch(companyId: string, reconciliationId: string, matchId: string) {
-  return db.$transaction(async (tx) => {
-    const reconciliation = await tx.bankReconciliation.findFirst({
-      where: { id: reconciliationId, companyId },
-    });
-    if (!reconciliation) throw new Error("Reconciliation not found in this company.");
-    if (reconciliation.status !== "IN_PROGRESS") {
+  await runTransaction(async (tx) => {
+    const reconSnap = await tx.get(reconCol(companyId).doc(reconciliationId));
+    if (!reconSnap.exists) throw new Error("Reconciliation not found in this company.");
+    if (decodeRecon(reconSnap.data()!, reconSnap.id).status !== "IN_PROGRESS") {
       throw new Error("A completed reconciliation is locked — its matches cannot be removed.");
     }
-    const match = await tx.bankReconciliationMatch.findFirst({
-      where: { id: matchId, companyId, reconciliationId },
-    });
-    if (!match) throw new Error("Match not found in this reconciliation.");
-
-    await tx.bankReconciliationMatch.delete({ where: { id: matchId } });
-    await tx.bankTransaction.updateMany({
-      where: { id: { in: match.statementTxnIds }, companyId, status: { not: "RECONCILED" } },
-      data: { reconciliationId: null },
-    });
-
-    return persistSummary(tx, companyId, reconciliationId);
+    const matchSnap = await tx.get(matchCol(companyId).doc(matchId));
+    if (!matchSnap.exists || matchSnap.data()!.reconciliationId !== reconciliationId) {
+      throw new Error("Match not found in this reconciliation.");
+    }
+    const statementTxnIds = (matchSnap.data()!.statementTxnIds as string[]) ?? [];
+    tx.delete(matchCol(companyId).doc(matchId));
+    for (const id of statementTxnIds) {
+      tx.update(sub(companyId, "bankTransactions").doc(id), { reconciliationId: null });
+    }
   });
+  return persistSummary(companyId, reconciliationId);
 }
 
 // ── Workspace + report ─────────────────────────────────────────────────────
 
-/** The bank ledger balance, over exactly the lines the book panel shows so the
- *  two never disagree: posted entries, reversal pairs excluded. */
-async function bankBookBalanceCents(client: Tx, companyId: string, accountId: string, asOf: Date) {
-  const result = await client.journalLine.aggregate({
-    where: {
-      companyId,
-      accountId,
-      date: { lte: asOf },
-      journalEntry: { status: "POSTED", reversalOfId: null },
-    },
-    _sum: { debitCents: true, creditCents: true },
-  });
-  return (result._sum.debitCents ?? 0) - (result._sum.creditCents ?? 0);
-}
-
-/** Everything the reconcile page renders for one reconciliation. */
 export async function buildWorkspace(
   companyId: string,
   reconciliationId: string,
-  client: Tx = db,
 ): Promise<ReconciliationWorkspace> {
-  const reconciliation = await client.bankReconciliation.findFirst({
-    where: { id: reconciliationId, companyId },
-    include: { bankAccount: { include: { account: true } }, matches: true },
-  });
-  if (!reconciliation) throw new Error("Reconciliation not found in this company.");
+  const reconSnap = await reconCol(companyId).doc(reconciliationId).get();
+  if (!reconSnap.exists) throw new Error("Reconciliation not found in this company.");
+  const recon = decodeRecon(reconSnap.data()!, reconSnap.id);
 
-  const periodStart = reconciliation.statementStartDate;
-  const periodEnd = reconciliation.statementEndDate;
-  const glAccountId = reconciliation.bankAccount.accountId;
-  const currency = reconciliation.bankAccount.currency;
+  const periodStart = recon.statementStartDate;
+  const periodEnd = recon.statementEndDate;
 
-  const [statementTxns, bookLines, consumed] = await Promise.all([
-    client.bankTransaction.findMany({
-      where: {
-        companyId,
-        bankAccountId: reconciliation.bankAccountId,
-        date: { lte: periodEnd },
-        status: { notIn: ["EXCLUDED"] },
-      },
-      orderBy: { date: "asc" },
-    }),
-    client.journalLine.findMany({
-      where: {
-        companyId,
-        accountId: glAccountId,
-        date: { lte: periodEnd },
-        journalEntry: { status: "POSTED", reversalOfId: null },
-      },
-      include: { journalEntry: { select: { entryNo: true, memo: true, sourceNumber: true } } },
-      orderBy: [{ date: "asc" }, { lineNo: "asc" }],
-    }),
-    loadConsumed(client, companyId, reconciliation.bankAccountId),
+  const bankAccount = await bankAccounts.get(companyId, recon.bankAccountId);
+  if (!bankAccount) throw new Error("The reconciliation's bank account no longer exists.");
+  const glAccount = await getAccount(companyId, bankAccount.accountId);
+  const currency = bankAccount.currency;
+  const glAccountId = bankAccount.accountId;
+
+  const [stmtSnap, bookLines, consumed, matchSnap] = await Promise.all([
+    sub(companyId, "bankTransactions")
+      .where("bankAccountId", "==", recon.bankAccountId)
+      .where("date", "<=", toTimestamp(periodEnd))
+      .orderBy("date")
+      .get(),
+    bankLedgerLines(companyId, glAccountId, periodEnd),
+    loadConsumed(companyId, recon.bankAccountId),
+    matchCol(companyId).where("reconciliationId", "==", reconciliationId).get(),
   ]);
+
+  const statementTxns = stmtSnap.docs
+    .map((d) => {
+      const x = d.data();
+      return {
+        id: d.id,
+        date: (x.date as FirebaseFirestore.Timestamp).toDate(),
+        description: (x.description as string) ?? "",
+        reference: (x.reference as string | null) ?? null,
+        amountCents: (x.amountCents as number) ?? 0,
+        status: (x.status as string) ?? "UNMATCHED",
+      };
+    })
+    .filter((t) => t.status !== "EXCLUDED");
+
+  const reconMatches = matchSnap.docs.map((d) => ({
+    id: d.id,
+    netCents: d.data().netCents as number,
+    statementTxnIds: (d.data().statementTxnIds as string[]) ?? [],
+    bookLineIds: (d.data().bookLineIds as string[]) ?? [],
+  }));
 
   const matchOfTxn = new Map<string, string>();
   const matchOfLine = new Map<string, string>();
-  for (const m of reconciliation.matches) {
+  for (const m of reconMatches) {
     for (const id of m.statementTxnIds) matchOfTxn.set(id, m.id);
     for (const id of m.bookLineIds) matchOfLine.set(id, m.id);
   }
@@ -402,7 +454,6 @@ export async function buildWorkspace(
       date: isoDate(t.date),
       description: t.description,
       sublabel: t.reference ?? null,
-      // Statement (bank) perspective: a deposit is a credit, a withdrawal a debit.
       drCents: t.amountCents < 0 ? -t.amountCents : 0,
       crCents: t.amountCents > 0 ? t.amountCents : 0,
       matchId: matchOfTxn.get(t.id) ?? null,
@@ -415,8 +466,8 @@ export async function buildWorkspace(
     .map((l) => ({
       key: l.id,
       date: isoDate(l.date),
-      description: l.description ?? l.journalEntry.memo ?? "Journal entry",
-      sublabel: l.journalEntry.sourceNumber ?? l.journalEntry.entryNo,
+      description: l.description ?? l.entry!.memo ?? "Journal entry",
+      sublabel: l.entry!.sourceNumber ?? l.entry!.entryNo,
       drCents: l.debitCents,
       crCents: l.creditCents,
       matchId: matchOfLine.get(l.id) ?? null,
@@ -424,17 +475,16 @@ export async function buildWorkspace(
       prior: l.date < periodStart,
     }));
 
-  // Statement movement is this period's activity only.
   const statementMovementCents = statementTxns
     .filter((t) => t.date >= periodStart && t.date <= periodEnd)
     .reduce((s, t) => s + t.amountCents, 0);
 
+  const liveBookBalance = bookLines.reduce((s, l) => s + l.debitCents - l.creditCents, 0);
   const bookBalanceCents =
-    reconciliation.status === "COMPLETED" && reconciliation.bookBalanceCents != null
-      ? reconciliation.bookBalanceCents
-      : await bankBookBalanceCents(client, companyId, glAccountId, periodEnd);
+    recon.status === "COMPLETED" && recon.bookBalanceCents != null
+      ? recon.bookBalanceCents
+      : liveBookBalance;
 
-  // Outstanding = book entries on or before the period end that are in no match.
   const outstandingBookRows = bookRows.filter((r) => r.matchId === null);
   const outstandingReceipts = outstandingBookRows
     .filter((r) => r.drCents > 0)
@@ -445,7 +495,6 @@ export async function buildWorkspace(
   const outstandingReceiptsCents = outstandingReceipts.reduce((s, r) => s + r.amountCents, 0);
   const outstandingPaymentsCents = outstandingPayments.reduce((s, r) => s + r.amountCents, 0);
 
-  // Statement lines with no book counterpart — these are NOT timing differences.
   const unmatchedStatementItems = statementRows
     .filter((r) => r.matchId === null)
     .map((r) => ({
@@ -454,24 +503,20 @@ export async function buildWorkspace(
       amountCents: r.crCents > 0 ? r.crCents : -r.drCents,
     }));
 
-  // A completed reconciliation reads its financial figures from the frozen
-  // snapshot; only an in-progress one recomputes them from live data.
-  const completed = reconciliation.status === "COMPLETED";
-  const outstandingReceiptsFinal = completed ? reconciliation.outstandingReceiptsCents : outstandingReceiptsCents;
-  const outstandingPaymentsFinal = completed ? reconciliation.outstandingPaymentsCents : outstandingPaymentsCents;
+  const completed = recon.status === "COMPLETED";
+  const outstandingReceiptsFinal = completed ? recon.outstandingReceiptsCents : outstandingReceiptsCents;
+  const outstandingPaymentsFinal = completed ? recon.outstandingPaymentsCents : outstandingPaymentsCents;
   const adjustedBankBalanceCents = completed
-    ? reconciliation.adjustedBankBalanceCents ?? reconciliation.closingBalanceCents + outstandingReceiptsFinal - outstandingPaymentsFinal
-    : reconciliation.closingBalanceCents + outstandingReceiptsCents - outstandingPaymentsCents;
-  const differenceCents = completed ? reconciliation.differenceCents : adjustedBankBalanceCents - bookBalanceCents;
+    ? recon.adjustedBankBalanceCents ??
+      recon.closingBalanceCents + outstandingReceiptsFinal - outstandingPaymentsFinal
+    : recon.closingBalanceCents + outstandingReceiptsCents - outstandingPaymentsCents;
+  const differenceCents = completed ? recon.differenceCents : adjustedBankBalanceCents - bookBalanceCents;
 
   const statementBalanceValid =
-    reconciliation.openingBalanceCents + statementMovementCents === reconciliation.closingBalanceCents;
+    recon.openingBalanceCents + statementMovementCents === recon.closingBalanceCents;
   const allStatementMatched = statementRows.every((r) => r.matchId !== null);
   const canComplete =
-    reconciliation.status === "IN_PROGRESS" &&
-    statementBalanceValid &&
-    allStatementMatched &&
-    differenceCents === 0;
+    recon.status === "IN_PROGRESS" && statementBalanceValid && allStatementMatched && differenceCents === 0;
 
   const monthLabel = formatMonthLong(periodStart);
   const nextMonthLabel = formatMonthLong(addMonths(periodStart, 1));
@@ -479,10 +524,10 @@ export async function buildWorkspace(
   const liveReport: MonthEndReport = {
     asOfIso: isoDate(periodEnd),
     currency,
-    bankAccountName: reconciliation.bankAccount.name,
+    bankAccountName: bankAccount.name,
     monthLabel,
     nextMonthLabel,
-    statementClosingCents: reconciliation.closingBalanceCents,
+    statementClosingCents: recon.closingBalanceCents,
     outstandingReceipts,
     outstandingPayments,
     outstandingReceiptsCents,
@@ -494,63 +539,48 @@ export async function buildWorkspace(
     balanced: differenceCents === 0,
     frozen: false,
   };
-
   const report: MonthEndReport =
-    reconciliation.status === "COMPLETED" && reconciliation.reportJson
-      ? { ...(JSON.parse(reconciliation.reportJson) as MonthEndReport), frozen: true }
+    completed && recon.reportJson
+      ? { ...(JSON.parse(recon.reportJson) as MonthEndReport), frozen: true }
       : liveReport;
 
+  void glAccount;
   const summary: ReconciliationSummary = {
-    id: reconciliation.id,
-    bankAccountId: reconciliation.bankAccountId,
-    bankAccountName: reconciliation.bankAccount.name,
+    id: recon.id,
+    bankAccountId: recon.bankAccountId,
+    bankAccountName: bankAccount.name,
     currency,
-    year: reconciliation.statementYear,
-    month: reconciliation.statementMonth,
+    year: recon.statementYear,
+    month: recon.statementMonth,
     periodStartIso: isoDate(periodStart),
     periodEndIso: isoDate(periodEnd),
     monthLabel,
-    openingBalanceCents: reconciliation.openingBalanceCents,
-    closingBalanceCents: reconciliation.closingBalanceCents,
+    openingBalanceCents: recon.openingBalanceCents,
+    closingBalanceCents: recon.closingBalanceCents,
     bookBalanceCents,
     statementMovementCents,
     outstandingReceiptsCents: outstandingReceiptsFinal,
     outstandingPaymentsCents: outstandingPaymentsFinal,
     adjustedBankBalanceCents,
     differenceCents,
-    status: reconciliation.status,
-    version: reconciliation.version,
-    lockedAt: reconciliation.lockedAt ? reconciliation.lockedAt.toISOString() : null,
-    completedAt: reconciliation.completedAt ? reconciliation.completedAt.toISOString() : null,
-    notes: reconciliation.notes,
+    status: recon.status,
+    version: recon.version,
+    lockedAt: recon.lockedAt ? recon.lockedAt.toISOString() : null,
+    completedAt: recon.completedAt ? recon.completedAt.toISOString() : null,
+    notes: recon.notes,
     statementBalanceValid,
     allStatementMatched,
     canComplete,
   };
 
-  return {
-    summary,
-    statementRows,
-    bookRows,
-    matches: reconciliation.matches.map((m) => ({
-      id: m.id,
-      netCents: m.netCents,
-      statementTxnIds: m.statementTxnIds,
-      bookLineIds: m.bookLineIds,
-    })),
-    report,
-  };
+  return { summary, statementRows, bookRows, matches: reconMatches, report };
 }
 
-/** Recompute the stored balance snapshot on the reconciliation row. */
-async function persistSummary(client: Tx, companyId: string, reconciliationId: string) {
-  const { summary } = await buildWorkspace(companyId, reconciliationId, client);
-  await client.bankReconciliation.update({
-    where: { id: reconciliationId },
-    data: {
-      clearedBalanceCents: summary.adjustedBankBalanceCents,
-      differenceCents: summary.differenceCents,
-    },
+async function persistSummary(companyId: string, reconciliationId: string) {
+  const { summary } = await buildWorkspace(companyId, reconciliationId);
+  await reconCol(companyId).doc(reconciliationId).update({
+    clearedBalanceCents: summary.adjustedBankBalanceCents,
+    differenceCents: summary.differenceCents,
   });
   return summary;
 }
@@ -563,79 +593,76 @@ export async function completeReconciliation(
   expectedVersion: number,
   userId: string,
 ) {
-  return db.$transaction(async (tx) => {
-    const workspace = await buildWorkspace(companyId, reconciliationId, tx);
-    const { summary, report } = workspace;
+  const workspace = await buildWorkspace(companyId, reconciliationId);
+  const { summary, report } = workspace;
 
-    if (summary.status !== "IN_PROGRESS") throw new Error("This reconciliation is already completed.");
-    if (!summary.statementBalanceValid) {
-      throw new Error(
-        "Statement opening plus statement movement does not equal the closing balance. Import the full statement or correct the figures.",
-      );
-    }
-    if (!summary.allStatementMatched) {
-      throw new Error(
-        "Every statement transaction must be matched to a book entry before completing. Match the remaining lines or record an adjustment.",
-      );
-    }
-    if (summary.differenceCents !== 0) {
-      throw new Error(
-        `Adjusted difference is ${(summary.differenceCents / 100).toFixed(2)}, not zero. Unexplained bank-only items must be posted as adjustments through the ledger, never treated as timing differences.`,
-      );
-    }
+  if (summary.status !== "IN_PROGRESS") throw new Error("This reconciliation is already completed.");
+  if (!summary.statementBalanceValid) {
+    throw new Error(
+      "Statement opening plus statement movement does not equal the closing balance. Import the full statement or correct the figures.",
+    );
+  }
+  if (!summary.allStatementMatched) {
+    throw new Error(
+      "Every statement transaction must be matched to a book entry before completing. Match the remaining lines or record an adjustment.",
+    );
+  }
+  if (summary.differenceCents !== 0) {
+    throw new Error(
+      `Adjusted difference is ${(summary.differenceCents / 100).toFixed(2)}, not zero. Unexplained bank-only items must be posted as adjustments through the ledger.`,
+    );
+  }
 
-    // Atomic completion with an optimistic-concurrency check.
-    const updated = await tx.bankReconciliation.updateMany({
-      where: { id: reconciliationId, companyId, status: "IN_PROGRESS", version: expectedVersion },
-      data: {
-        status: "COMPLETED",
-        version: { increment: 1 },
-        completedAt: new Date(),
-        completedById: userId,
-        lockedAt: new Date(),
-        clearedBalanceCents: summary.adjustedBankBalanceCents,
-        differenceCents: 0,
-        bookBalanceCents: summary.bookBalanceCents,
-        outstandingReceiptsCents: summary.outstandingReceiptsCents,
-        outstandingPaymentsCents: summary.outstandingPaymentsCents,
-        adjustedBankBalanceCents: summary.adjustedBankBalanceCents,
-        reportJson: JSON.stringify({ ...report, frozen: true }),
-      },
-    });
-    if (updated.count !== 1) {
+  const statementTxnIds = workspace.matches.flatMap((m) => m.statementTxnIds);
+
+  await runTransaction(async (tx) => {
+    const snap = await tx.get(reconCol(companyId).doc(reconciliationId));
+    if (!snap.exists) throw new Error("Reconciliation not found in this company.");
+    const recon = decodeRecon(snap.data()!, snap.id);
+    if (recon.status !== "IN_PROGRESS" || recon.version !== expectedVersion) {
       throw new Error("This reconciliation was changed by someone else. Reload and try again.");
     }
-
-    const statementTxnIds = workspace.matches.flatMap((m) => m.statementTxnIds);
-    if (statementTxnIds.length > 0) {
-      await tx.bankTransaction.updateMany({
-        where: { id: { in: statementTxnIds }, companyId },
-        data: { status: "RECONCILED", reconciliationId },
+    tx.update(reconCol(companyId).doc(reconciliationId), {
+      status: "COMPLETED",
+      version: recon.version + 1,
+      completedAt: toTimestamp(new Date()),
+      completedById: userId,
+      lockedAt: toTimestamp(new Date()),
+      clearedBalanceCents: summary.adjustedBankBalanceCents,
+      differenceCents: 0,
+      bookBalanceCents: summary.bookBalanceCents,
+      outstandingReceiptsCents: summary.outstandingReceiptsCents,
+      outstandingPaymentsCents: summary.outstandingPaymentsCents,
+      adjustedBankBalanceCents: summary.adjustedBankBalanceCents,
+      reportJson: JSON.stringify({ ...report, frozen: true }),
+    });
+    for (const id of statementTxnIds) {
+      tx.update(sub(companyId, "bankTransactions").doc(id), {
+        status: "RECONCILED",
+        reconciliationId,
       });
     }
-
-    await tx.auditLog.create({
-      data: {
-        companyId,
-        userId,
-        action: "UPDATE",
-        entityType: "BankReconciliation",
-        entityId: reconciliationId,
-        summary: `Reconciled ${summary.bankAccountName} for ${report.monthLabel} — difference $0.00`,
-      },
-    });
-
-    return tx.bankReconciliation.findUniqueOrThrow({ where: { id: reconciliationId } });
   });
+
+  await recordAudit({
+    companyId,
+    userId,
+    action: "UPDATE",
+    entityType: "BankReconciliation",
+    entityId: reconciliationId,
+    summary: `Reconciled ${summary.bankAccountName} for ${report.monthLabel} — difference $0.00`,
+  });
+
+  return decodeRecon((await reconCol(companyId).doc(reconciliationId).get()).data()!, reconciliationId);
 }
 
 // ── History ────────────────────────────────────────────────────────────────
 
 export async function reconciliationHistory(companyId: string, bankAccountId?: string) {
-  return db.bankReconciliation.findMany({
-    where: { companyId, ...(bankAccountId ? { bankAccountId } : {}) },
-    include: { bankAccount: true },
-    orderBy: [{ statementEndDate: "desc" }, { bankAccount: { name: "asc" } }],
-    take: 60,
-  });
+  let q: FirebaseFirestore.Query = reconCol(companyId);
+  if (bankAccountId) q = q.where("bankAccountId", "==", bankAccountId);
+  const rows = (await q.get()).docs.map((d) => decodeRecon(d.data(), d.id));
+  return rows
+    .sort((a, b) => b.statementEndDate.getTime() - a.statementEndDate.getTime())
+    .slice(0, 60);
 }

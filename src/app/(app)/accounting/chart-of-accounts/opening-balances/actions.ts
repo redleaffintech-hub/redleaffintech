@@ -6,7 +6,7 @@ import { toCents } from "@/lib/money";
 import { toUtcDay } from "@/lib/dates";
 import { CAPABILITIES } from "@/lib/permissions";
 import { recordAudit, requireCapability } from "@/server/auth/context";
-import { postOpeningBalances } from "@/server/accounting/journals-fs";
+import { postOpeningBalances } from "@/server/accounting/journals";
 import { parseOpeningBalancesCsv } from "@/server/accounting/opening-balances-import";
 import { listAccounts } from "@/server/db/accounts";
 

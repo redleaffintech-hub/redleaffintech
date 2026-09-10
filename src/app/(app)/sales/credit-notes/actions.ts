@@ -5,7 +5,7 @@ import { z } from "zod";
 import { toCents } from "@/lib/money";
 import { CAPABILITIES } from "@/lib/permissions";
 import { recordAudit, requireCapability } from "@/server/auth/context";
-import { createCreditNote } from "@/server/documents/credit-notes-fs";
+import { createCreditNote } from "@/server/documents/credit-notes";
 
 const lineSchema = z.object({
   description: z.string().min(1),

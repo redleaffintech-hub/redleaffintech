@@ -5,7 +5,7 @@ import { z } from "zod";
 import { toCents } from "@/lib/money";
 import { CAPABILITIES } from "@/lib/permissions";
 import { requireCapability, requireCompany } from "@/server/auth/context";
-import { createExpense } from "@/server/documents/expenses-fs";
+import { createExpense } from "@/server/documents/expenses";
 import { listAccounts } from "@/server/db/accounts";
 import { listTaxCodes } from "@/server/db/tax-codes";
 import { listVendors } from "@/server/db/vendors";

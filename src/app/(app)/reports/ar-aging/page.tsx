@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
-import { arAging, apAging, bucketLabels, DEFAULT_BUCKETS } from "@/server/reports/aging-fs";
+import { arAging, apAging, bucketLabels, DEFAULT_BUCKETS } from "@/server/reports/aging";
 import { isoDate, toUtcDay, today, formatDate } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
 import { Money, PageHeader, StatusBadge } from "@/components/ui";

@@ -1,14 +1,20 @@
+import "server-only";
+
 /**
- * Bank feed ingestion (spec §11).
+ * Bank feed ingestion (§11).
  *
  * The parser is deliberately format-agnostic and returns a normalised shape, so
  * a future open-banking provider plugs in at `NormalizedTransaction[]` without
  * touching any downstream matching, rules or reconciliation code.
+ * `importTransactions` (the write) targets Firestore.
  */
 
-import { db } from "@/lib/db";
 import { toCents } from "@/lib/money";
 import { toUtcDay } from "@/lib/dates";
+import { bankAccounts } from "@/server/db/banking";
+import { newId, sub, toTimestamp } from "@/server/db/firestore";
+
+// ── Pure parsers ────────────────────────────────────────────────────────────
 
 export interface NormalizedTransaction {
   date: Date;
@@ -172,6 +178,8 @@ function parseFlexibleDate(value: string): Date | null {
   return Number.isNaN(parsed.getTime()) ? null : toUtcDay(parsed);
 }
 
+// ── Firestore write ─────────────────────────────────────────────────────────
+
 export interface ImportResult {
   batchId: string;
   imported: number;
@@ -179,11 +187,6 @@ export interface ImportResult {
   errors: string[];
 }
 
-/**
- * Commit parsed rows. Duplicate detection is by FITID when the bank supplies
- * one, otherwise by (account, date, amount, normalised description) — the
- * combination that survives re-downloading an overlapping statement window.
- */
 export async function importTransactions(
   companyId: string,
   bankAccountId: string,
@@ -193,38 +196,62 @@ export async function importTransactions(
   let imported = 0;
   let duplicates = 0;
 
-  const bankAccount = await db.bankAccount.findFirst({ where: { id: bankAccountId, companyId } });
+  const bankAccount = await bankAccounts.get(companyId, bankAccountId);
   if (!bankAccount) throw new Error("Bank account not found in this company.");
 
+  // Load the account's existing lines once for duplicate detection rather than
+  // a query per row.
+  const existing = await sub(companyId, "bankTransactions")
+    .where("bankAccountId", "==", bankAccountId)
+    .get();
+  const byFitId = new Set<string>();
+  const byComposite = new Set<string>();
+  for (const d of existing.docs) {
+    const t = d.data();
+    if (t.fitId) byFitId.add(String(t.fitId));
+    const ts = (t.date as FirebaseFirestore.Timestamp)?.toDate?.();
+    byComposite.add(`${ts?.toISOString().slice(0, 10)}|${t.amountCents}|${t.normalizedDesc}`);
+  }
+
+  const writer = sub(companyId, "bankTransactions").firestore.bulkWriter();
   for (const row of rows) {
     const normalizedDesc = normalizeDescription(row.description);
     const date = toUtcDay(row.date);
+    const dupKey = `${date.toISOString().slice(0, 10)}|${row.amountCents}|${normalizedDesc}`;
 
-    const existing = await db.bankTransaction.findFirst({
-      where: row.fitId
-        ? { bankAccountId, fitId: row.fitId }
-        : { bankAccountId, date, amountCents: row.amountCents, normalizedDesc },
-    });
-    if (existing) { duplicates++; continue; }
+    if (row.fitId ? byFitId.has(row.fitId) : byComposite.has(dupKey)) {
+      duplicates++;
+      continue;
+    }
+    if (row.fitId) byFitId.add(row.fitId);
+    else byComposite.add(dupKey);
 
-    await db.bankTransaction.create({
-      data: {
-        companyId,
-        bankAccountId,
-        date,
-        description: row.description,
-        normalizedDesc,
-        reference: row.reference,
-        amountCents: row.amountCents,
-        runningBalanceCents: row.balanceCents,
-        fitId: row.fitId,
-        importBatchId: batchId,
-        status: "UNMATCHED",
-      },
+    const id = newId();
+    writer.set(sub(companyId, "bankTransactions").doc(id), {
+      companyId,
+      bankAccountId,
+      date: toTimestamp(date),
+      description: row.description,
+      normalizedDesc,
+      reference: row.reference ?? null,
+      amountCents: row.amountCents,
+      runningBalanceCents: row.balanceCents ?? null,
+      status: "UNMATCHED",
+      matchedType: null,
+      matchedId: null,
+      categoryAccountId: null,
+      journalEntryId: null,
+      reconciliationId: null,
+      importBatchId: batchId,
+      fitId: row.fitId ?? null,
+      isDuplicate: false,
+      appliedRuleId: null,
+      createdAt: toTimestamp(new Date()),
     });
     imported++;
   }
+  await writer.close();
 
-  await db.bankAccount.update({ where: { id: bankAccountId }, data: { lastImportAt: new Date() } });
+  await bankAccounts.update(companyId, bankAccountId, { lastImportAt: new Date() });
   return { batchId, imported, duplicates, errors: [] };
 }
