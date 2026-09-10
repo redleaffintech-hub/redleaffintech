@@ -1,4 +1,4 @@
-import { db } from "@/lib/db";
+import { employees as employeesRepo, departments as departmentsRepo } from "@/server/db/hr";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
 import { Card, PageHeader } from "@/components/ui";
@@ -10,14 +10,17 @@ export const metadata = { title: "New employee" };
 export default async function NewEmployeePage() {
   const { company } = await requireCapability(CAPABILITIES.HR);
 
-  const [departments, managers] = await Promise.all([
-    db.department.findMany({ where: { companyId: company.id }, orderBy: { name: "asc" }, select: { id: true, name: true } }),
-    db.employee.findMany({
-      where: { companyId: company.id, employmentStatus: { not: "TERMINATED" } },
-      orderBy: { legalFirstName: "asc" },
-      select: { id: true, legalFirstName: true, legalLastName: true },
-    }),
+  const [allDepartments, allEmployees] = await Promise.all([
+    departmentsRepo.list(company.id),
+    employeesRepo.list(company.id),
   ]);
+  const departments = [...allDepartments]
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((d) => ({ id: d.id, name: d.name }));
+  const managers = allEmployees
+    .filter((e) => e.employmentStatus !== "TERMINATED")
+    .sort((a, b) => a.legalFirstName.localeCompare(b.legalFirstName))
+    .map((m) => ({ id: m.id, legalFirstName: m.legalFirstName, legalLastName: m.legalLastName }));
 
   return (
     <>

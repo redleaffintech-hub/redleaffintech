@@ -1,4 +1,4 @@
-import { db } from "@/lib/db";
+import { leaveTypes as leaveTypesRepo } from "@/server/db/hr";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES, can } from "@/lib/permissions";
 import { LEAVE_CATEGORY_LABELS } from "@/lib/hr-enums";
@@ -9,7 +9,7 @@ export const metadata = { title: "Leave types" };
 
 export default async function LeaveTypesPage() {
   const { company, role } = await requireCapability(CAPABILITIES.HR);
-  const leaveTypes = await db.leaveType.findMany({ where: { companyId: company.id }, orderBy: { name: "asc" } });
+  const leaveTypes = (await leaveTypesRepo.list(company.id)).sort((a, b) => a.name.localeCompare(b.name));
   const canEdit = can(role, CAPABILITIES.HR);
 
   return (

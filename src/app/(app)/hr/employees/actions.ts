@@ -3,7 +3,6 @@
 import { revalidatePath } from "next/cache";
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { db } from "@/lib/db";
 import { PROVINCES } from "@/lib/enums";
 import {
   COMPENSATION_TYPES,
@@ -13,8 +12,10 @@ import {
 } from "@/lib/hr-enums";
 import { CAPABILITIES } from "@/lib/permissions";
 import { recordAudit, requireCapability } from "@/server/auth/context";
-import { nextNumber } from "@/server/documents/numbering";
 import { isValidSin, normalizeSin, sinLastThree } from "@/server/hr/employment-standards";
+import { departments, employees } from "@/server/db/hr";
+import { bumpSequenceTx } from "@/server/db/companies";
+import { runTransaction } from "@/server/db/firestore";
 
 /**
  * Employee record mutations.
@@ -94,12 +95,12 @@ function sinFields(rawSin: string | null | undefined): { error: string | null; s
 
 async function assertDepartmentAndManager(companyId: string, departmentId: string | null | undefined, managerId: string | null | undefined, selfId?: string) {
   if (departmentId) {
-    const dept = await db.department.findFirst({ where: { id: departmentId, companyId }, select: { id: true } });
+    const dept = await departments.get(companyId, departmentId);
     if (!dept) return "That department does not exist in this company.";
   }
   if (managerId) {
     if (managerId === selfId) return "An employee cannot be their own manager.";
-    const manager = await db.employee.findFirst({ where: { id: managerId, companyId }, select: { id: true } });
+    const manager = await employees.get(companyId, managerId);
     if (!manager) return "That manager does not exist in this company.";
   }
   return null;
@@ -121,10 +122,9 @@ export async function createEmployeeAction(formData: FormData) {
   if (Number.isNaN(hireDate.getTime())) return { error: "Hire date is not a valid date." };
 
   try {
-    const employee = await db.$transaction(async (tx) => {
-      const employeeNumber = await nextNumber(tx, company.id, "employee");
-      return tx.employee.create({
-        data: {
+    const employee = await runTransaction(async (tx) => {
+      const employeeNumber = await bumpSequenceTx(tx, company.id, "employee");
+      return employees.createTx(tx, {
           companyId: company.id,
           employeeNumber,
           legalFirstName: input.legalFirstName,
@@ -155,8 +155,7 @@ export async function createEmployeeAction(formData: FormData) {
           standardHoursPerWeek: input.standardHoursPerWeek === "" || input.standardHoursPerWeek === undefined ? null : input.standardHoursPerWeek,
           notes: input.notes ?? null,
           createdById: user.id,
-        },
-      });
+      } as never);
     });
 
     await recordAudit({
@@ -180,7 +179,7 @@ export async function updateEmployeeAction(formData: FormData) {
   const id = String(formData.get("id") ?? "");
   if (!id) return { error: "Missing employee id." };
 
-  const existing = await db.employee.findFirst({ where: { id, companyId: company.id } });
+  const existing = await employees.get(company.id, id);
   if (!existing) return { error: "That employee no longer exists." };
 
   const parsed = employeeSchema.safeParse(Object.fromEntries(formData));
@@ -198,9 +197,7 @@ export async function updateEmployeeAction(formData: FormData) {
   const hireDate = new Date(`${input.hireDate}T00:00:00.000Z`);
   if (Number.isNaN(hireDate.getTime())) return { error: "Hire date is not a valid date." };
 
-  const updated = await db.employee.update({
-    where: { id },
-    data: {
+  const updated = await employees.update(company.id, id, {
       legalFirstName: input.legalFirstName,
       legalLastName: input.legalLastName,
       preferredName: input.preferredName ?? null,
@@ -228,8 +225,7 @@ export async function updateEmployeeAction(formData: FormData) {
       payFrequency: input.payFrequency,
       standardHoursPerWeek: input.standardHoursPerWeek === "" || input.standardHoursPerWeek === undefined ? null : input.standardHoursPerWeek,
       notes: input.notes ?? null,
-    },
-  });
+  } as never);
 
   await recordAudit({
     companyId: company.id,
@@ -258,7 +254,7 @@ export async function terminateEmployeeAction(formData: FormData) {
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Check the termination details and try again." };
   const input = parsed.data;
 
-  const existing = await db.employee.findFirst({ where: { id: input.id, companyId: company.id } });
+  const existing = await employees.get(company.id, input.id);
   if (!existing) return { error: "That employee no longer exists." };
   if (existing.employmentStatus === "TERMINATED") return { error: `${existing.legalFirstName} ${existing.legalLastName} is already terminated.` };
 
@@ -269,18 +265,14 @@ export async function terminateEmployeeAction(formData: FormData) {
   // Anyone who reported to this person loses that reporting line rather than
   // pointing at a terminated employee — the org chart only ever reflects
   // who is actually managing whom today.
-  await db.$transaction([
-    db.employee.update({
-      where: { id: input.id },
-      data: {
-        employmentStatus: "TERMINATED",
-        terminationDate,
-        terminationReason: input.terminationReason,
-        terminationNote: input.terminationNote ?? null,
-      },
-    }),
-    db.employee.updateMany({ where: { companyId: company.id, managerId: input.id }, data: { managerId: null } }),
-  ]);
+  await employees.update(company.id, input.id, {
+    employmentStatus: "TERMINATED",
+    terminationDate,
+    terminationReason: input.terminationReason,
+    terminationNote: input.terminationNote ?? null,
+  });
+  const reports = await employees.list(company.id, { where: [["managerId", "==", input.id]] });
+  for (const r of reports) await employees.update(company.id, r.id, { managerId: null });
 
   await recordAudit({
     companyId: company.id,
@@ -302,13 +294,15 @@ export async function reactivateEmployeeAction(formData: FormData) {
   const id = String(formData.get("id") ?? "");
   if (!id) return { error: "Missing employee id." };
 
-  const existing = await db.employee.findFirst({ where: { id, companyId: company.id } });
+  const existing = await employees.get(company.id, id);
   if (!existing) return { error: "That employee no longer exists." };
   if (existing.employmentStatus !== "TERMINATED") return { error: "This employee is not terminated." };
 
-  await db.employee.update({
-    where: { id },
-    data: { employmentStatus: "ACTIVE", terminationDate: null, terminationReason: null, terminationNote: null },
+  await employees.update(company.id, id, {
+    employmentStatus: "ACTIVE",
+    terminationDate: null,
+    terminationReason: null,
+    terminationNote: null,
   });
 
   await recordAudit({
@@ -331,11 +325,11 @@ export async function setOnLeaveAction(formData: FormData) {
   const onLeave = String(formData.get("onLeave") ?? "") === "true";
   if (!id) return { error: "Missing employee id." };
 
-  const existing = await db.employee.findFirst({ where: { id, companyId: company.id } });
+  const existing = await employees.get(company.id, id);
   if (!existing) return { error: "That employee no longer exists." };
   if (existing.employmentStatus === "TERMINATED") return { error: "A terminated employee cannot be put on leave." };
 
-  await db.employee.update({ where: { id }, data: { employmentStatus: onLeave ? "ON_LEAVE" : "ACTIVE" } });
+  await employees.update(company.id, id, { employmentStatus: onLeave ? "ON_LEAVE" : "ACTIVE" });
 
   await recordAudit({
     companyId: company.id,

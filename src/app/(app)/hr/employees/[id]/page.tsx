@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { db } from "@/lib/db";
+import { employees as employeesRepo, departments as departmentsRepo } from "@/server/db/hr";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES, can } from "@/lib/permissions";
 import { formatDate } from "@/lib/dates";
@@ -42,15 +42,35 @@ export default async function EmployeeDetailPage({ params }: { params: Promise<{
   const { company, role } = await requireCapability(CAPABILITIES.HR);
   const { id } = await params;
 
-  const employee = await db.employee.findFirst({
-    where: { id, companyId: company.id },
-    include: {
-      department: { select: { name: true } },
-      manager: { select: { id: true, legalFirstName: true, legalLastName: true, jobTitle: true } },
-      reports: { select: { id: true, legalFirstName: true, legalLastName: true, jobTitle: true, employmentStatus: true }, orderBy: { legalFirstName: "asc" } },
-    },
-  });
-  if (!employee) notFound();
+  const raw = await employeesRepo.get(company.id, id);
+  if (!raw) notFound();
+  const [allEmployees, dept, manager] = await Promise.all([
+    employeesRepo.list(company.id),
+    raw.departmentId ? departmentsRepo.get(company.id, raw.departmentId) : Promise.resolve(null),
+    raw.managerId ? employeesRepo.get(company.id, raw.managerId) : Promise.resolve(null),
+  ]);
+  const employee = {
+    ...raw,
+    department: dept ? { name: dept.name } : null,
+    manager: manager
+      ? {
+          id: manager.id,
+          legalFirstName: manager.legalFirstName,
+          legalLastName: manager.legalLastName,
+          jobTitle: manager.jobTitle,
+        }
+      : null,
+    reports: allEmployees
+      .filter((e) => e.managerId === raw.id)
+      .sort((a, b) => a.legalFirstName.localeCompare(b.legalFirstName))
+      .map((e) => ({
+        id: e.id,
+        legalFirstName: e.legalFirstName,
+        legalLastName: e.legalLastName,
+        jobTitle: e.jobTitle,
+        employmentStatus: e.employmentStatus,
+      })),
+  };
 
   const today = new Date();
   const years = completedYears(employee.hireDate, today);

@@ -1,4 +1,4 @@
-import { db } from "@/lib/db";
+import { departments as departmentsRepo, employees as employeesRepo } from "@/server/db/hr";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES, can } from "@/lib/permissions";
 import { Card, PageHeader, Table, Td, Th, Tr } from "@/components/ui";
@@ -9,11 +9,17 @@ export const metadata = { title: "Departments" };
 export default async function DepartmentsPage() {
   const { company, role } = await requireCapability(CAPABILITIES.HR);
 
-  const departments = await db.department.findMany({
-    where: { companyId: company.id },
-    include: { _count: { select: { employees: true } } },
-    orderBy: { name: "asc" },
-  });
+  const [rawDepartments, allEmployees] = await Promise.all([
+    departmentsRepo.list(company.id),
+    employeesRepo.list(company.id),
+  ]);
+  const countByDept = new Map<string, number>();
+  for (const e of allEmployees) {
+    if (e.departmentId) countByDept.set(e.departmentId, (countByDept.get(e.departmentId) ?? 0) + 1);
+  }
+  const departments = [...rawDepartments]
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((d) => ({ ...d, _count: { employees: countByDept.get(d.id) ?? 0 } }));
 
   const canEdit = can(role, CAPABILITIES.HR);
 

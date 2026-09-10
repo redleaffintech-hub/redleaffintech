@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { db } from "@/lib/db";
+import { employees as employeesRepo, departments as departmentsRepo } from "@/server/db/hr";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
 import { isoDate } from "@/lib/dates";
@@ -14,16 +14,19 @@ export default async function EditEmployeePage({ params }: { params: Promise<{ i
   const { company } = await requireCapability(CAPABILITIES.HR);
   const { id } = await params;
 
-  const [employee, departments, managers] = await Promise.all([
-    db.employee.findFirst({ where: { id, companyId: company.id } }),
-    db.department.findMany({ where: { companyId: company.id }, orderBy: { name: "asc" }, select: { id: true, name: true } }),
-    db.employee.findMany({
-      where: { companyId: company.id, employmentStatus: { not: "TERMINATED" } },
-      orderBy: { legalFirstName: "asc" },
-      select: { id: true, legalFirstName: true, legalLastName: true },
-    }),
+  const [employee, allDepartments, allEmployees] = await Promise.all([
+    employeesRepo.get(company.id, id),
+    departmentsRepo.list(company.id),
+    employeesRepo.list(company.id),
   ]);
   if (!employee) notFound();
+  const departments = [...allDepartments]
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((d) => ({ id: d.id, name: d.name }));
+  const managers = allEmployees
+    .filter((e) => e.employmentStatus !== "TERMINATED")
+    .sort((a, b) => a.legalFirstName.localeCompare(b.legalFirstName))
+    .map((m) => ({ id: m.id, legalFirstName: m.legalFirstName, legalLastName: m.legalLastName }));
 
   const initial: EmployeeFormValues = {
     id: employee.id,

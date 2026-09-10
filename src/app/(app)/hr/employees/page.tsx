@@ -1,6 +1,5 @@
 import Link from "next/link";
-import { db } from "@/lib/db";
-import { contains } from "@/lib/search";
+import { employees as employeesRepo, departments as departmentsRepo } from "@/server/db/hr";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES, can } from "@/lib/permissions";
 import { formatDate } from "@/lib/dates";
@@ -23,25 +22,33 @@ export default async function EmployeesPage({ searchParams }: { searchParams: Pr
   const query = typeof params.q === "string" ? params.q : "";
   const status = typeof params.status === "string" ? params.status : "";
 
-  const employees = await db.employee.findMany({
-    where: {
-      companyId: company.id,
-      ...(status ? { employmentStatus: status } : {}),
-      ...(query
-        ? {
-            OR: [
-              { legalFirstName: contains(query) },
-              { legalLastName: contains(query) },
-              { preferredName: contains(query) },
-              { employeeNumber: contains(query) },
-              { jobTitle: contains(query) },
-            ],
-          }
-        : {}),
-    },
-    include: { department: { select: { name: true } } },
-    orderBy: [{ employmentStatus: "asc" }, { legalFirstName: "asc" }],
-  });
+  const q = query.toLowerCase();
+  const [allEmployees, allDepartments] = await Promise.all([
+    employeesRepo.list(company.id),
+    departmentsRepo.list(company.id),
+  ]);
+  const deptById = new Map(allDepartments.map((d) => [d.id, d]));
+
+  const employees = allEmployees
+    .filter((e) => !status || e.employmentStatus === status)
+    .filter(
+      (e) =>
+        !q ||
+        e.legalFirstName.toLowerCase().includes(q) ||
+        e.legalLastName.toLowerCase().includes(q) ||
+        (e.preferredName ?? "").toLowerCase().includes(q) ||
+        e.employeeNumber.toLowerCase().includes(q) ||
+        e.jobTitle.toLowerCase().includes(q),
+    )
+    .sort(
+      (a, b) =>
+        a.employmentStatus.localeCompare(b.employmentStatus) ||
+        a.legalFirstName.localeCompare(b.legalFirstName),
+    )
+    .map((e) => ({
+      ...e,
+      department: e.departmentId ? { name: deptById.get(e.departmentId)?.name ?? "—" } : null,
+    }));
 
   const counts = {
     all: employees.length,

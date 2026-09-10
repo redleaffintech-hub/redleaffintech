@@ -1,5 +1,9 @@
 import Link from "next/link";
-import { db } from "@/lib/db";
+import {
+  employees as employeesRepo,
+  leaveTypes as leaveTypesRepo,
+  leaveRequests as leaveRequestsRepo,
+} from "@/server/db/hr";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES, can } from "@/lib/permissions";
 import { formatDate } from "@/lib/dates";
@@ -22,23 +26,38 @@ export default async function TimeOffPage({ searchParams }: { searchParams: Prom
   const params = await searchParams;
   const status = typeof params.status === "string" ? params.status : "PENDING";
 
-  const [requests, employees, leaveTypes] = await Promise.all([
-    db.leaveRequest.findMany({
-      where: { companyId: company.id, ...(status ? { status } : {}) },
-      include: { employee: { select: { legalFirstName: true, legalLastName: true, id: true } }, leaveType: { select: { name: true } } },
-      orderBy: { createdAt: "desc" },
-      take: 100,
-    }),
-    db.employee.findMany({
-      where: { companyId: company.id, employmentStatus: { not: "TERMINATED" } },
-      orderBy: { legalFirstName: "asc" },
-      select: { id: true, legalFirstName: true, legalLastName: true },
-    }),
-    db.leaveType.findMany({ where: { companyId: company.id, isActive: true }, orderBy: { name: "asc" } }),
+  const [allRequests, allEmployees, allLeaveTypes] = await Promise.all([
+    leaveRequestsRepo.list(company.id),
+    employeesRepo.list(company.id),
+    leaveTypesRepo.list(company.id),
   ]);
+  const employeeById = new Map(allEmployees.map((e) => [e.id, e]));
+  const leaveTypeById = new Map(allLeaveTypes.map((t) => [t.id, t]));
 
-  const counts = await db.leaveRequest.groupBy({ by: ["status"], where: { companyId: company.id }, _count: true });
-  const countFor = (s: string) => counts.find((c) => c.status === s)?._count ?? 0;
+  const statusCount = new Map<string, number>();
+  for (const r of allRequests) statusCount.set(r.status, (statusCount.get(r.status) ?? 0) + 1);
+  const countFor = (s: string) => statusCount.get(s) ?? 0;
+
+  const requests = allRequests
+    .filter((r) => !status || r.status === status)
+    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+    .slice(0, 100)
+    .map((r) => ({
+      ...r,
+      employee: {
+        id: r.employeeId,
+        legalFirstName: employeeById.get(r.employeeId)?.legalFirstName ?? "",
+        legalLastName: employeeById.get(r.employeeId)?.legalLastName ?? "",
+      },
+      leaveType: { name: leaveTypeById.get(r.leaveTypeId)?.name ?? "leave" },
+    }));
+
+  const employees = allEmployees
+    .filter((e) => e.employmentStatus !== "TERMINATED")
+    .sort((a, b) => a.legalFirstName.localeCompare(b.legalFirstName));
+  const leaveTypes = allLeaveTypes
+    .filter((t) => t.isActive)
+    .sort((a, b) => a.name.localeCompare(b.name));
 
   const employeeOptions = employees.map((e) => ({ id: e.id, name: `${e.legalFirstName} ${e.legalLastName}` }));
   const canEdit = can(role, CAPABILITIES.HR);

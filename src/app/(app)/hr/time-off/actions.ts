@@ -2,9 +2,9 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { db } from "@/lib/db";
 import { CAPABILITIES } from "@/lib/permissions";
 import { recordAudit, requireCapability } from "@/server/auth/context";
+import { employees, leaveTypes, leaveRequests, leaveBalanceAdjustments } from "@/server/db/hr";
 
 const requestSchema = z.object({
   employeeId: z.string().min(1, "Choose an employee."),
@@ -27,25 +27,24 @@ export async function createLeaveRequestAction(formData: FormData) {
   if (endDate < startDate) return { error: "The end date cannot be before the start date." };
 
   const [employee, leaveType] = await Promise.all([
-    db.employee.findFirst({ where: { id: input.employeeId, companyId: company.id } }),
-    db.leaveType.findFirst({ where: { id: input.leaveTypeId, companyId: company.id, isActive: true } }),
+    employees.get(company.id, input.employeeId),
+    leaveTypes.get(company.id, input.leaveTypeId),
   ]);
   if (!employee) return { error: "That employee does not exist in this company." };
   if (employee.employmentStatus === "TERMINATED") return { error: "This employee is terminated and cannot request leave." };
-  if (!leaveType) return { error: "That leave type does not exist or is inactive." };
+  if (!leaveType || !leaveType.isActive) return { error: "That leave type does not exist or is inactive." };
 
-  const request = await db.leaveRequest.create({
-    data: {
-      companyId: company.id,
-      employeeId: input.employeeId,
-      leaveTypeId: input.leaveTypeId,
-      startDate,
-      endDate,
-      hours: input.hours,
-      reason: input.reason || null,
-      requestedById: user.id,
-    },
-  });
+  const request = await leaveRequests.create({
+    companyId: company.id,
+    employeeId: input.employeeId,
+    leaveTypeId: input.leaveTypeId,
+    startDate,
+    endDate,
+    hours: input.hours,
+    reason: input.reason || null,
+    status: "PENDING",
+    requestedById: user.id,
+  } as never);
 
   await recordAudit({
     companyId: company.id, userId: user.id, action: "CREATE", entityType: "LeaveRequest",
@@ -68,22 +67,25 @@ export async function decideLeaveRequestAction(formData: FormData) {
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Check the decision details." };
   const input = parsed.data;
 
-  const existing = await db.leaveRequest.findFirst({
-    where: { id: input.id, companyId: company.id },
-    include: { employee: true, leaveType: true },
-  });
+  const existing = await leaveRequests.get(company.id, input.id);
   if (!existing) return { error: "That leave request no longer exists." };
   if (existing.status !== "PENDING") return { error: "This request has already been decided." };
+  const [reqEmployee, reqLeaveType] = await Promise.all([
+    employees.get(company.id, existing.employeeId),
+    leaveTypes.get(company.id, existing.leaveTypeId),
+  ]);
 
-  await db.leaveRequest.update({
-    where: { id: input.id },
-    data: { status: input.decision, decidedById: user.id, decidedAt: new Date(), decisionNote: input.decisionNote || null },
-  });
+  await leaveRequests.update(company.id, input.id, {
+    status: input.decision,
+    decidedById: user.id,
+    decidedAt: new Date(),
+    decisionNote: input.decisionNote || null,
+  } as never);
 
   await recordAudit({
     companyId: company.id, userId: user.id, action: "UPDATE", entityType: "LeaveRequest",
     entityId: input.id,
-    summary: `Leave request for ${existing.employee.legalFirstName} ${existing.employee.legalLastName} (${existing.leaveType.name}) ${input.decision.toLowerCase()}`,
+    summary: `Leave request for ${reqEmployee?.legalFirstName ?? ""} ${reqEmployee?.legalLastName ?? ""} (${reqLeaveType?.name ?? "leave"}) ${input.decision.toLowerCase()}`,
   });
 
   revalidatePath("/hr/time-off");
@@ -96,15 +98,19 @@ export async function cancelLeaveRequestAction(formData: FormData) {
   const id = String(formData.get("id") ?? "");
   if (!id) return { error: "Missing request id." };
 
-  const existing = await db.leaveRequest.findFirst({ where: { id, companyId: company.id }, include: { employee: true, leaveType: true } });
+  const existing = await leaveRequests.get(company.id, id);
   if (!existing) return { error: "That leave request no longer exists." };
   if (existing.status === "CANCELLED" || existing.status === "DECLINED") return { error: "This request cannot be cancelled." };
+  const [reqEmployee, reqLeaveType] = await Promise.all([
+    employees.get(company.id, existing.employeeId),
+    leaveTypes.get(company.id, existing.leaveTypeId),
+  ]);
 
-  await db.leaveRequest.update({ where: { id }, data: { status: "CANCELLED" } });
+  await leaveRequests.update(company.id, id, { status: "CANCELLED" });
 
   await recordAudit({
     companyId: company.id, userId: user.id, action: "UPDATE", entityType: "LeaveRequest",
-    entityId: id, summary: `Leave request for ${existing.employee.legalFirstName} ${existing.employee.legalLastName} (${existing.leaveType.name}) cancelled`,
+    entityId: id, summary: `Leave request for ${reqEmployee?.legalFirstName ?? ""} ${reqEmployee?.legalLastName ?? ""} (${reqLeaveType?.name ?? "leave"}) cancelled`,
   });
 
   revalidatePath("/hr/time-off");
@@ -131,23 +137,23 @@ export async function addLeaveBalanceAdjustmentAction(formData: FormData) {
   if (Number.isNaN(effectiveDate.getTime())) return { error: "Check the effective date." };
 
   const [employee, leaveType] = await Promise.all([
-    db.employee.findFirst({ where: { id: input.employeeId, companyId: company.id } }),
-    db.leaveType.findFirst({ where: { id: input.leaveTypeId, companyId: company.id, trackBalance: true } }),
+    employees.get(company.id, input.employeeId),
+    leaveTypes.get(company.id, input.leaveTypeId),
   ]);
   if (!employee) return { error: "That employee does not exist in this company." };
-  if (!leaveType) return { error: "That leave type does not exist or does not track a balance." };
+  if (!leaveType || !leaveType.trackBalance) {
+    return { error: "That leave type does not exist or does not track a balance." };
+  }
 
-  const adjustment = await db.leaveBalanceAdjustment.create({
-    data: {
-      companyId: company.id,
-      employeeId: input.employeeId,
-      leaveTypeId: input.leaveTypeId,
-      hours: input.hours,
-      reason: input.reason,
-      effectiveDate,
-      createdById: user.id,
-    },
-  });
+  const adjustment = await leaveBalanceAdjustments.create({
+    companyId: company.id,
+    employeeId: input.employeeId,
+    leaveTypeId: input.leaveTypeId,
+    hours: input.hours,
+    reason: input.reason,
+    effectiveDate,
+    createdById: user.id,
+  } as never);
 
   await recordAudit({
     companyId: company.id, userId: user.id, action: "CREATE", entityType: "LeaveBalanceAdjustment",
