@@ -480,18 +480,28 @@ Documented as a deliberate deviation from strict single-transaction atomicity.
       green.
   - [x] **8a-emulator — full smoke test against a live Firestore emulator.**
     `scripts/smoke-firestore.ts` (`npm run smoke:firestore`, with the emulator
-    on :8080) — 47 assertions across provisioning → invoice post (journal
-    graph + `accountPeriodBalances` roll-up + tax entries) → trial balance /
-    income statement / balance sheet all balance / A/R aging → receipt +
-    allocation → bill approval + post → manual journal + reversal → period
-    close + rejection of a post into it → bank CSV import + duplicate
-    detection → final whole-company trial balance. **Caught and fixed a real
-    read-after-write bug:** `refreshInvoiceStatusTx` / `refreshBillStatusTx`
-    did their own `getTx` inside the write phase of `recordPayment` /
-    `applyPayment` / `voidPayment` / `applyCreditNote` — illegal in a Firestore
-    transaction; would have broken every payment and credit-note application in
-    production. Both now take the doc fields they need (read in the caller's
-    read phase).
+    on :8080) — **67 assertions**: provisioning → invoice post (journal graph +
+    `accountPeriodBalances` roll-up + tax entries) → trial balance / income
+    statement / balance sheet all balance / A/R aging → receipt + allocation →
+    bill approval + post → manual journal + reversal → period close + rejection
+    of a post into it → bank CSV import + duplicate detection → estimate →
+    convert to invoice → credit note → apply → inventory `adjustStock` → bank
+    categorise → delete-guard reference count → dashboard aggregation → final
+    whole-company trial balance.
+
+    **Caught and fixed two production-breaking read-after-write bugs** — both
+    from porting a Prisma transaction (which has no read/write ordering rule) to
+    a Firestore one (which forbids a read after any write):
+    1. `refreshInvoiceStatusTx` / `refreshBillStatusTx` did their own `getTx`
+       inside the write phase of `recordPayment` / `applyPayment` /
+       `voidPayment` / `applyCreditNote` — would have broken **every payment and
+       credit-note application**. Both now take the doc fields they need (read
+       in the caller's read phase) and are synchronous.
+    2. `createCreditNote` (no draft state — create + post in one transaction)
+       called `bumpSequenceTx` (a company-doc write) before `planPosting` (a
+       company-doc read) — would have broken **every credit-note creation**. Now
+       reads the counter in the read phase and writes the increment alongside
+       `commitPosting`, matching how `recordPayment` already did it.
   - [ ] **8b — deploy (needs the account owner).** Enable Blaze on
     `redleaf-fintech-e4c4d`; `firebase apphosting:secrets:set SESSION_SECRET`;
     with a service-account key, `npm run migrate:firestore -- --yes` (reads the

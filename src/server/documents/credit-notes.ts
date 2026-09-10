@@ -7,7 +7,8 @@ import "server-only";
 
 import { SYSTEM_ACCOUNTS } from "@/lib/enums";
 import { toUtcDay } from "@/lib/dates";
-import { bumpSequenceTx, runTransaction } from "@/server/db/companies";
+import { SEQUENCE_FIELD, runTransaction } from "@/server/db/companies";
+import { companyRef, newId } from "@/server/db/firestore";
 import { getCustomerTx } from "@/server/db/customers";
 import { getVendorTx } from "@/server/db/vendors";
 import { creditNotes } from "@/server/db/credit-notes";
@@ -84,7 +85,14 @@ export async function createCreditNote(input: CreditNoteInput): Promise<CreditNo
         : null;
     const taxPeriod = await findTaxPeriodTx(tx, input.companyId, issueDate);
 
-    const number = await bumpSequenceTx(tx, input.companyId, "credit");
+    // Read the credit-note counter here (read phase). The increment is written
+    // in the write phase below, alongside commitPosting's journal-counter write
+    // — bumpSequenceTx would write now and break the planPosting read that
+    // follows (Firestore forbids read-after-write in a transaction).
+    const seq = SEQUENCE_FIELD.credit;
+    const cdata = (await tx.get(companyRef(input.companyId))).data()!;
+    const counterAt = Number(cdata[seq.next] ?? 1);
+    const number = `${String(cdata[seq.prefix] ?? "")}${counterAt}`;
 
     const journalLines =
       input.type === "CUSTOMER"
@@ -135,7 +143,25 @@ export async function createCreditNote(input: CreditNoteInput): Promise<CreditNo
             ];
           })();
 
+    const creditNoteId = newId();
+
+    // planPosting reads the company doc — it must run before any write.
+    const plan = await planPosting(tx, {
+      companyId: input.companyId,
+      date: issueDate,
+      memo: `Credit note ${number} — ${party.name}`,
+      sourceType: "CREDIT_NOTE",
+      sourceId: creditNoteId,
+      sourceNumber: number,
+      createdById: input.userId,
+      lines: journalLines,
+    });
+
+    // ── Write phase ─────────────────────────────────────────────────────────
+    tx.update(companyRef(input.companyId), { [seq.next]: counterAt + 1 });
+
     const creditNote = creditNotes.createTx(tx, {
+      id: creditNoteId,
       companyId: input.companyId,
       type: input.type,
       customerId: input.customerId ?? null,
@@ -156,16 +182,6 @@ export async function createCreditNote(input: CreditNoteInput): Promise<CreditNo
       lines: toDocumentLines(doc),
     } as Partial<CreditNote> & { companyId: string });
 
-    const plan = await planPosting(tx, {
-      companyId: input.companyId,
-      date: issueDate,
-      memo: `Credit note ${number} — ${party.name}`,
-      sourceType: "CREDIT_NOTE",
-      sourceId: creditNote.id,
-      sourceNumber: number,
-      createdById: input.userId,
-      lines: journalLines,
-    });
     const entry = commitPosting(tx, plan);
 
     for (const line of doc.lines) {

@@ -41,7 +41,15 @@ import { listAllocationsForInvoice } from "../src/server/db/payment-allocations"
 
 import { createInvoice, postInvoice } from "../src/server/documents/invoices";
 import { createBill, approveBill } from "../src/server/documents/bills";
+import { createEstimate, convertEstimateToInvoice } from "../src/server/documents/estimates";
+import { createCreditNote, applyCreditNote } from "../src/server/documents/credit-notes";
 import { recordPayment } from "../src/server/documents/payments";
+import { adjustStock } from "../src/server/inventory/costing";
+import { updateItem, createItem } from "../src/server/db/items";
+import { categorizeTransaction } from "../src/server/banking/categorize";
+import { listBankTransactions } from "../src/server/db/banking";
+import { countLinesForAccount } from "../src/server/db/journal-entries";
+import { dashboardData } from "../src/server/reports/dashboard";
 import { postManualJournal } from "../src/server/accounting/journals";
 import { reverseJournal } from "../src/server/accounting/ledger";
 import { runTransaction } from "../src/server/db/firestore";
@@ -275,8 +283,8 @@ async function main() {
   console.log("\n10. bank import");
   const csv = [
     "Date,Description,Amount",
-    `${y}-06-05,ACME CORP EFT,1200.00`,
-    `${y}-06-07,OFFICE SUPPLIES,-84.99`,
+    `${y}-07-05,ACME CORP EFT,1200.00`, // July — June is closed by step 9
+    `${y}-07-07,OFFICE SUPPLIES,-84.99`,
   ].join("\n");
   const parsed = parseCsv(csv);
   eq(parsed.rows.length, 2, "CSV parser read 2 rows");
@@ -290,8 +298,100 @@ async function main() {
   eq(imp2.imported, 0, "re-import: 0 new");
   eq(imp2.duplicates, 2, "re-import: 2 duplicates detected");
 
-  // 11 ── final integrity: whole-company trial balance still balances ─────
-  console.log("\n11. final integrity");
+  // 11 ── estimate → convert to invoice ──────────────────────────────────
+  console.log("\n11. estimate → convert");
+  const est = await createEstimate({
+    companyId,
+    customerId: customer.id,
+    issueDate: `${y}-07-01`,
+    taxInclusive: false,
+    lines: [{ accountId: revenue.id, description: "Scoped work", quantityMilli: 1000, unitPriceCents: 50_000, taxCodeId: hst!.id }],
+    userId: null,
+  });
+  eq(est.status, "DRAFT", "estimate created DRAFT");
+  const conv = await convertEstimateToInvoice(companyId, est.id, { post: true, userId: null });
+  eq(conv.estimate.status, "CONVERTED", "estimate → CONVERTED");
+  const convInv = await invoicesRepo.get(companyId, conv.invoiceId);
+  ok(convInv && convInv.journalEntryId, "converted invoice exists and is posted");
+  ok(convInv!.totalCents === 56_500, `converted invoice total = ${convInv!.totalCents} (50000 + 13% HST)`);
+
+  // 12 ── customer credit note → apply to the converted invoice ──────────
+  console.log("\n12. credit note → apply");
+  const cn = await createCreditNote({
+    companyId,
+    type: "CUSTOMER",
+    customerId: customer.id,
+    issueDate: `${y}-07-02`,
+    taxInclusive: false,
+    lines: [{ accountId: revenue.id, description: "Partial credit", quantityMilli: 1000, unitPriceCents: 10_000, taxCodeId: hst!.id }],
+    userId: null,
+  });
+  ok(cn.journalEntryId, "credit note posts its own journal entry on creation");
+  eq(cn.totalCents, 11_300, "credit note total = 11300 (10000 + 13% HST)");
+  const applied = await applyCreditNote(companyId, cn.id, [{ invoiceId: conv.invoiceId, amountCents: 11_300 }]);
+  ok(applied.appliedCents === 11_300, "credit note fully applied");
+  const invAfterCredit = await invoicesRepo.get(companyId, conv.invoiceId);
+  eq(invAfterCredit!.balanceCents, 56_500 - 11_300, "invoice balance reduced by the applied credit");
+  eq(invAfterCredit!.status, "PARTIALLY_PAID", "invoice → PARTIALLY_PAID after credit applied");
+
+  // 13 ── inventory adjustment (self-contained journal + movement) ───────
+  console.log("\n13. inventory adjustStock");
+  const openingEquity = await getSystemAccount(companyId, SYSTEM_ACCOUNTS.OPENING_BALANCE_EQUITY);
+  const invAsset = await getSystemAccount(companyId, SYSTEM_ACCOUNTS.INVENTORY_ASSET);
+  const trackedItem = await createItem({
+    companyId,
+    code: `WIDGET-${Date.now().toString(36)}`,
+    name: "Widget",
+    type: "PRODUCT",
+    trackInventory: true,
+  });
+  await updateItem(companyId, trackedItem.id, { trackInventory: true }); // ensure the flag stuck
+  const adj = await adjustStock({
+    companyId,
+    itemId: trackedItem.id,
+    date: `${y}-07-05`,
+    quantityMilli: 25_000, // +25 units
+    unitCostCents: 800, // $8/unit
+    offsetAccountId: openingEquity!.id,
+    reason: "opening count",
+    userId: null,
+  });
+  ok(adj.entry.id, "stock adjustment posted a journal entry");
+  const adjEntry = await getEntryWithLines(companyId, adj.entry.id);
+  eq(adjEntry!.totalDebitCents, adjEntry!.totalCreditCents, "adjustment journal entry balances");
+  const invAssetLine = adjEntry!.lines.find((l) => l.accountId === invAsset!.id);
+  eq(invAssetLine!.debitCents, 20_000, "Inventory Asset debited 25 × $8 = 20000");
+  const movSnap = await fs.collection(`companies/${companyId}/inventoryMovements`).where("itemId", "==", trackedItem.id).get();
+  eq(movSnap.size, 1, "one inventory movement recorded");
+
+  // 14 ── categorize an imported bank transaction → journal entry ────────
+  console.log("\n14. bank categorize");
+  const unmatched = await listBankTransactions(companyId, { status: "UNMATCHED" });
+  const inflow = unmatched.find((t) => t.amountCents > 0)!;
+  await categorizeTransaction(companyId, inflow.id, {
+    accountId: revenue.id,
+    taxCodeId: hst!.id,
+    userId: null,
+  });
+  const catTxn = (await listBankTransactions(companyId, {})).find((t) => t.id === inflow.id)!;
+  eq(catTxn.status, "CATEGORIZED", "bank transaction → CATEGORIZED");
+  ok(catTxn.journalEntryId, "categorised transaction has a journal entry");
+  const catEntry = await getEntryWithLines(companyId, catTxn.journalEntryId!);
+  eq(catEntry!.totalDebitCents, catEntry!.totalCreditCents, "categorisation journal entry balances");
+
+  // 15 ── delete-guard primitive ────────────────────────────────────────
+  console.log("\n15. delete-guard reference count");
+  ok((await countLinesForAccount(companyId, ar!.id)) > 0, "countLinesForAccount > 0 for an in-use account (AR)");
+  eq(await countLinesForAccount(companyId, freshAccount.id), 0, "countLinesForAccount = 0 for a never-posted account");
+
+  // 16 ── dashboard aggregation runs ────────────────────────────────────
+  console.log("\n16. dashboard");
+  const dash = await dashboardData(companyId);
+  ok(dash.kpis && typeof dash.kpis.revenueCents === "number", "dashboardData returns KPIs");
+  ok(dash.ar.totalCents > 0, "dashboard A/R total reflects the open invoices");
+
+  // 17 ── final integrity: whole-company trial balance still balances ─────
+  console.log("\n17. final integrity");
   const finalTb = await trialBalance(companyId, range);
   ok(finalTb.balanced, `company trial balance still balances after every flow (Dr ${finalTb.totalDebitCents})`);
 
