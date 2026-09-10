@@ -1,4 +1,6 @@
-import { db } from "@/lib/db";
+import { listItems } from "@/server/db/items";
+import { getSystemAccount } from "@/server/db/accounts";
+import { listLinesUpTo } from "@/server/db/journal-entries";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
 import { SYSTEM_ACCOUNTS } from "@/lib/enums";
@@ -13,15 +15,15 @@ export const metadata = { title: "Inventory" };
 export default async function InventoryPage() {
   const { company } = await requireCapability(CAPABILITIES.REPORTS);
 
-  const [items, inventoryAsset, { accounts }] = await Promise.all([
-    db.serviceItem.findMany({
-      where: { companyId: company.id, trackInventory: true },
-      orderBy: [{ isActive: "desc" }, { code: "asc" }],
-      select: { id: true, code: true, name: true, unit: true, isActive: true, quantityOnHandMilli: true, averageCostCents: true },
-    }),
-    db.account.findFirst({ where: { companyId: company.id, systemKey: SYSTEM_ACCOUNTS.INVENTORY_ASSET } }),
+  const [allItems, inventoryAsset, { accounts }] = await Promise.all([
+    listItems(company.id),
+    getSystemAccount(company.id, SYSTEM_ACCOUNTS.INVENTORY_ASSET),
     inventoryAdjustmentFormOptions(),
   ]);
+
+  const items = allItems
+    .filter((i) => i.trackInventory)
+    .sort((a, b) => Number(b.isActive) - Number(a.isActive) || a.code.localeCompare(b.code));
 
   const rows = items.map((item) => ({
     ...item,
@@ -31,11 +33,10 @@ export default async function InventoryPage() {
 
   let glBalanceCents = 0;
   if (inventoryAsset) {
-    const movement = await db.journalLine.aggregate({
-      where: { companyId: company.id, accountId: inventoryAsset.id, date: { lte: today() } },
-      _sum: { debitCents: true, creditCents: true },
-    });
-    glBalanceCents = (movement._sum.debitCents ?? 0) - (movement._sum.creditCents ?? 0);
+    const lines = (await listLinesUpTo(company.id, today())).filter(
+      (l) => l.accountId === inventoryAsset.id,
+    );
+    glBalanceCents = lines.reduce((s, l) => s + l.debitCents - l.creditCents, 0);
   }
   const differenceCents = totalValueCents - glBalanceCents;
 

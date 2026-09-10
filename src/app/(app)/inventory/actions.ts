@@ -2,19 +2,18 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { db } from "@/lib/db";
 import { toCents } from "@/lib/money";
 import { CAPABILITIES } from "@/lib/permissions";
 import { recordAudit, requireCapability } from "@/server/auth/context";
-import { adjustStock } from "@/server/inventory/costing";
+import { adjustStock } from "@/server/inventory/costing-fs";
+import { listAccounts } from "@/server/db/accounts";
 
 export async function inventoryAdjustmentFormOptions() {
   const { company } = await requireCapability(CAPABILITIES.COMPANY_SETTINGS);
-  const accounts = await db.account.findMany({
-    where: { companyId: company.id, isActive: true, type: { not: "REVENUE" } },
-    orderBy: { code: "asc" },
-    select: { id: true, code: true, name: true, type: true },
-  });
+  const accounts = (await listAccounts(company.id))
+    .filter((a) => a.isActive && a.type !== "REVENUE")
+    .sort((a, b) => a.code.localeCompare(b.code))
+    .map((a) => ({ id: a.id, code: a.code, name: a.name, type: a.type }));
   return { accounts };
 }
 
@@ -45,18 +44,16 @@ export async function adjustStockAction(payload: string) {
   const quantityMilli = Math.round(quantity * 1000);
 
   try {
-    await db.$transaction((tx) =>
-      adjustStock(tx, {
-        companyId: company.id,
-        itemId: input.itemId,
-        date: input.date,
-        quantityMilli,
-        unitCostCents: input.unitCost ? toCents(input.unitCost) : undefined,
-        offsetAccountId: input.offsetAccountId,
-        reason: input.reason,
-        userId: user.id,
-      }),
-    );
+    await adjustStock({
+      companyId: company.id,
+      itemId: input.itemId,
+      date: input.date,
+      quantityMilli,
+      unitCostCents: input.unitCost ? toCents(input.unitCost) : undefined,
+      offsetAccountId: input.offsetAccountId,
+      reason: input.reason,
+      userId: user.id,
+    });
 
     await recordAudit({
       companyId: company.id,

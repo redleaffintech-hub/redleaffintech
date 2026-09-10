@@ -1,4 +1,4 @@
-import { db } from "@/lib/db";
+import { payRuns as payRunsRepo } from "@/server/db/payroll";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES, can } from "@/lib/permissions";
 import { formatDate } from "@/lib/dates";
@@ -19,12 +19,10 @@ export default async function PayRunsPage({ searchParams }: { searchParams: Prom
   const params = await searchParams;
   const status = typeof params.status === "string" ? params.status : "";
 
-  const payRuns = await db.payRun.findMany({
-    where: { companyId: company.id, ...(status ? { status } : {}) },
-    include: { lines: { select: { netPayCents: true } } },
-    orderBy: { payDate: "desc" },
-    take: 100,
-  });
+  const payRuns = (await payRunsRepo.list(company.id))
+    .filter((p) => !status || p.status === status)
+    .sort((a, b) => b.payDate.getTime() - a.payDate.getTime())
+    .slice(0, 100);
 
   const counts = {
     draft: payRuns.filter((p) => p.status === "DRAFT").length,

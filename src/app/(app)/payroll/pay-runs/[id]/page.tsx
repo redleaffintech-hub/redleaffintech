@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { db } from "@/lib/db";
+import { payRuns as payRunsRepo } from "@/server/db/payroll";
+import { employees as employeesRepo } from "@/server/db/hr";
+import { getAccount } from "@/server/db/accounts";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES, can } from "@/lib/permissions";
 import { formatDate } from "@/lib/dates";
@@ -19,18 +21,31 @@ export default async function PayRunDetailPage({ params }: { params: Promise<{ i
   const { company, role } = await requireCapability(CAPABILITIES.PAYROLL);
   const { id } = await params;
 
-  const payRun = await db.payRun.findFirst({
-    where: { id, companyId: company.id },
-    include: {
-      lines: {
-        include: { employee: { select: { id: true, legalFirstName: true, legalLastName: true, preferredName: true } } },
-        orderBy: { employee: { legalFirstName: "asc" } },
-      },
-    },
-  });
-  if (!payRun) notFound();
+  const raw = await payRunsRepo.get(company.id, id);
+  if (!raw) notFound();
 
-  const bankAccount = await db.account.findUnique({ where: { id: payRun.bankAccountId }, select: { code: true, name: true } });
+  const [allEmployees, bankAccount] = await Promise.all([
+    employeesRepo.list(company.id),
+    getAccount(company.id, raw.bankAccountId),
+  ]);
+  const employeeById = new Map(allEmployees.map((e) => [e.id, e]));
+  const payRun = {
+    ...raw,
+    lines: [...raw.lines]
+      .map((l) => {
+        const e = employeeById.get(l.employeeId);
+        return {
+          ...l,
+          employee: {
+            id: l.employeeId,
+            legalFirstName: e?.legalFirstName ?? "",
+            legalLastName: e?.legalLastName ?? "",
+            preferredName: e?.preferredName ?? null,
+          },
+        };
+      })
+      .sort((a, b) => a.employee.legalFirstName.localeCompare(b.employee.legalFirstName)),
+  };
 
   const totals = payRun.lines.reduce(
     (sum, line) => ({

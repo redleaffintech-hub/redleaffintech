@@ -1,4 +1,5 @@
-import { db } from "@/lib/db";
+import { employees as employeesRepo } from "@/server/db/hr";
+import { listAccounts } from "@/server/db/accounts";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
 import { Card, PageHeader } from "@/components/ui";
@@ -10,18 +11,26 @@ export const metadata = { title: "New pay run" };
 export default async function NewPayRunPage() {
   const { company } = await requireCapability(CAPABILITIES.PAYROLL);
 
-  const [employees, bankAccounts] = await Promise.all([
-    db.employee.findMany({
-      where: { companyId: company.id, employmentStatus: "ACTIVE" },
-      orderBy: { legalFirstName: "asc" },
-      select: { id: true, legalFirstName: true, legalLastName: true, preferredName: true, compensationType: true, payRateCents: true, payFrequency: true },
-    }),
-    db.account.findMany({
-      where: { companyId: company.id, isActive: true, subtype: { in: ["BANK", "CASH", "CREDIT_CARD"] } },
-      orderBy: { code: "asc" },
-      select: { id: true, code: true, name: true },
-    }),
+  const [allEmployees, allAccounts] = await Promise.all([
+    employeesRepo.list(company.id),
+    listAccounts(company.id),
   ]);
+  const employees = allEmployees
+    .filter((e) => e.employmentStatus === "ACTIVE")
+    .sort((a, b) => a.legalFirstName.localeCompare(b.legalFirstName))
+    .map((e) => ({
+      id: e.id,
+      legalFirstName: e.legalFirstName,
+      legalLastName: e.legalLastName,
+      preferredName: e.preferredName,
+      compensationType: e.compensationType,
+      payRateCents: e.payRateCents,
+      payFrequency: e.payFrequency,
+    }));
+  const bankAccounts = allAccounts
+    .filter((a) => a.isActive && ["BANK", "CASH", "CREDIT_CARD"].includes(a.subtype))
+    .sort((a, b) => a.code.localeCompare(b.code))
+    .map((a) => ({ id: a.id, code: a.code, name: a.name }));
 
   return (
     <>

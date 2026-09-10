@@ -18,7 +18,10 @@ import {
   getMovementTx,
   type NewMovement,
 } from "@/server/db/inventory-movements";
-import type { Tx } from "@/server/db/firestore";
+import { runTransaction, type Tx } from "@/server/db/firestore";
+import { toUtcDay } from "@/lib/dates";
+import { SYSTEM_ACCOUNTS } from "@/lib/enums";
+import { getSystemAccount, planPosting, commitPosting } from "@/server/accounting/ledger-fs";
 import type { ServiceItem } from "@/server/db/types";
 
 export interface MovementMeta {
@@ -207,5 +210,77 @@ export function commitReverseMovement(tx: Tx, plan: ReverseMovementPlan, userId?
     sourceNumber: plan.sourceNumber,
     memo: `Reversal of voided ${plan.sourceType.toLowerCase()}${plan.sourceNumber ? ` ${plan.sourceNumber}` : ""}`,
     createdById: userId,
+  });
+}
+
+// ── Manual adjustment (opening count, shrinkage, recount) ────────────────────
+
+/**
+ * A self-contained manual correction. Posts its own Dr/Cr Inventory Asset entry
+ * against a chosen offset account and records one inventory movement, all in one
+ * transaction. Positive `quantityMilli` receives at `unitCostCents`; negative
+ * consumes at the item's current average.
+ */
+export async function adjustStock(input: {
+  companyId: string;
+  itemId: string;
+  date: Date | string;
+  quantityMilli: number;
+  unitCostCents?: number;
+  offsetAccountId: string;
+  reason: string;
+  userId?: string | null;
+}) {
+  if (input.quantityMilli === 0) throw new Error("Enter a non-zero quantity to adjust.");
+  const date = toUtcDay(input.date);
+  const increasing = input.quantityMilli > 0;
+
+  return runTransaction(async (tx) => {
+    // ── reads ──
+    const inventoryAsset = await getSystemAccount(tx, input.companyId, SYSTEM_ACCOUNTS.INVENTORY_ASSET);
+    const consumePlan = increasing
+      ? null
+      : await planConsumeStock(tx, input.companyId, input.itemId, -input.quantityMilli);
+    const totalCostCents = increasing
+      ? Math.round((input.quantityMilli * (input.unitCostCents ?? 0)) / 1000)
+      : consumePlan!.totalCostCents;
+    if (totalCostCents === 0) throw new Error("The adjustment has no value — enter a unit cost.");
+
+    const postingPlan = await planPosting(tx, {
+      companyId: input.companyId,
+      date,
+      memo: `Inventory adjustment — ${input.reason}`,
+      sourceType: "ADJUSTMENT",
+      createdById: input.userId,
+      lines: increasing
+        ? [
+            { accountId: inventoryAsset.id, debitCents: totalCostCents, description: input.reason },
+            { accountId: input.offsetAccountId, creditCents: totalCostCents, description: input.reason },
+          ]
+        : [
+            { accountId: input.offsetAccountId, debitCents: totalCostCents, description: input.reason },
+            { accountId: inventoryAsset.id, creditCents: totalCostCents, description: input.reason },
+          ],
+    });
+    const receivePlan = increasing
+      ? await planReceiveStock(tx, input.companyId, input.itemId, input.quantityMilli, totalCostCents)
+      : null;
+
+    // ── writes ──
+    const entry = commitPosting(tx, postingPlan);
+    const meta: MovementMeta = {
+      date,
+      sourceType: "ADJUSTMENT",
+      sourceId: entry.id,
+      sourceNumber: entry.entryNo,
+      journalEntryId: entry.id,
+      memo: input.reason,
+      userId: input.userId,
+    };
+    const movement = increasing
+      ? commitReceiveStock(tx, input.companyId, receivePlan!, meta)
+      : commitConsumeStock(tx, input.companyId, consumePlan!, meta);
+
+    return { entry, movement };
   });
 }

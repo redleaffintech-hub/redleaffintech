@@ -1,5 +1,7 @@
 import { notFound } from "next/navigation";
-import { db } from "@/lib/db";
+import { payRuns as payRunsRepo } from "@/server/db/payroll";
+import { employees as employeesRepo } from "@/server/db/hr";
+import { listAccounts } from "@/server/db/accounts";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
 import { isoDate } from "@/lib/dates";
@@ -13,23 +15,43 @@ export default async function EditPayRunPage({ params }: { params: Promise<{ id:
   const { company } = await requireCapability(CAPABILITIES.PAYROLL);
   const { id } = await params;
 
-  const [payRun, employees, bankAccounts] = await Promise.all([
-    db.payRun.findFirst({
-      where: { id, companyId: company.id },
-      include: { lines: { include: { employee: { select: { legalFirstName: true, legalLastName: true, preferredName: true } } } } },
-    }),
-    db.employee.findMany({
-      where: { companyId: company.id, employmentStatus: "ACTIVE" },
-      orderBy: { legalFirstName: "asc" },
-      select: { id: true, legalFirstName: true, legalLastName: true, preferredName: true, compensationType: true, payRateCents: true, payFrequency: true },
-    }),
-    db.account.findMany({
-      where: { companyId: company.id, isActive: true, subtype: { in: ["BANK", "CASH", "CREDIT_CARD"] } },
-      orderBy: { code: "asc" },
-      select: { id: true, code: true, name: true },
-    }),
+  const [rawPayRun, allEmployees, allAccounts] = await Promise.all([
+    payRunsRepo.get(company.id, id),
+    employeesRepo.list(company.id),
+    listAccounts(company.id),
   ]);
-  if (!payRun) notFound();
+  if (!rawPayRun) notFound();
+  const employeeById = new Map(allEmployees.map((e) => [e.id, e]));
+  const payRun = {
+    ...rawPayRun,
+    lines: rawPayRun.lines.map((l) => {
+      const e = employeeById.get(l.employeeId);
+      return {
+        ...l,
+        employee: {
+          legalFirstName: e?.legalFirstName ?? "",
+          legalLastName: e?.legalLastName ?? "",
+          preferredName: e?.preferredName ?? null,
+        },
+      };
+    }),
+  };
+  const employees = allEmployees
+    .filter((e) => e.employmentStatus === "ACTIVE")
+    .sort((a, b) => a.legalFirstName.localeCompare(b.legalFirstName))
+    .map((e) => ({
+      id: e.id,
+      legalFirstName: e.legalFirstName,
+      legalLastName: e.legalLastName,
+      preferredName: e.preferredName,
+      compensationType: e.compensationType,
+      payRateCents: e.payRateCents,
+      payFrequency: e.payFrequency,
+    }));
+  const bankAccounts = allAccounts
+    .filter((a) => a.isActive && ["BANK", "CASH", "CREDIT_CARD"].includes(a.subtype))
+    .sort((a, b) => a.code.localeCompare(b.code))
+    .map((a) => ({ id: a.id, code: a.code, name: a.name }));
 
   if (payRun.status !== "DRAFT") {
     return (

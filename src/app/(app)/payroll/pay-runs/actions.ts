@@ -2,17 +2,17 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { db } from "@/lib/db";
 import { CAPABILITIES } from "@/lib/permissions";
 import { recordAudit, requireCapability } from "@/server/auth/context";
 import {
   PayRunError,
-  createPayRunInTx,
-  deletePayRunInTx,
-  postPayRunInTx,
-  updatePayRunInTx,
+  createPayRun,
+  deletePayRun,
+  postPayRun,
+  updatePayRun,
   voidPayRun,
-} from "@/server/payroll/pay-runs";
+} from "@/server/payroll/pay-runs-fs";
+import { payRuns } from "@/server/db/payroll";
 
 const lineSchema = z.object({
   employeeId: z.string().min(1),
@@ -65,9 +65,7 @@ export async function createPayRunAction(payload: string): Promise<PayRunActionR
   if (error || !input) return { error: error ?? "Check the pay run details." };
 
   try {
-    const payRun = await db.$transaction((tx) =>
-      createPayRunInTx(tx, { companyId: company.id, ...input, userId: user.id }),
-    );
+    const payRun = await createPayRun({ companyId: company.id, ...input, userId: user.id });
 
     await recordAudit({
       companyId: company.id, userId: user.id, action: "CREATE", entityType: "PayRun",
@@ -88,7 +86,7 @@ export async function updatePayRunAction(id: string, payload: string): Promise<P
   if (error || !input) return { error: error ?? "Check the pay run details." };
 
   try {
-    const payRun = await db.$transaction((tx) => updatePayRunInTx(tx, id, { companyId: company.id, ...input }));
+    const payRun = await updatePayRun(id, { companyId: company.id, ...input });
 
     await recordAudit({
       companyId: company.id, userId: user.id, action: "UPDATE", entityType: "PayRun",
@@ -110,7 +108,7 @@ export async function postPayRunAction(formData: FormData) {
   if (!id) return { error: "Missing pay run id." };
 
   try {
-    const payRun = await db.$transaction((tx) => postPayRunInTx(tx, id, company.id, user.id));
+    const payRun = await postPayRun(id, company.id, user.id);
 
     await recordAudit({
       companyId: company.id, userId: user.id, action: "POST", entityType: "PayRun",
@@ -154,11 +152,12 @@ export async function deletePayRunAction(formData: FormData) {
   if (!id) return { error: "Missing pay run id." };
 
   try {
-    const payRun = await db.$transaction((tx) => deletePayRunInTx(tx, id, company.id));
+    const existing = await payRuns.get(company.id, id);
+    await deletePayRun(id, company.id);
 
     await recordAudit({
       companyId: company.id, userId: user.id, action: "DELETE", entityType: "PayRun",
-      entityId: id, summary: `Draft pay run ${payRun.number} deleted`,
+      entityId: id, summary: `Draft pay run ${existing?.number ?? id} deleted`,
     });
 
     revalidatePath("/payroll/pay-runs");

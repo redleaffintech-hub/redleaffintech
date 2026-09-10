@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { CAPABILITIES, requirePermission } from "@/lib/permissions";
 import { switchCompany } from "@/server/auth/context";
-import { closePeriod } from "@/server/accounting/journals";
+import { closePeriod } from "@/server/accounting/journals-fs";
 import { requireFirmAccess } from "@/server/firm/portfolio";
 
 /**

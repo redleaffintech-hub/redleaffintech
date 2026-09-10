@@ -1,4 +1,4 @@
-import { db } from "@/lib/db";
+import { listFiscalPeriods } from "@/server/db/fiscal-periods";
 import { closeChecklist, requireFirmClient } from "@/server/firm/portfolio";
 import { formatDate } from "@/lib/dates";
 import { Badge, Callout, Card, CardHeader, EmptyState, PageHeader, StatusBadge } from "@/components/ui";
@@ -14,12 +14,10 @@ export default async function FirmClosePage({ searchParams }: PageProps<"/firm/c
 
   const { client, clients } = await requireFirmClient(requestedClient);
 
-  const periods = await db.fiscalPeriod.findMany({
-    where: { companyId: client.id },
-    orderBy: [{ fiscalYear: "desc" }, { periodNumber: "desc" }],
-    take: 24,
-    select: { id: true, name: true, status: true },
-  });
+  const periods = (await listFiscalPeriods(client.id))
+    .sort((a, b) => b.fiscalYear - a.fiscalYear || b.periodNumber - a.periodNumber)
+    .slice(0, 24)
+    .map((p) => ({ id: p.id, name: p.name, status: p.status }));
 
   const checklist = await closeChecklist(client.id, requestedPeriod);
   const failing = checklist?.checks.filter((check) => check.state === "fail") ?? [];
