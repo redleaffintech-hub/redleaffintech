@@ -597,3 +597,325 @@ export interface InventoryMovement {
   createdById: string | null;
   createdAt: Date;
 }
+
+// ── Phase 5d: banking, HR, payroll, supporting modules ──────────────────────
+
+export interface BankAccount {
+  id: string;
+  companyId: string;
+  accountId: string;
+  name: string;
+  institution: string | null;
+  accountNumberMasked: string | null;
+  type: string; // BANK | CREDIT_CARD | CASH
+  currency: string;
+  openingBalanceCents: number;
+  openingDate: Date | null;
+  feedProvider: string | null;
+  feedStatus: string;
+  lastImportAt: Date | null;
+  isActive: boolean;
+  createdAt: Date;
+}
+
+export interface BankTransaction {
+  id: string;
+  companyId: string;
+  bankAccountId: string;
+  date: Date;
+  description: string;
+  normalizedDesc: string;
+  reference: string | null;
+  amountCents: number;
+  runningBalanceCents: number | null;
+  status: string;
+  matchedType: string | null;
+  matchedId: string | null;
+  categoryAccountId: string | null;
+  journalEntryId: string | null;
+  reconciliationId: string | null;
+  importBatchId: string | null;
+  fitId: string | null;
+  isDuplicate: boolean;
+  appliedRuleId: string | null;
+  createdAt: Date;
+}
+
+export interface BankRule {
+  id: string;
+  companyId: string;
+  bankAccountId: string | null;
+  name: string;
+  priority: number;
+  direction: string;
+  matchType: string;
+  matchValue: string;
+  amountMinCents: number | null;
+  amountMaxCents: number | null;
+  setAccountId: string;
+  setTaxCodeId: string | null;
+  setVendorId: string | null;
+  setPayeeName: string | null;
+  autoConfirm: boolean;
+  isActive: boolean;
+  timesApplied: number;
+  createdAt: Date;
+}
+
+export interface BankReconciliation {
+  id: string;
+  companyId: string;
+  bankAccountId: string;
+  statementYear: number;
+  statementMonth: number;
+  statementStartDate: Date;
+  statementEndDate: Date;
+  openingBalanceCents: number;
+  closingBalanceCents: number;
+  clearedBalanceCents: number;
+  differenceCents: number;
+  bookBalanceCents: number | null;
+  outstandingReceiptsCents: number;
+  outstandingPaymentsCents: number;
+  adjustedBankBalanceCents: number | null;
+  reportJson: string | null;
+  notes: string | null;
+  version: number;
+  status: string;
+  startedById: string | null;
+  completedAt: Date | null;
+  completedById: string | null;
+  lockedAt: Date | null;
+  createdAt: Date;
+}
+
+export interface BankReconciliationMatch {
+  id: string;
+  companyId: string;
+  reconciliationId: string;
+  bankAccountId: string;
+  netCents: number;
+  statementTxnIds: string[];
+  bookLineIds: string[];
+  createdAt: Date;
+  createdById: string | null;
+}
+
+export interface Project {
+  id: string;
+  companyId: string;
+  customerId: string | null;
+  code: string;
+  name: string;
+  status: string;
+  startDate: Date | null;
+  endDate: Date | null;
+  budgetCents: number;
+  createdAt: Date;
+}
+
+export interface BudgetLineRow {
+  accountId: string;
+  periodNumber: number;
+  amountCents: number;
+}
+
+export interface Budget {
+  id: string;
+  companyId: string;
+  name: string;
+  fiscalYear: number;
+  status: string;
+  lines: BudgetLineRow[];
+  createdAt: Date;
+}
+
+export interface RecurringTemplate {
+  id: string;
+  companyId: string;
+  type: string;
+  name: string;
+  frequency: string;
+  interval: number;
+  nextRunDate: Date;
+  endDate: Date | null;
+  isActive: boolean;
+  autoSend: boolean;
+  payload: string;
+  lastRunAt: Date | null;
+  runCount: number;
+  createdAt: Date;
+}
+
+export interface Attachment {
+  id: string;
+  companyId: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  storageKey: string;
+  sourceType: string | null;
+  sourceId: string | null;
+  ocrStatus: string;
+  ocrData: string | null;
+  contentHash: string | null;
+  uploadedById: string | null;
+  createdAt: Date;
+}
+
+export interface Notification {
+  id: string;
+  companyId: string;
+  userId: string | null;
+  type: string;
+  title: string;
+  body: string | null;
+  severity: string;
+  link: string | null;
+  isRead: boolean;
+  createdAt: Date;
+}
+
+export interface Department {
+  id: string;
+  companyId: string;
+  name: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface Employee {
+  id: string;
+  companyId: string;
+  employeeNumber: string;
+  legalFirstName: string;
+  legalLastName: string;
+  preferredName: string | null;
+  dateOfBirth: Date | null;
+  personalEmail: string | null;
+  personalPhone: string | null;
+  addressLine1: string | null;
+  addressLine2: string | null;
+  city: string | null;
+  province: string | null;
+  postalCode: string | null;
+  country: string;
+  emergencyContactName: string | null;
+  emergencyContactPhone: string | null;
+  emergencyContactRelation: string | null;
+  sinLast3: string | null;
+  sinHash: string | null;
+  jobTitle: string;
+  departmentId: string | null;
+  managerId: string | null;
+  provinceOfEmployment: string;
+  employeeType: string;
+  employmentStatus: string;
+  hireDate: Date;
+  terminationDate: Date | null;
+  terminationReason: string | null;
+  terminationNote: string | null;
+  compensationType: string;
+  payRateCents: number;
+  payFrequency: string;
+  standardHoursPerWeek: number | null;
+  vacationPercentOverrideMicro: number | null;
+  notes: string | null;
+  createdById: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface LeaveType {
+  id: string;
+  companyId: string;
+  name: string;
+  category: string;
+  isPaid: boolean;
+  trackBalance: boolean;
+  isActive: boolean;
+  createdAt: Date;
+}
+
+export interface LeaveRequest {
+  id: string;
+  companyId: string;
+  employeeId: string;
+  leaveTypeId: string;
+  startDate: Date;
+  endDate: Date;
+  hours: number;
+  status: string;
+  reason: string | null;
+  requestedById: string | null;
+  decidedById: string | null;
+  decidedAt: Date | null;
+  decisionNote: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface LeaveBalanceAdjustment {
+  id: string;
+  companyId: string;
+  employeeId: string;
+  leaveTypeId: string;
+  hours: number;
+  reason: string;
+  effectiveDate: Date;
+  createdById: string | null;
+  createdAt: Date;
+}
+
+export interface PayRunLineRow {
+  id: string;
+  employeeId: string;
+  regularHours: number | null;
+  overtimeHours: number | null;
+  grossPayCents: number;
+  cppCents: number;
+  eiCents: number;
+  federalTaxCents: number;
+  provincialTaxCents: number;
+  otherDeductionsCents: number;
+  otherDeductionsNote: string | null;
+  employerCppCents: number;
+  employerEiCents: number;
+  netPayCents: number;
+  notes: string | null;
+}
+
+export interface PayRun {
+  id: string;
+  companyId: string;
+  number: string;
+  payPeriodStart: Date;
+  payPeriodEnd: Date;
+  payDate: Date;
+  status: string;
+  bankAccountId: string;
+  memo: string | null;
+  journalEntryId: string | null;
+  createdById: string | null;
+  postedById: string | null;
+  postedAt: Date | null;
+  lines: PayRunLineRow[];
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface FiscalCalendarChange {
+  id: string;
+  companyId: string;
+  previousStartMonth: number;
+  newStartMonth: number;
+  effectiveFiscalYear: number;
+  effectiveDate: Date;
+  reason: string | null;
+  postedEntryCount: number;
+  periodsCreated: number;
+  transitionStart: Date | null;
+  transitionEnd: Date | null;
+  changedById: string | null;
+  createdAt: Date;
+}

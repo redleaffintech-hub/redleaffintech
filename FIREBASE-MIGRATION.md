@@ -262,9 +262,20 @@ Documented as a deliberate deviation from strict single-transaction atomicity.
   the not-yet-migrated banking/recurring collections and are simply 0 until
   Phase 5d). `accounting/journals-fs.ts` gains `closeChecklist`.
   `reports/aging-fs.ts` gains `partyStatement`. `getAccountsBySystemKeys` added.
-- [ ] **Phase 5d — CSV export** (`reports/exports.ts`), and the standalone
-  modules: banking & reconciliation, HR, payroll, recurring, projects, budgets,
-  attachments, notifications, subscriptions/plans read paths used by the app.
+- [x] **Phase 5d — data layer for the remaining collections.**
+  `db/banking.ts` (bankAccounts, bankTransactions, bankRules,
+  bankReconciliations — deterministic id `{acct}_{yyyy}-{mm}` —,
+  bankReconciliationMatches as their own collection), `db/hr.ts` (departments,
+  employees, leaveTypes, leaveRequests, leaveBalanceAdjustments +
+  `leaveBalanceHours`), `db/payroll.ts` (payRuns, lines embedded),
+  `db/supporting.ts` (projects, budgets, recurring, attachments, notifications,
+  fiscalCalendarChanges + `dueRecurringTemplates`). `makeDocRepo` gained
+  `embedLines` / `touchUpdatedAt` options for models without those columns.
+  Indexes added. tsc + eslint clean.
+- [ ] **Phase 5e — the domain logic on top of 5d's repos:** bank import +
+  rule-matching + categorise→journal, monthly reconciliation, payroll pay-run
+  posting, recurring-template generation, fiscal-calendar change; plus
+  `reports/exports.ts` (CSV) and the plan/subscription/firm read paths.
 - [ ] **Phase 5c — banking & reconciliation, HR, payroll, recurring, projects,
   budgets, attachments, notifications.**
 - [ ] **Phase 6 — rewire call sites**: every `src/app/**/actions.ts`, page and

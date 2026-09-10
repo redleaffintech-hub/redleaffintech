@@ -37,20 +37,21 @@ export interface DocRepo<T extends { id: string; companyId: string }> {
 export function makeDocRepo<T extends { id: string; companyId: string }>(
   collectionName: string,
   dateFields: readonly string[],
+  opts: { embedLines?: boolean; touchUpdatedAt?: boolean } = { embedLines: true, touchUpdatedAt: true },
 ): DocRepo<T> {
   const { decode, encode } = converter<T>(dateFields);
   const col = (companyId: string) => sub(companyId, collectionName);
+  const embedLines = opts.embedLines ?? true;
+  const touchUpdatedAt = opts.touchUpdatedAt ?? true;
 
   function build(input: Partial<T> & { companyId: string }): T {
     const id = (input.id as string) ?? newId();
     const now = new Date();
-    return {
-      lines: [],
-      ...input,
-      id,
-      createdAt: (input as Record<string, unknown>).createdAt ?? now,
-      updatedAt: now,
-    } as unknown as T;
+    const base: Record<string, unknown> = { ...input, id };
+    if (embedLines && base.lines === undefined) base.lines = [];
+    base.createdAt = (input as Record<string, unknown>).createdAt ?? now;
+    if (touchUpdatedAt) base.updatedAt = now;
+    return base as unknown as T;
   }
 
   return {
@@ -84,17 +85,16 @@ export function makeDocRepo<T extends { id: string; companyId: string }>(
       return row;
     },
     async update(companyId, id, data) {
-      await col(companyId)
-        .doc(id)
-        .update({ ...encode(data), updatedAt: toTimestamp(new Date()) });
+      const patch = { ...encode(data) };
+      if (touchUpdatedAt) patch.updatedAt = toTimestamp(new Date());
+      await col(companyId).doc(id).update(patch);
       const snap = await col(companyId).doc(id).get();
       return decode(snap.data()!, snap.id);
     },
     updateTx(tx, companyId, id, data) {
-      tx.update(col(companyId).doc(id), {
-        ...encode(data),
-        updatedAt: toTimestamp(new Date()),
-      });
+      const patch = { ...encode(data) };
+      if (touchUpdatedAt) patch.updatedAt = toTimestamp(new Date());
+      tx.update(col(companyId).doc(id), patch);
     },
     async remove(companyId, id) {
       await col(companyId).doc(id).delete();
