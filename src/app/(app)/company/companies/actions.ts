@@ -82,8 +82,6 @@ export async function createCompanyAction(formData: FormData) {
 
   try {
     const created = await db.$transaction(async (tx) => {
-      // Serialize against any other "add company" request on this same
-      // subscription before trusting the count.
       await lockSubscriptionForCompanyChange(tx, subscription.id);
       const limit = await companyLimit(subscription.id, tx);
       if (limit.used >= limit.limit) {

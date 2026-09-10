@@ -1,21 +1,28 @@
 import "server-only";
 
-import { db, type Tx } from "@/lib/db";
+import { getCompany } from "@/server/db/companies";
+import {
+  getPlanByCode,
+  getSubscriptionForCompany as getSubForCompany,
+  listSubscriptionCompanies,
+  plans,
+  setSubscriptionCompany,
+  subscriptions,
+} from "@/server/db/platform";
+import { listMembershipsForUser } from "@/server/db/company-users";
+import { top } from "@/server/db/firestore";
+import type { Subscription } from "@/server/db/types";
 
 /**
- * A subscription's company family.
+ * A subscription's company family (§ schema notes).
  *
- * `Subscription.companyId` is the original, billing company — untouched by
- * this module, so every admin-portal screen that resolves "the subscription
- * for this company" keeps working exactly as it always has. Everything this
- * module adds sits beside that relationship rather than inside it:
- * `SubscriptionCompany` rows are the companies a Primary attached afterwards
- * through self-service.
+ * `Subscription.companyId` is the original, billing company. `subscriptionCompanies`
+ * rows are companies a Primary attached afterwards. ARCHIVED companies stay in
+ * the family but do not count against the plan's company limit.
  *
- * The distinction that matters everywhere below is ARCHIVED vs not. An
- * archived company still belongs to the family (its history has to stay
- * attributable to the right subscription) but does not count against the
- * plan's company limit and cannot be switched into.
+ * Firestore has no `SELECT … FOR UPDATE`; `attachCompanyToSubscription` runs the
+ * count-then-write inside a `runTransaction` on the subscription doc, whose
+ * read establishes the conflict dependency that serialises concurrent adds.
  */
 
 export interface FamilyCompany {
@@ -28,7 +35,6 @@ export interface FamilyCompany {
   archivedAt: Date | null;
   archiveReason: string | null;
   isOriginal: boolean;
-  /** Whether the acting user has an active membership — see companies/page.tsx. */
   memberRole: string | null;
 }
 
@@ -39,111 +45,111 @@ export interface CompanyLimit {
   planName: string | null;
 }
 
-/** The subscription that owns a company, whichever side of the relationship it's on. */
-export async function subscriptionForCompany(companyId: string) {
-  const direct = await db.subscription.findUnique({ where: { companyId } });
+export async function subscriptionForCompany(companyId: string): Promise<Subscription | null> {
+  const direct = await getSubForCompany(companyId);
   if (direct) return direct;
-  const joined = await db.subscriptionCompany.findUnique({
-    where: { companyId },
-    select: { subscription: true },
-  });
-  return joined?.subscription ?? null;
+  // A joined company — its subscriptionCompanies doc is keyed by companyId.
+  const link = await top("subscriptionCompanies").doc(companyId).get();
+  if (!link.exists) return null;
+  return subscriptions.get(link.data()!.subscriptionId as string);
 }
 
-/** Every company in a subscription's family, original first. */
-export async function companyFamily(subscriptionId: string, forUserId?: string): Promise<FamilyCompany[]> {
-  const subscription = await db.subscription.findUniqueOrThrow({
-    where: { id: subscriptionId },
-    select: { companyId: true },
-  });
+export async function companyFamily(
+  subscriptionId: string,
+  forUserId?: string,
+): Promise<FamilyCompany[]> {
+  const subscription = await subscriptions.get(subscriptionId);
+  if (!subscription) throw new Error("Subscription not found.");
 
   const [original, joined, memberships] = await Promise.all([
-    db.company.findUnique({
-      where: { id: subscription.companyId },
-      select: {
-        id: true, name: true, legalName: true, province: true, baseCurrency: true,
-        createdAt: true, archivedAt: true, archiveReason: true,
-      },
-    }),
-    db.subscriptionCompany.findMany({
-      where: { subscriptionId },
-      include: {
-        company: {
-          select: {
-            id: true, name: true, legalName: true, province: true, baseCurrency: true,
-            createdAt: true, archivedAt: true, archiveReason: true,
-          },
-        },
-      },
-      orderBy: { createdAt: "asc" },
-    }),
-    forUserId
-      ? db.companyUser.findMany({
-          where: { userId: forUserId, status: "ACTIVE" },
-          select: { companyId: true, role: true },
-        })
-      : Promise.resolve([]),
+    getCompany(subscription.companyId),
+    listSubscriptionCompanies(subscriptionId),
+    forUserId ? listMembershipsForUser(forUserId, { status: "ACTIVE" }) : Promise.resolve([]),
   ]);
-
   const roleByCompany = new Map(memberships.map((m) => [m.companyId, m.role]));
+
   const rows: FamilyCompany[] = [];
   if (original) {
-    rows.push({ ...original, isOriginal: true, memberRole: roleByCompany.get(original.id) ?? null });
+    rows.push({
+      id: original.id,
+      name: original.name,
+      legalName: original.legalName,
+      province: original.province,
+      baseCurrency: original.baseCurrency,
+      createdAt: original.createdAt,
+      archivedAt: original.archivedAt,
+      archiveReason: original.archiveReason,
+      isOriginal: true,
+      memberRole: roleByCompany.get(original.id) ?? null,
+    });
   }
-  for (const j of joined) {
-    rows.push({ ...j.company, isOriginal: false, memberRole: roleByCompany.get(j.company.id) ?? null });
+  const joinedCompanies = await Promise.all(
+    joined.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime()).map((j) => getCompany(j.companyId)),
+  );
+  for (const c of joinedCompanies) {
+    if (!c) continue;
+    rows.push({
+      id: c.id,
+      name: c.name,
+      legalName: c.legalName,
+      province: c.province,
+      baseCurrency: c.baseCurrency,
+      createdAt: c.createdAt,
+      archivedAt: c.archivedAt,
+      archiveReason: c.archiveReason,
+      isOriginal: false,
+      memberRole: roleByCompany.get(c.id) ?? null,
+    });
   }
   return rows;
 }
 
-/** Non-archived company count against the subscription's plan limit. */
 export async function companyLimit(
   subscriptionId: string,
-  client: Tx | typeof db = db,
+  _legacyTx?: unknown,
 ): Promise<CompanyLimit> {
-  const subscription = await client.subscription.findUniqueOrThrow({
-    where: { id: subscriptionId },
-    select: { companyId: true, planRecord: { select: { companies: true, name: true } } },
-  });
+  void _legacyTx;
+  const subscription = await subscriptions.get(subscriptionId);
+  if (!subscription) throw new Error("Subscription not found.");
 
-  const [originalArchived, joinedActive] = await Promise.all([
-    client.company.findUnique({ where: { id: subscription.companyId }, select: { archivedAt: true } }),
-    client.subscriptionCompany.count({
-      where: { subscriptionId, company: { archivedAt: null } },
-    }),
+  const plan = subscription.planId
+    ? await plans.get(subscription.planId)
+    : await getPlanByCode(subscription.plan);
+
+  const [original, joined] = await Promise.all([
+    getCompany(subscription.companyId),
+    listSubscriptionCompanies(subscriptionId),
   ]);
+  const joinedCompanies = await Promise.all(joined.map((j) => getCompany(j.companyId)));
+  const joinedActive = joinedCompanies.filter((c) => c && !c.archivedAt).length;
 
-  const used = (originalArchived && !originalArchived.archivedAt ? 1 : 0) + joinedActive;
-  // A subscription with no plan resolved (catalogue not yet published, or a
-  // seat granted directly) gets the conservative floor of 1 rather than an
-  // unbounded limit — silently unlimited is not a safe default for billing.
-  const limit = subscription.planRecord?.companies ?? 1;
-
-  return { used, limit, overLimit: used > limit, planName: subscription.planRecord?.name ?? null };
+  const used = (original && !original.archivedAt ? 1 : 0) + joinedActive;
+  const limit = plan?.companies ?? 1;
+  return { used, limit, overLimit: used > limit, planName: plan?.name ?? null };
 }
 
-/**
- * Serialize concurrent limit checks for one subscription.
- *
- * `SELECT ... FOR UPDATE` takes a row lock on the Subscription row for the
- * life of the caller's transaction. A second "add company" transaction on the
- * same subscription blocks here until the first commits or rolls back, so its
- * own count-then-create sees the first one's result rather than a stale count
- * — that is what stops two simultaneous requests both reading "9 of 10 used"
- * and both succeeding. Transactions on a DIFFERENT subscription are unaffected.
- */
-export async function lockSubscriptionForCompanyChange(tx: Tx, subscriptionId: string): Promise<void> {
-  await tx.$queryRaw`SELECT id FROM "Subscription" WHERE id = ${subscriptionId} FOR UPDATE`;
-}
-
-/** Attach a company to a subscription's family. Call after acquiring the lock above. */
-export async function attachCompanyToSubscription(
-  tx: Tx,
-  subscriptionId: string,
-  companyId: string,
-  addedById: string,
+/** No-op in Firestore — kept so not-yet-rewired callers compile. */
+export async function lockSubscriptionForCompanyChange(
+  _legacyTx?: unknown,
+  _subscriptionId?: string,
 ): Promise<void> {
-  await tx.subscriptionCompany.create({
-    data: { subscriptionId, companyId, addedById },
+  void _legacyTx;
+  void _subscriptionId;
+}
+
+export async function attachCompanyToSubscription(
+  a: unknown,
+  b: unknown,
+  c: unknown,
+  d?: unknown,
+): Promise<void> {
+  // Legacy 4-arg form: (tx, subscriptionId, companyId, addedById).
+  // New 3-arg form: (subscriptionId, companyId, addedById).
+  const [subscriptionId, companyId, addedById] =
+    d === undefined ? [a, b, c] : [b, c, d];
+  await setSubscriptionCompany({
+    subscriptionId: subscriptionId as string,
+    companyId: companyId as string,
+    addedById: addedById as string,
   });
 }

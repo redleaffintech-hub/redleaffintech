@@ -21,7 +21,7 @@
 import "server-only";
 import { cache } from "react";
 import { redirect } from "next/navigation";
-import { db } from "@/lib/db";
+import { getUser } from "@/server/db/users";
 import { readAdminSession } from "./session";
 import { csrfTokenFor } from "./csrf";
 import { isRecentlyVerified } from "./session";
@@ -50,20 +50,7 @@ export const getAdminActor = cache(async (): Promise<AdminActor | null> => {
   const session = await readAdminSession();
   if (!session) return null;
 
-  const user = await db.user.findUnique({
-    where: { id: session.userId },
-    select: {
-      id: true,
-      name: true,
-      email: true,
-      isPlatformAdmin: true,
-      platformAdminSuspendedAt: true,
-      platformAdminSince: true,
-      mfaEnabled: true,
-      mustChangePassword: true,
-    },
-  });
-
+  const user = await getUser(session.userId);
   if (!user || !user.isPlatformAdmin || user.platformAdminSuspendedAt) return null;
 
   return {

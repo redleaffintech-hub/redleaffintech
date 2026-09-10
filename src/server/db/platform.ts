@@ -193,13 +193,16 @@ export async function updateSession(token: string, data: Partial<Session>): Prom
 export async function revokeSessionByToken(token: string): Promise<void> {
   await top("sessions").doc(token).set({ revokedAt: encSess({ revokedAt: new Date() }).revokedAt }, { merge: true });
 }
-export async function revokeSessionsForUser(userId: string, scope?: string): Promise<void> {
+export async function revokeSessionsForUser(userId: string, scope?: string): Promise<number> {
   let q: FirebaseFirestore.Query = top("sessions").where("userId", "==", userId);
   if (scope) q = q.where("scope", "==", scope);
   const snap = await q.get();
+  const live = snap.docs.filter((d) => !d.data().revokedAt);
+  const now = encSess({ revokedAt: new Date() }).revokedAt;
   const batch = top("sessions").firestore.batch();
-  for (const d of snap.docs) batch.update(d.ref, { revokedAt: encSess({ revokedAt: new Date() }).revokedAt });
-  if (!snap.empty) await batch.commit();
+  for (const d of live) batch.update(d.ref, { revokedAt: now });
+  if (live.length) await batch.commit();
+  return live.length;
 }
 
 const { decode: decTok, encode: encTok } = converter<UserToken>(["expiresAt", "usedAt", "createdAt"]);
@@ -216,23 +219,58 @@ export async function markUserTokenUsed(id: string): Promise<void> {
   await top("userTokens").doc(id).update({ usedAt: encTok({ usedAt: new Date() }).usedAt });
 }
 
-const { encode: encAttempt } = converter<AuthAttempt>(["createdAt"]);
-export async function recordAuthAttempt(input: Omit<AuthAttempt, "id" | "createdAt">): Promise<void> {
+const { encode: encAttempt, decode: decAttempt } = converter<AuthAttempt>(["createdAt"]);
+export async function recordAuthAttempt(
+  input: Omit<AuthAttempt, "id" | "createdAt">,
+): Promise<void> {
   const row = { ...input, id: newId(), createdAt: new Date() } as AuthAttempt;
   await top("authAttempts").doc(row.id).set(encAttempt(row));
 }
-export async function countAuthAttempts(
-  filter: { email?: string; ipAddress?: string; scope?: string; since: Date },
-): Promise<number> {
-  let q: FirebaseFirestore.Query = top("authAttempts");
+
+/** Failed attempts matching the filter since `since`, newest first. */
+export async function failedAuthAttemptsSince(filter: {
+  email?: string;
+  ipAddress?: string;
+  scope?: string;
+  since: Date;
+}): Promise<AuthAttempt[]> {
+  let q: FirebaseFirestore.Query = top("authAttempts").where("success", "==", false);
   if (filter.email) q = q.where("email", "==", filter.email);
   if (filter.ipAddress) q = q.where("ipAddress", "==", filter.ipAddress);
   if (filter.scope) q = q.where("scope", "==", filter.scope);
-  const snap = await q.get();
-  return snap.docs.filter((d) => {
-    const t = d.data().createdAt;
-    return (t?.toDate?.() ?? new Date(0)) >= filter.since;
-  }).length;
+  const rows = mapDocs(await q.get(), decAttempt).filter((r) => r.createdAt >= filter.since);
+  return rows.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+}
+
+export async function clearFailedAuthAttempts(
+  email: string,
+  scope: string,
+  since: Date,
+): Promise<void> {
+  const snap = await top("authAttempts")
+    .where("success", "==", false)
+    .where("email", "==", email)
+    .where("scope", "==", scope)
+    .get();
+  const batch = top("authAttempts").firestore.batch();
+  let n = 0;
+  for (const d of snap.docs) {
+    if ((d.data().createdAt?.toDate?.() ?? new Date(0)) >= since) {
+      batch.delete(d.ref);
+      n++;
+    }
+  }
+  if (n) await batch.commit();
+}
+
+export async function recentFailedAuthAttempts(scope: string, limit = 20): Promise<AuthAttempt[]> {
+  const snap = await top("authAttempts")
+    .where("success", "==", false)
+    .where("scope", "==", scope)
+    .orderBy("createdAt", "desc")
+    .limit(limit)
+    .get();
+  return mapDocs(snap, decAttempt);
 }
 
 // ── Platform audit log ─────────────────────────────────────────────────────

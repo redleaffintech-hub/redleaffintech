@@ -336,8 +336,17 @@ Documented as a deliberate deviation from strict single-transaction atomicity.
     ignored `_legacyTx` param until `companies/actions.ts` and `admin/clients.ts`
     are rewired (6c/6d). `tsconfig` excludes `prisma` / `scripts` / `src/generated`
     (all deleted at cutover). tsc clean.
-  - [ ] **6c — admin portal** server layer (`src/server/admin/*`, `plans/admin.ts`,
-    `firm/portfolio.ts`, `companies/families.ts`).
+  - [x] **6c‑1 — admin auth + subscription families.** `admin/session.ts`
+    (ADMIN‑scope `sessions/{token}`, 12h/1h sliding, step‑up), `admin/guard.ts`
+    (`getAdminActor` on `getUser`), `admin/rate-limit.ts` (login limiter on
+    `failedAuthAttemptsSince` / `clearFailedAuthAttempts` / `recentFailedAuthAttempts`
+    added to `db/platform.ts`), `admin/audit.ts` (`recordPlatformAudit`).
+    `companies/families.ts` (`subscriptionForCompany`, `companyFamily`,
+    `companyLimit`, `attachCompanyToSubscription` — no `SELECT … FOR UPDATE`;
+    tolerant shims for the not‑yet‑rewired `companies/actions.ts`).
+  - [ ] **6c‑2 — admin data modules**: `admin/clients.ts`, `admin/subscriptions.ts`,
+    `admin/users.ts`, `admin/administrators.ts`, `admin/metrics.ts`,
+    `plans/admin.ts`, `firm/portfolio.ts`.
   - [ ] **6d–6h — `src/app/**`**: sales, purchases, accounting/banking/tax,
     company/hr/payroll/inventory, reports/dashboard, admin pages, login + api
     routes + marketing. `reports/exports.ts` folds in here.

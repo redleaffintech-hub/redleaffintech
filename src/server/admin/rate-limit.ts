@@ -20,7 +20,12 @@
  */
 
 import "server-only";
-import { db } from "@/lib/db";
+import {
+  clearFailedAuthAttempts,
+  failedAuthAttemptsSince,
+  recentFailedAuthAttempts,
+  recordAuthAttempt,
+} from "@/server/db/platform";
 
 const WINDOW_MINUTES = 15;
 /** Failures against a single email before that email is locked out. */
@@ -59,45 +64,25 @@ export async function checkLoginAllowed(input: AttemptInput): Promise<LimitVerdi
   const since = windowStart();
   const email = input.email.toLowerCase();
 
-  const [emailFailures, ipFailures, sprayed] = await Promise.all([
-    db.authAttempt.count({
-      where: { email, scope: input.scope, success: false, createdAt: { gte: since } },
-    }),
-    input.ip
-      ? db.authAttempt.count({
-          where: { ipAddress: input.ip, success: false, createdAt: { gte: since } },
-        })
-      : Promise.resolve(0),
-    input.ip
-      ? db.authAttempt.findMany({
-          where: { ipAddress: input.ip, success: false, createdAt: { gte: since } },
-          select: { email: true },
-          distinct: ["email"],
-          take: MAX_DISTINCT_EMAILS_PER_IP + 1,
-        })
-      : Promise.resolve([]),
+  const [emailFails, ipFails] = await Promise.all([
+    failedAuthAttemptsSince({ email, scope: input.scope, since }),
+    input.ip ? failedAuthAttemptsSince({ ipAddress: input.ip, since }) : Promise.resolve([]),
   ]);
+  const distinctEmails = new Set(ipFails.map((a) => a.email)).size;
 
+  const emailBlocked = emailFails.length >= MAX_PER_EMAIL;
   const blocked =
-    emailFailures >= MAX_PER_EMAIL ||
-    ipFailures >= MAX_PER_IP ||
-    sprayed.length > MAX_DISTINCT_EMAILS_PER_IP;
+    emailBlocked || ipFails.length >= MAX_PER_IP || distinctEmails > MAX_DISTINCT_EMAILS_PER_IP;
 
   if (!blocked) return { allowed: true, retryAfterSeconds: 0 };
 
-  // Report the remaining window rather than a fixed number, so an attacker
-  // cannot use the message to time the next burst precisely.
-  const oldest = await db.authAttempt.findFirst({
-    where: {
-      success: false,
-      createdAt: { gte: since },
-      ...(emailFailures >= MAX_PER_EMAIL ? { email, scope: input.scope } : { ipAddress: input.ip }),
-    },
-    orderBy: { createdAt: "asc" },
-    select: { createdAt: true },
-  });
-
-  const freeAt = (oldest?.createdAt.getTime() ?? Date.now()) + WINDOW_MINUTES * 60_000;
+  // Report the remaining window rather than a fixed number.
+  const relevant = emailBlocked ? emailFails : ipFails;
+  const oldest = relevant.reduce<Date | null>(
+    (min, a) => (min === null || a.createdAt < min ? a.createdAt : min),
+    null,
+  );
+  const freeAt = (oldest?.getTime() ?? Date.now()) + WINDOW_MINUTES * 60_000;
   return { allowed: false, retryAfterSeconds: Math.max(30, Math.ceil((freeAt - Date.now()) / 1000)) };
 }
 
@@ -119,21 +104,17 @@ export async function recordAttempt(input: AttemptInput & { outcome: AuthOutcome
   const email = input.email.toLowerCase();
   const success = input.outcome === "OK";
 
-  await db.authAttempt.create({
-    data: {
-      email,
-      scope: input.scope,
-      success,
-      outcome: input.outcome,
-      ipAddress: input.ip ?? undefined,
-      userAgent: input.userAgent ?? undefined,
-    },
+  await recordAuthAttempt({
+    email,
+    scope: input.scope,
+    success,
+    outcome: input.outcome,
+    ipAddress: input.ip ?? null,
+    userAgent: input.userAgent ?? null,
   });
 
   if (success) {
-    await db.authAttempt.deleteMany({
-      where: { email, scope: input.scope, success: false, createdAt: { gte: windowStart() } },
-    });
+    await clearFailedAuthAttempts(email, input.scope, windowStart());
   }
 }
 
@@ -158,10 +139,12 @@ export const LOGIN_LIMITS = {
 
 /** Recent failures against the portal, for the admin security panel. */
 export async function recentAdminFailures(limit = 20) {
-  return db.authAttempt.findMany({
-    where: { scope: "ADMIN", success: false },
-    orderBy: { createdAt: "desc" },
-    take: limit,
-    select: { id: true, email: true, outcome: true, ipAddress: true, createdAt: true },
-  });
+  const rows = await recentFailedAuthAttempts("ADMIN", limit);
+  return rows.map((a) => ({
+    id: a.id,
+    email: a.email,
+    outcome: a.outcome,
+    ipAddress: a.ipAddress,
+    createdAt: a.createdAt,
+  }));
 }

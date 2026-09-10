@@ -21,7 +21,7 @@
 import "server-only";
 import { headers } from "next/headers";
 import { randomUUID } from "crypto";
-import { db } from "@/lib/db";
+import { recordPlatformAudit as writePlatformAudit } from "@/server/db/platform";
 
 /** Anything whose key matches is replaced, at any depth. */
 const SENSITIVE_KEY = /pass(word)?|hash|secret|token|otp|mfa|apikey|api_key|authorization|cookie|card|cvv|iban/i;
@@ -88,21 +88,19 @@ export interface PlatformAuditInput {
 export async function recordPlatformAudit(input: PlatformAuditInput): Promise<void> {
   try {
     const meta = await requestMeta();
-    await db.platformAuditLog.create({
-      data: {
-        actorUserId: input.actorUserId,
-        actorEmail: input.actorEmail,
-        action: input.action,
-        entityType: input.entityType,
-        entityId: input.entityId ?? null,
-        summary: input.summary,
-        reason: input.reason ?? null,
-        beforeJson: encode(input.before),
-        afterJson: encode(input.after),
-        ipAddress: meta.ip,
-        userAgent: meta.userAgent,
-        requestId: meta.requestId,
-      },
+    await writePlatformAudit({
+      actorUserId: input.actorUserId,
+      actorEmail: input.actorEmail,
+      action: input.action,
+      entityType: input.entityType,
+      entityId: input.entityId ?? null,
+      summary: input.summary,
+      reason: input.reason ?? null,
+      beforeJson: encode(input.before),
+      afterJson: encode(input.after),
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent,
+      requestId: meta.requestId,
     });
   } catch (error) {
     console.error("[platform-audit] failed to record", input.action, error);

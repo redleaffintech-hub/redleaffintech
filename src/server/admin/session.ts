@@ -1,30 +1,28 @@
 /**
  * Platform-administrator sessions.
  *
- * Deliberately a *separate* session from the accounting app's, not a flag on
- * it. Signing in to the product must not silently confer the platform portal,
- * and signing out of the portal must not log an administrator out of a client
- * file they were legitimately working in. They ride on different cookies, carry
- * different audiences in the signed payload, and are stored as different
- * `Session.scope` values — so an app cookie replayed against `/admin` is not a
- * session at all, rather than being a session that merely fails a later check.
- *
- * Admin sessions are also much shorter-lived than app sessions: twelve hours
- * absolute, one hour idle. A console that can suspend a client company should
- * not sit signed in overnight.
+ * A *separate* session from the accounting app's — different cookie, a
+ * `redleaf-platform-admin` audience in the signed payload, and `scope: "ADMIN"`
+ * on the `sessions/{token}` doc. Much shorter‑lived: twelve hours absolute, one
+ * hour idle.
  */
 
 import "server-only";
 import { cookies } from "next/headers";
 import { SignJWT, jwtVerify } from "jose";
 import { randomUUID } from "crypto";
-import { db } from "@/lib/db";
+import {
+  createSession as createSessionDoc,
+  getSessionByToken,
+  revokeSessionsForUser,
+  updateSession,
+} from "@/server/db/platform";
+import { updateUser } from "@/server/db/users";
 
 export const ADMIN_COOKIE = "rlf_admin";
 const ADMIN_AUDIENCE = "redleaf-platform-admin";
 const ABSOLUTE_HOURS = 12;
 const IDLE_MINUTES = 60;
-/** How recently MFA must have been satisfied for a high-risk action. */
 const STEP_UP_MINUTES = 15;
 
 function secret(): Uint8Array {
@@ -43,26 +41,27 @@ function secret(): Uint8Array {
 export interface AdminSessionMeta {
   userAgent?: string | null;
   ip?: string | null;
-  /** True when MFA was satisfied as part of this sign-in. */
   mfaVerified?: boolean;
 }
 
-export async function createAdminSession(userId: string, meta: AdminSessionMeta = {}): Promise<string> {
+export async function createAdminSession(
+  userId: string,
+  meta: AdminSessionMeta = {},
+): Promise<string> {
   const token = randomUUID();
   const now = new Date();
   const expiresAt = new Date(now.getTime() + ABSOLUTE_HOURS * 3_600_000);
 
-  await db.session.create({
-    data: {
-      userId,
-      token,
-      scope: "ADMIN",
-      userAgent: meta.userAgent ?? undefined,
-      ipAddress: meta.ip ?? undefined,
-      mfaVerifiedAt: meta.mfaVerified ? now : null,
-      lastSeenAt: now,
-      expiresAt,
-    },
+  await createSessionDoc({
+    token,
+    userId,
+    scope: "ADMIN",
+    userAgent: meta.userAgent ?? null,
+    ipAddress: meta.ip ?? null,
+    mfaVerifiedAt: meta.mfaVerified ? now : null,
+    lastSeenAt: now,
+    expiresAt,
+    revokedAt: null,
   });
 
   const jwt = await new SignJWT({ sid: token, uid: userId })
@@ -81,7 +80,7 @@ export async function createAdminSession(userId: string, meta: AdminSessionMeta 
     expires: expiresAt,
   });
 
-  await db.user.update({ where: { id: userId }, data: { lastLoginAt: now } });
+  await updateUser(userId, { lastLoginAt: now });
   return token;
 }
 
@@ -91,13 +90,6 @@ export interface AdminSessionRecord {
   mfaVerifiedAt: Date | null;
 }
 
-/**
- * Read and *renew* the current admin session.
- *
- * The idle window slides on every read, which is why this writes: an
- * administrator working continuously stays signed in, one who walks away is
- * signed out an hour later without waiting for the absolute expiry.
- */
 export async function readAdminSession(): Promise<AdminSessionRecord | null> {
   const store = await cookies();
   const raw = store.get(ADMIN_COOKIE)?.value;
@@ -112,7 +104,7 @@ export async function readAdminSession(): Promise<AdminSessionRecord | null> {
   }
   if (!token) return null;
 
-  const session = await db.session.findUnique({ where: { token } });
+  const session = await getSessionByToken(token);
   if (!session || session.scope !== "ADMIN") return null;
 
   const now = new Date();
@@ -120,17 +112,15 @@ export async function readAdminSession(): Promise<AdminSessionRecord | null> {
 
   const idleSince = session.lastSeenAt ?? session.createdAt;
   if (now.getTime() - idleSince.getTime() > IDLE_MINUTES * 60_000) {
-    await db.session.update({ where: { token }, data: { revokedAt: now } });
+    await updateSession(token, { revokedAt: now });
     return null;
   }
 
-  // Only write when the clock has actually moved, so a page composed of many
-  // server components does not turn one request into a dozen updates.
   if (now.getTime() - idleSince.getTime() > 60_000) {
-    await db.session.update({ where: { token }, data: { lastSeenAt: now } });
+    await updateSession(token, { lastSeenAt: now });
   }
 
-  return { userId: session.userId, token: session.token, mfaVerifiedAt: session.mfaVerifiedAt };
+  return { userId: session.userId, token: session.id, mfaVerifiedAt: session.mfaVerifiedAt };
 }
 
 export async function destroyAdminSession(): Promise<void> {
@@ -139,10 +129,7 @@ export async function destroyAdminSession(): Promise<void> {
   if (raw) {
     try {
       const { payload } = await jwtVerify(raw, secret(), { audience: ADMIN_AUDIENCE });
-      await db.session.updateMany({
-        where: { token: payload.sid as string },
-        data: { revokedAt: new Date() },
-      });
+      await updateSession(payload.sid as string, { revokedAt: new Date() });
     } catch {
       // Already unreadable — clearing the cookie below is the whole remedy.
     }
@@ -150,9 +137,8 @@ export async function destroyAdminSession(): Promise<void> {
   store.delete({ name: ADMIN_COOKIE, path: "/admin" });
 }
 
-/** Record that MFA was satisfied again, for step-up on a high-risk action. */
 export async function markMfaVerified(token: string): Promise<void> {
-  await db.session.update({ where: { token }, data: { mfaVerifiedAt: new Date() } });
+  await updateSession(token, { mfaVerifiedAt: new Date() });
 }
 
 export function isRecentlyVerified(mfaVerifiedAt: Date | null): boolean {
@@ -162,26 +148,12 @@ export function isRecentlyVerified(mfaVerifiedAt: Date | null): boolean {
 
 export const STEP_UP_WINDOW_MINUTES = STEP_UP_MINUTES;
 
-/**
- * Revoke every session a user holds, in both portals.
- *
- * Used by "force sign-out", by password resets, and whenever platform-admin
- * access is withdrawn — a privilege change that leaves a live session behind
- * has not actually taken effect.
- */
+/** Revoke every session a user holds, in both portals. */
 export async function revokeAllSessions(userId: string): Promise<number> {
-  const result = await db.session.updateMany({
-    where: { userId, revokedAt: null },
-    data: { revokedAt: new Date() },
-  });
-  return result.count;
+  return revokeSessionsForUser(userId);
 }
 
 /** Revoke only the admin-scope sessions — used when admin rights are removed. */
 export async function revokeAdminSessions(userId: string): Promise<number> {
-  const result = await db.session.updateMany({
-    where: { userId, scope: "ADMIN", revokedAt: null },
-    data: { revokedAt: new Date() },
-  });
-  return result.count;
+  return revokeSessionsForUser(userId, "ADMIN");
 }
