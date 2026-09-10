@@ -2,10 +2,11 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { db } from "@/lib/db";
 import { normalizeCurrency } from "@/lib/currency";
 import { CAPABILITIES } from "@/lib/permissions";
 import { recordAudit, requireCapability } from "@/server/auth/context";
+import { bankAccounts as bankAccountsRepo, bankReconciliations, listBankTransactions } from "@/server/db/banking";
+import { getAccount } from "@/server/db/accounts";
 
 const BANK_ACCOUNT_TYPES = ["BANK", "CREDIT_CARD", "CASH"] as const;
 
@@ -41,17 +42,14 @@ export async function updateBankAccountAction(formData: FormData) {
   }
   const input = parsed.data;
 
-  const existing = await db.bankAccount.findFirst({
-    where: { id: input.bankAccountId, companyId: company.id },
-    select: { id: true, name: true, type: true, currency: true, accountId: true },
-  });
+  const existing = await bankAccountsRepo.get(company.id, input.bankAccountId);
   if (!existing) return { error: "That account does not belong to this company." };
 
-  const [transactionCount, reconciliationCount] = await Promise.all([
-    db.bankTransaction.count({ where: { bankAccountId: existing.id } }),
-    db.bankReconciliation.count({ where: { bankAccountId: existing.id } }),
+  const [transactions, reconciliations] = await Promise.all([
+    listBankTransactions(company.id, { bankAccountId: existing.id }),
+    bankReconciliations.list(company.id, { where: [["bankAccountId", "==", existing.id]] }),
   ]);
-  const locked = transactionCount > 0 || reconciliationCount > 0;
+  const locked = transactions.length > 0 || reconciliations.length > 0;
 
   if (locked) {
     if (input.type !== existing.type) {
@@ -71,10 +69,7 @@ export async function updateBankAccountAction(formData: FormData) {
   if (!locked) {
     // Only reachable for a still-empty account: verify the new GL account is a
     // real, company-owned account of a compatible type before switching to it.
-    const glAccount = await db.account.findFirst({
-      where: { id: input.accountId, companyId: company.id },
-      select: { id: true, type: true },
-    });
+    const glAccount = await getAccount(company.id, input.accountId);
     if (!glAccount) return { error: "Choose a GL account that belongs to this company." };
     if (input.type === "CREDIT_CARD" && glAccount.type !== "LIABILITY") {
       return { error: "A credit card account must link to a liability account." };
@@ -84,15 +79,12 @@ export async function updateBankAccountAction(formData: FormData) {
     }
   }
 
-  await db.bankAccount.update({
-    where: { id: existing.id },
-    data: {
-      name: input.name,
-      institution: input.institution || null,
-      accountNumberMasked: input.accountNumberMasked || null,
-      isActive: input.isActive === "on",
-      ...(locked ? {} : { type: input.type, currency, accountId: input.accountId }),
-    },
+  await bankAccountsRepo.update(company.id, existing.id, {
+    name: input.name,
+    institution: input.institution || null,
+    accountNumberMasked: input.accountNumberMasked || null,
+    isActive: input.isActive === "on",
+    ...(locked ? {} : { type: input.type, currency, accountId: input.accountId }),
   });
 
   await recordAudit({

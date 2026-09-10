@@ -2,22 +2,25 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { db } from "@/lib/db";
 import { toCents } from "@/lib/money";
 import { CAPABILITIES } from "@/lib/permissions";
 import { requireCapability, requireCompany } from "@/server/auth/context";
+import { categorizeTransaction, unmatchTransaction } from "@/server/banking/categorize-fs";
 import {
-  categorizeTransaction, confirmTransfer, detectTransfers, matchTransactionToDocuments,
-  suggestMatches, suggestRule, unmatchTransaction,
-} from "@/server/banking/matching";
-import { importTransactions, parseCsv, parseOfx } from "@/server/banking/import";
+  confirmTransfer, detectTransfers, matchTransactionToDocuments, suggestMatches, suggestRule,
+} from "@/server/banking/matching-fs";
+import { importTransactions, parseCsv, parseOfx } from "@/server/banking/import-fs";
 import {
   completeReconciliation,
   getOrStartReconciliation,
   matchSelected,
   removeMatch,
   saveStatementBalances,
-} from "@/server/banking/reconcile";
+} from "@/server/banking/reconcile-fs";
+import { bankTransactions, bankRules } from "@/server/db/banking";
+import { listAccounts } from "@/server/db/accounts";
+import { listTaxCodes } from "@/server/db/tax-codes";
+import { bankAccounts as bankAccountsRepo } from "@/server/db/banking";
 
 export async function categorizeAction(transactionId: string, accountId: string, taxCodeId: string | null, memo?: string) {
   const { company, user } = await requireCapability(CAPABILITIES.BANKING);
@@ -61,10 +64,10 @@ export async function unmatchAction(transactionId: string) {
 
 export async function excludeAction(transactionId: string) {
   const { company } = await requireCapability(CAPABILITIES.BANKING);
-  await db.bankTransaction.updateMany({
-    where: { id: transactionId, companyId: company.id, journalEntryId: null },
-    data: { status: "EXCLUDED" },
-  });
+  const txn = await bankTransactions.get(company.id, transactionId);
+  if (txn && !txn.journalEntryId) {
+    await bankTransactions.update(company.id, transactionId, { status: "EXCLUDED" });
+  }
   revalidatePath("/banking");
   return { ok: true };
 }
@@ -82,7 +85,7 @@ export async function confirmTransfersAction() {
 /** Suggestions for one transaction: matching documents plus any rule that fires. */
 export async function suggestionsAction(transactionId: string) {
   const { company } = await requireCapability(CAPABILITIES.BANKING);
-  const transaction = await db.bankTransaction.findFirst({ where: { id: transactionId, companyId: company.id } });
+  const transaction = await bankTransactions.get(company.id, transactionId);
   if (!transaction) return { matches: [], rule: null };
 
   const [matches, rule] = await Promise.all([
@@ -139,17 +142,15 @@ export async function createRuleAction(formData: FormData) {
   const parsed = ruleSchema.safeParse(Object.fromEntries(formData));
   if (!parsed.success) return { error: "Check the rule details and try again." };
 
-  await db.bankRule.create({
-    data: {
-      companyId: company.id,
-      name: parsed.data.name,
-      matchValue: parsed.data.matchValue.toUpperCase(),
-      matchType: parsed.data.matchType,
-      direction: parsed.data.direction,
-      setAccountId: parsed.data.setAccountId,
-      setTaxCodeId: parsed.data.setTaxCodeId || null,
-      autoConfirm: parsed.data.autoConfirm === "on",
-    },
+  await bankRules.create({
+    companyId: company.id,
+    name: parsed.data.name,
+    matchValue: parsed.data.matchValue.toUpperCase(),
+    matchType: parsed.data.matchType,
+    direction: parsed.data.direction,
+    setAccountId: parsed.data.setAccountId,
+    setTaxCodeId: parsed.data.setTaxCodeId || null,
+    autoConfirm: parsed.data.autoConfirm === "on",
   });
   revalidatePath("/banking/rules");
   return { ok: true };
@@ -157,7 +158,8 @@ export async function createRuleAction(formData: FormData) {
 
 export async function deleteRuleAction(ruleId: string) {
   const { company } = await requireCapability(CAPABILITIES.BANKING);
-  await db.bankRule.deleteMany({ where: { id: ruleId, companyId: company.id } });
+  const rule = await bankRules.get(company.id, ruleId);
+  if (rule) await bankRules.remove(company.id, ruleId);
   revalidatePath("/banking/rules");
   return { ok: true };
 }
@@ -252,22 +254,18 @@ export async function completeReconciliationAction(reconciliationId: string, ver
 
 export async function bankingOptions() {
   const { company } = await requireCompany();
-  const [accounts, taxCodes, bankAccounts] = await Promise.all([
-    db.account.findMany({
-      where: { companyId: company.id, isActive: true, type: { in: ["EXPENSE", "REVENUE", "ASSET", "LIABILITY", "EQUITY"] } },
-      orderBy: { code: "asc" },
-      select: { id: true, code: true, name: true, type: true },
-    }),
-    db.taxCode.findMany({
-      where: { companyId: company.id, isActive: true },
-      orderBy: { code: "asc" },
-      select: { id: true, code: true, name: true },
-    }),
-    db.bankAccount.findMany({
-      where: { companyId: company.id, isActive: true },
-      orderBy: { name: "asc" },
-      select: { id: true, name: true, type: true, accountNumberMasked: true },
-    }),
+  const [allAccounts, allTaxCodes, allBankAccounts] = await Promise.all([
+    listAccounts(company.id),
+    listTaxCodes(company.id, { activeOnly: true }),
+    bankAccountsRepo.list(company.id),
   ]);
+  const accounts = allAccounts
+    .filter((a) => a.isActive && ["EXPENSE", "REVENUE", "ASSET", "LIABILITY", "EQUITY"].includes(a.type))
+    .map((a) => ({ id: a.id, code: a.code, name: a.name, type: a.type }));
+  const taxCodes = allTaxCodes.map((c) => ({ id: c.id, code: c.code, name: c.name }));
+  const bankAccounts = allBankAccounts
+    .filter((b) => b.isActive)
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((b) => ({ id: b.id, name: b.name, type: b.type, accountNumberMasked: b.accountNumberMasked }));
   return { accounts, taxCodes, bankAccounts };
 }

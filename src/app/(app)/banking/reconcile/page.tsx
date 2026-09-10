@@ -1,7 +1,7 @@
-import { db } from "@/lib/db";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
-import { buildWorkspace, reconciliationHistory } from "@/server/banking/reconcile";
+import { buildWorkspace, reconciliationHistory } from "@/server/banking/reconcile-fs";
+import { bankAccounts as bankAccountsRepo, bankReconciliations, reconciliationId } from "@/server/db/banking";
 import { today, formatMonthLong } from "@/lib/dates";
 import { EmptyState, PageHeader } from "@/components/ui";
 import { ReconcileClient } from "./reconcile-workspace";
@@ -18,11 +18,10 @@ export default async function ReconcilePage({ searchParams }: PageProps<"/bankin
   const currency = company.baseCurrency;
   const params = await searchParams;
 
-  const bankAccounts = await db.bankAccount.findMany({
-    where: { companyId: company.id, isActive: true },
-    orderBy: { name: "asc" },
-    select: { id: true, name: true, openingBalanceCents: true },
-  });
+  const bankAccounts = (await bankAccountsRepo.list(company.id))
+    .filter((b) => b.isActive)
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((b) => ({ id: b.id, name: b.name, openingBalanceCents: b.openingBalanceCents }));
 
   if (bankAccounts.length === 0) {
     return (
@@ -52,23 +51,16 @@ export default async function ReconcilePage({ searchParams }: PageProps<"/bankin
   const month = toInt(params.month, priorMonth.getUTCMonth() + 1);
   const safeMonth = month >= 1 && month <= 12 ? month : priorMonth.getUTCMonth() + 1;
 
-  const existing = await db.bankReconciliation.findFirst({
-    where: {
-      companyId: company.id,
-      bankAccountId: accountId,
-      statementYear: year,
-      statementMonth: safeMonth,
-    },
-    select: { id: true },
-  });
+  const existing = await bankReconciliations.get(
+    company.id,
+    reconciliationId(accountId, year, safeMonth),
+  );
 
   let carryOpeningCents = bankAccounts.find((b) => b.id === accountId)?.openingBalanceCents ?? 0;
   if (!existing) {
-    const prior = await db.bankReconciliation.findFirst({
-      where: { companyId: company.id, bankAccountId: accountId, status: "COMPLETED" },
-      orderBy: { statementEndDate: "desc" },
-      select: { closingBalanceCents: true },
-    });
+    const prior = (await bankReconciliations.list(company.id, { where: [["bankAccountId", "==", accountId]] }))
+      .filter((r) => r.status === "COMPLETED")
+      .sort((a, b) => b.statementEndDate.getTime() - a.statementEndDate.getTime())[0];
     if (prior) carryOpeningCents = prior.closingBalanceCents;
   }
 
@@ -98,7 +90,7 @@ export default async function ReconcilePage({ searchParams }: PageProps<"/bankin
         history={history.map((h) => ({
           id: h.id,
           bankAccountId: h.bankAccountId,
-          bankAccountName: h.bankAccount.name,
+          bankAccountName: bankAccounts.find((b) => b.id === h.bankAccountId)?.name ?? "—",
           year: h.statementYear,
           month: h.statementMonth,
           monthLabel: formatMonthLong(h.statementStartDate),

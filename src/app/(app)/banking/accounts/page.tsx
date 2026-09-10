@@ -1,8 +1,9 @@
-import { db } from "@/lib/db";
+import { bankAccounts as bankAccountsRepo, bankReconciliations, listBankTransactions } from "@/server/db/banking";
+import { listAccounts } from "@/server/db/accounts";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES, can } from "@/lib/permissions";
-import { accountBalance } from "@/server/reports/financials";
-import { formatDate, formatDateTime, today } from "@/lib/dates";
+import { accountBalance } from "@/server/reports/financials-fs";
+import { formatDate, today } from "@/lib/dates";
 import { Badge, Card, LinkButton, Money, PageHeader, Table, Td, Th, Tr } from "@/components/ui";
 import { EditBankAccountButton } from "./edit-bank-account";
 
@@ -12,37 +13,46 @@ export default async function BankAccountsPage() {
   const { company, role } = await requireCapability(CAPABILITIES.BANKING);
   const canEdit = can(role, CAPABILITIES.BANKING);
 
-  const [bankAccounts, glAccounts] = await Promise.all([
-    db.bankAccount.findMany({
-      where: { companyId: company.id },
-      include: {
-        account: true,
-        reconciliations: { where: { status: "COMPLETED" }, orderBy: { statementEndDate: "desc" }, take: 1 },
-        _count: { select: { transactions: true, reconciliations: true } },
-      },
-      orderBy: { name: "asc" },
-    }),
-    // Both sides of a possible relink: assets for BANK/CASH, liabilities for
-    // CREDIT_CARD. The edit dialog filters to what the selected type allows.
-    db.account.findMany({
-      where: { companyId: company.id, isActive: true, type: { in: ["ASSET", "LIABILITY"] } },
-      select: { id: true, code: true, name: true, type: true },
-      orderBy: { code: "asc" },
-    }),
+  const [rawBankAccounts, allGl, allTxns, allRecons] = await Promise.all([
+    bankAccountsRepo.list(company.id),
+    listAccounts(company.id),
+    listBankTransactions(company.id),
+    bankReconciliations.list(company.id),
   ]);
+  const glById = new Map(allGl.map((a) => [a.id, a]));
+  // Both sides of a possible relink: assets for BANK/CASH, liabilities for
+  // CREDIT_CARD. The edit dialog filters to what the selected type allows.
+  const glAccounts = allGl
+    .filter((a) => a.isActive && ["ASSET", "LIABILITY"].includes(a.type))
+    .sort((a, b) => a.code.localeCompare(b.code))
+    .map((a) => ({ id: a.id, code: a.code, name: a.name, type: a.type }));
+
+  const bankAccounts = [...rawBankAccounts]
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((b) => {
+      const txns = allTxns.filter((t) => t.bankAccountId === b.id);
+      const recons = allRecons.filter((r) => r.bankAccountId === b.id);
+      const lastCompleted = recons
+        .filter((r) => r.status === "COMPLETED")
+        .sort((x, y) => y.statementEndDate.getTime() - x.statementEndDate.getTime())[0];
+      return {
+        ...b,
+        account: glById.get(b.accountId) ?? { code: "", name: "" },
+        reconciliations: lastCompleted ? [lastCompleted] : [],
+        _count: { transactions: txns.length, reconciliations: recons.length },
+        _unreconciled: txns.filter((t) => !["RECONCILED", "EXCLUDED"].includes(t.status)).length,
+      };
+    });
 
   const asOf = today();
   const rows = await Promise.all(
     bankAccounts.map(async (bankAccount) => {
       const signed = await accountBalance(company.id, bankAccount.accountId, asOf);
-      const unreconciled = await db.bankTransaction.count({
-        where: { companyId: company.id, bankAccountId: bankAccount.id, status: { notIn: ["RECONCILED", "EXCLUDED"] } },
-      });
       return {
         bankAccount,
         // Credit cards are credit-natural: a positive balance means money owed.
         balanceCents: bankAccount.type === "CREDIT_CARD" ? -signed : signed,
-        unreconciled,
+        unreconciled: bankAccount._unreconciled,
       };
     }),
   );

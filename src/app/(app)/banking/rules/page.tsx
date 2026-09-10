@@ -1,4 +1,6 @@
-import { db } from "@/lib/db";
+import { bankRules as bankRulesRepo } from "@/server/db/banking";
+import { listAccounts } from "@/server/db/accounts";
+import { listTaxCodes } from "@/server/db/tax-codes";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
 import { Badge, Card, CardHeader, EmptyState, PageHeader, Table, Td, Th, Tr } from "@/components/ui";
@@ -11,11 +13,20 @@ export default async function BankRulesPage() {
   const { company } = await requireCapability(CAPABILITIES.BANKING);
   const { accounts, taxCodes } = await bankingOptions();
 
-  const rules = await db.bankRule.findMany({
-    where: { companyId: company.id },
-    include: { setAccount: true, setTaxCode: true, setVendor: true, bankAccount: true },
-    orderBy: { priority: "asc" },
-  });
+  const [rawRules, allAccounts, allTaxCodes] = await Promise.all([
+    bankRulesRepo.list(company.id),
+    listAccounts(company.id),
+    listTaxCodes(company.id),
+  ]);
+  const accountById = new Map(allAccounts.map((a) => [a.id, a]));
+  const taxCodeById = new Map(allTaxCodes.map((c) => [c.id, c]));
+  const rules = [...rawRules]
+    .sort((a, b) => a.priority - b.priority)
+    .map((r) => ({
+      ...r,
+      setAccount: accountById.get(r.setAccountId) ?? { code: "", name: "" },
+      setTaxCode: r.setTaxCodeId ? taxCodeById.get(r.setTaxCodeId) ?? null : null,
+    }));
 
   return (
     <>

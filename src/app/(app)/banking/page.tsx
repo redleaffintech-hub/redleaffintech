@@ -1,11 +1,12 @@
 import Link from "next/link";
-import { db } from "@/lib/db";
+import { listBankTransactions, bankAccounts as bankAccountsRepo } from "@/server/db/banking";
+import { getAccountsBySystemKeys, listAccounts } from "@/server/db/accounts";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
-import { detectTransfers } from "@/server/banking/matching";
+import { detectTransfers } from "@/server/banking/matching-fs";
 import { formatDate } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
-import { Badge, Card, CardHeader, LinkButton, Money, PageHeader, StatusBadge, Table, Td, Th, Tr } from "@/components/ui";
+import { Card, CardHeader, LinkButton, Money, PageHeader, StatusBadge, Table, Td, Th, Tr } from "@/components/ui";
 import { ReviewQueue } from "./review-queue";
 import { ImportPanel, TransferButton } from "./banking-tools";
 import { bankingOptions } from "./actions";
@@ -18,25 +19,44 @@ export default async function BankingPage() {
   const currency = company.baseCurrency;
   const { accounts, taxCodes, bankAccounts } = await bankingOptions();
 
-  const [queue, recent, transfers, defaults] = await Promise.all([
-    db.bankTransaction.findMany({
-      where: { companyId: company.id, status: "UNMATCHED", reconciliationId: null },
-      include: { bankAccount: { select: { name: true, type: true } } },
-      orderBy: { date: "desc" },
-      take: 60,
-    }),
-    db.bankTransaction.findMany({
-      where: { companyId: company.id, status: { in: ["CATEGORIZED", "MATCHED", "TRANSFER"] } },
-      include: { bankAccount: { select: { name: true } }, categoryAccount: { select: { code: true, name: true } } },
-      orderBy: { date: "desc" },
-      take: 12,
-    }),
+  const [allTxns, transfers, defaults, glAccounts, bankAccountRows] = await Promise.all([
+    listBankTransactions(company.id),
     detectTransfers(company.id),
-    db.account.findMany({
-      where: { companyId: company.id, systemKey: { in: [SYSTEM_ACCOUNTS.UNCATEGORIZED_EXPENSE] } },
-      select: { id: true },
-    }),
+    getAccountsBySystemKeys(company.id, [SYSTEM_ACCOUNTS.UNCATEGORIZED_EXPENSE]),
+    listAccounts(company.id),
+    bankAccountsRepo.list(company.id),
   ]);
+  const bankAccountById = new Map(bankAccountRows.map((b) => [b.id, b]));
+  const glAccountById = new Map(glAccounts.map((a) => [a.id, a]));
+
+  const byDateDesc = (a: { date: Date }, b: { date: Date }) => b.date.getTime() - a.date.getTime();
+  const queue = allTxns
+    .filter((t) => t.status === "UNMATCHED" && !t.reconciliationId)
+    .sort(byDateDesc)
+    .slice(0, 60)
+    .map((t) => ({
+      ...t,
+      bankAccount: {
+        name: bankAccountById.get(t.bankAccountId)?.name ?? "—",
+        type: bankAccountById.get(t.bankAccountId)?.type ?? "BANK",
+      },
+    }));
+  const recent = allTxns
+    .filter((t) => ["CATEGORIZED", "MATCHED", "TRANSFER"].includes(t.status))
+    .sort(byDateDesc)
+    .slice(0, 12)
+    .map((t) => ({
+      ...t,
+      bankAccount: { name: bankAccountById.get(t.bankAccountId)?.name ?? "—" },
+      categoryAccount: t.categoryAccountId
+        ? glAccountById.get(t.categoryAccountId)
+          ? {
+              code: glAccountById.get(t.categoryAccountId)!.code,
+              name: glAccountById.get(t.categoryAccountId)!.name,
+            }
+          : null
+        : null,
+    }));
 
   const defaultExpenseAccountId =
     defaults[0]?.id ?? accounts.find((a) => a.type === "EXPENSE")?.id ?? accounts[0]?.id ?? "";
