@@ -1,7 +1,8 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { db } from "@/lib/db";
+import { getUser, updateUser } from "@/server/db/users";
+import { spendAllUserTokens } from "@/server/db/platform";
 import { checkPassword } from "@/lib/password-policy";
 import { hashPassword, verifyPassword } from "@/server/auth/password";
 import { requirePasswordChangeActor } from "@/server/admin/guard";
@@ -39,10 +40,7 @@ export async function changeOwnPasswordAction(formData: FormData) {
   if (!current) return { error: "Enter your current password." };
   if (next !== confirm) return { error: "The two new passwords do not match." };
 
-  const user = await db.user.findUnique({
-    where: { id: actor.id },
-    select: { passwordHash: true, email: true, name: true },
-  });
+  const user = await getUser(actor.id);
   if (!user) return { error: "Your account is no longer available." };
 
   if (!(await verifyPassword(current, user.passwordHash))) {
@@ -55,21 +53,13 @@ export async function changeOwnPasswordAction(formData: FormData) {
   const verdict = checkPassword(next, { email: user.email, name: user.name });
   if (!verdict.ok) return { error: verdict.problems.join(" ") };
 
-  await db.$transaction(async (tx) => {
-    await tx.user.update({
-      where: { id: actor.id },
-      data: {
-        passwordHash: await hashPassword(next),
-        mustChangePassword: false,
-        passwordChangedAt: new Date(),
-      },
-    });
-    // Any outstanding invitation or reset link is spent by choosing a password.
-    await tx.userToken.updateMany({
-      where: { userId: actor.id, usedAt: null },
-      data: { usedAt: new Date() },
-    });
+  await updateUser(actor.id, {
+    passwordHash: await hashPassword(next),
+    mustChangePassword: false,
+    passwordChangedAt: new Date(),
   });
+  // Any outstanding invitation or reset link is spent by choosing a password.
+  await spendAllUserTokens(actor.id);
 
   await revokeAllSessions(actor.id);
   await destroyAdminSession();

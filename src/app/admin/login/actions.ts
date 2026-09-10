@@ -2,7 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { z } from "zod";
-import { db } from "@/lib/db";
+import { getUserByEmail } from "@/server/db/users";
 import { verifyPassword } from "@/server/auth/password";
 import { createAdminSession, destroyAdminSession } from "@/server/admin/session";
 import { checkLoginAllowed, equaliseTiming, recordAttempt } from "@/server/admin/rate-limit";
@@ -65,20 +65,7 @@ export async function adminLoginAction(formData: FormData): Promise<AdminLoginRe
     };
   }
 
-  const user = await db.user.findUnique({
-    where: { email },
-    select: {
-      id: true,
-      email: true,
-      name: true,
-      passwordHash: true,
-      isPlatformAdmin: true,
-      platformAdminSuspendedAt: true,
-      mfaEnabled: true,
-      mfaSecret: true,
-      mustChangePassword: true,
-    },
-  });
+  const user = await getUserByEmail(email);
 
   if (!user) {
     // Burn the same time a real bcrypt comparison would, or the response time

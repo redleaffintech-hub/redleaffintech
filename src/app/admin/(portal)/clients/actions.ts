@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { db } from "@/lib/db";
+import { getUserByEmail } from "@/server/db/users";
 import { createClient, deleteClient, normalizeEmail, setClientModules, setReadOnly, updateClient } from "@/server/admin/clients";
 import {
   changeMembershipRole,
@@ -142,7 +142,7 @@ export async function grantAccessAction(formData: FormData) {
     // and it keeps a user id — which is not a secret, but is not the operator's
     // to type either — out of the form.
     const email = normalizeEmail(str(data, "userEmail"));
-    const user = await db.user.findUnique({ where: { email }, select: { id: true } });
+    const user = await getUserByEmail(email);
     if (!user) {
       return {
         error: `No account exists for ${email}. Create the user first, then grant them access.`,

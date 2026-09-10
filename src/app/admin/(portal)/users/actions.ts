@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { db } from "@/lib/db";
+import { listAllCompanies } from "@/server/db/companies";
 import {
   changeMembershipRole,
   createUser,
@@ -119,11 +119,11 @@ export async function grantMembershipFromUserAction(formData: FormData) {
 
     // Companies are addressed by name here, which is how a support conversation
     // refers to them. An ambiguous name is refused rather than guessed.
-    const matches = await db.company.findMany({
-      where: { name: { equals: companyName, mode: "insensitive" } },
-      select: { id: true, name: true },
-      take: 2,
-    });
+    const wanted = companyName.toLowerCase();
+    const matches = (await listAllCompanies())
+      .filter((c) => c.name.toLowerCase() === wanted)
+      .slice(0, 2)
+      .map((c) => ({ id: c.id, name: c.name }));
     if (matches.length === 0) return { error: `No client company is called "${companyName}".` };
     if (matches.length > 1) {
       return { error: `More than one company is called "${companyName}". Grant access from the client's own page.` };

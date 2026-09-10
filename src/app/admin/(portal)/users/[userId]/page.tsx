@@ -3,7 +3,8 @@ import { notFound } from "next/navigation";
 import { requirePlatformAdmin } from "@/server/admin/guard";
 import { getUserForAdmin } from "@/server/admin/users";
 import { STEP_UP_WINDOW_MINUTES } from "@/server/admin/session";
-import { db } from "@/lib/db";
+import { getUser } from "@/server/db/users";
+import { listMembershipsForCompany } from "@/server/db/company-users";
 import { formatDate, formatDateTime, relativeTime } from "@/lib/dates";
 import { Badge } from "@/components/ui";
 import { AdminCard, AdminPageHeader, DangerZone, DefinitionRow } from "@/components/admin/ui";
@@ -15,7 +16,7 @@ import type { AdminParams } from "@/lib/admin-constants";
 
 export async function generateMetadata({ params }: { params: AdminParams<"userId"> }) {
   const { userId } = await params;
-  const user = await db.user.findUnique({ where: { id: userId }, select: { name: true } });
+  const user = await getUser(userId);
   return { title: user?.name ?? "User" };
 }
 
@@ -36,16 +37,16 @@ export default async function UserDetailPage({ params }: { params: AdminParams<"
 
   // Which of their memberships is the last active PRIMARY of its company — the
   // ones the service layer will refuse to remove.
-  const primaryCounts = await db.companyUser.groupBy({
-    by: ["companyId"],
-    where: {
-      companyId: { in: user.companyUsers.map((membership) => membership.company.id) },
-      role: "PRIMARY",
-      status: "ACTIVE",
-    },
-    _count: { _all: true },
-  });
-  const primariesByCompany = new Map(primaryCounts.map((row) => [row.companyId, row._count._all]));
+  const primariesByCompany = new Map<string, number>();
+  await Promise.all(
+    user.companyUsers.map(async (membership) => {
+      const members = await listMembershipsForCompany(membership.company.id);
+      primariesByCompany.set(
+        membership.company.id,
+        members.filter((m) => m.role === "PRIMARY" && m.status === "ACTIVE").length,
+      );
+    }),
+  );
 
   const memberships = user.companyUsers.map((membership) => ({
     id: membership.id,

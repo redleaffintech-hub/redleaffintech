@@ -1,7 +1,8 @@
 import { requirePlatformAdmin } from "@/server/admin/guard";
 import { LOGIN_LIMITS } from "@/server/admin/rate-limit";
 import { STEP_UP_WINDOW_MINUTES } from "@/server/admin/session";
-import { db } from "@/lib/db";
+import { getUser } from "@/server/db/users";
+import { listSessionsForUser } from "@/server/db/platform";
 import { formatDate, formatDateTime, relativeTime } from "@/lib/dates";
 import { MIN_PASSWORD_LENGTH } from "@/lib/password-policy";
 import { Badge, Callout } from "@/components/ui";
@@ -23,25 +24,12 @@ export const metadata = { title: "Settings" };
 export default async function SettingsPage() {
   const actor = await requirePlatformAdmin();
 
-  const [me, sessions] = await Promise.all([
-    db.user.findUniqueOrThrow({
-      where: { id: actor.id },
-      select: {
-        name: true,
-        email: true,
-        mfaEnabled: true,
-        mfaEnrolledAt: true,
-        passwordChangedAt: true,
-        platformAdminSince: true,
-        lastLoginAt: true,
-      },
-    }),
-    db.session.findMany({
-      where: { userId: actor.id, revokedAt: null, expiresAt: { gt: new Date() } },
-      orderBy: { createdAt: "desc" },
-      select: { id: true, scope: true, ipAddress: true, userAgent: true, createdAt: true, lastSeenAt: true },
-    }),
+  const [meRecord, sessions] = await Promise.all([
+    getUser(actor.id),
+    listSessionsForUser(actor.id, { activeOnly: true }),
   ]);
+  if (!meRecord) throw new Error("Your account is no longer available.");
+  const me = meRecord;
 
   return (
     <>

@@ -210,6 +210,19 @@ export async function listSessionsForUser(
   if (opts.activeOnly) rows = rows.filter((s) => !s.revokedAt && s.expiresAt > new Date());
   return rows.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
 }
+/** Revoke every live session for a user except the one holding `keepToken`. */
+export async function revokeOtherSessionsForUser(
+  userId: string,
+  keepToken: string,
+): Promise<number> {
+  const snap = await top("sessions").where("userId", "==", userId).get();
+  const live = snap.docs.filter((d) => !d.data().revokedAt && d.id !== keepToken);
+  const now = encSess({ revokedAt: new Date() }).revokedAt;
+  const batch = top("sessions").firestore.batch();
+  for (const d of live) batch.update(d.ref, { revokedAt: now });
+  if (live.length) await batch.commit();
+  return live.length;
+}
 export async function revokeSessionsForUser(userId: string, scope?: string): Promise<number> {
   let q: FirebaseFirestore.Query = top("sessions").where("userId", "==", userId);
   if (scope) q = q.where("scope", "==", scope);
@@ -234,6 +247,21 @@ export async function createUserToken(input: Omit<UserToken, "id" | "createdAt">
 }
 export async function markUserTokenUsed(id: string): Promise<void> {
   await top("userTokens").doc(id).update({ usedAt: encTok({ usedAt: new Date() }).usedAt });
+}
+
+/** Spend (mark used) every unused token a user holds, whatever its purpose. */
+export async function spendAllUserTokens(userId: string): Promise<void> {
+  const snap = await top("userTokens").where("userId", "==", userId).get();
+  const now = encTok({ usedAt: new Date() }).usedAt;
+  const batch = top("userTokens").firestore.batch();
+  let n = 0;
+  for (const d of snap.docs) {
+    if (!d.data().usedAt) {
+      batch.update(d.ref, { usedAt: now });
+      n++;
+    }
+  }
+  if (n) await batch.commit();
 }
 
 /** Spend (mark used) every unused token a user holds for the given purposes. */

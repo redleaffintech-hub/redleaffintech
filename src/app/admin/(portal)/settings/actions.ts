@@ -1,7 +1,8 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { db } from "@/lib/db";
+import { getUser, updateUser } from "@/server/db/users";
+import { revokeOtherSessionsForUser } from "@/server/db/platform";
 import { checkPassword } from "@/lib/password-policy";
 import { hashPassword, verifyPassword } from "@/server/auth/password";
 import { markMfaVerified, revokeAllSessions } from "@/server/admin/session";
@@ -23,19 +24,13 @@ import { runAdminAction, str } from "@/server/admin/run-action";
 /** Step one: mint a secret and hand back what the authenticator app needs. */
 export async function beginMfaEnrolmentAction(formData: FormData) {
   return runAdminAction(formData, async (actor) => {
-    const existing = await db.user.findUnique({
-      where: { id: actor.id },
-      select: { mfaEnabled: true },
-    });
+    const existing = await getUser(actor.id);
     if (existing?.mfaEnabled) {
       return { error: "Two-factor authentication is already enabled on your account." };
     }
 
     const secret = generateTotpSecret();
-    await db.user.update({
-      where: { id: actor.id },
-      data: { mfaSecret: encryptSecret(secret), mfaEnabled: false },
-    });
+    await updateUser(actor.id, { mfaSecret: encryptSecret(secret), mfaEnabled: false });
 
     revalidatePath("/admin/settings");
 
@@ -51,10 +46,7 @@ export async function beginMfaEnrolmentAction(formData: FormData) {
 /** Step two: prove the authenticator is working before switching it on. */
 export async function confirmMfaEnrolmentAction(formData: FormData) {
   return runAdminAction(formData, async (actor, data) => {
-    const user = await db.user.findUnique({
-      where: { id: actor.id },
-      select: { mfaSecret: true, mfaEnabled: true },
-    });
+    const user = await getUser(actor.id);
     if (!user?.mfaSecret) return { error: "Start the enrolment again — there is no pending secret." };
     if (user.mfaEnabled) return { error: "Two-factor authentication is already enabled." };
 
@@ -65,10 +57,7 @@ export async function confirmMfaEnrolmentAction(formData: FormData) {
       return { error: "That code is not valid. Check the time on your phone and try the next code." };
     }
 
-    await db.user.update({
-      where: { id: actor.id },
-      data: { mfaEnabled: true, mfaEnrolledAt: new Date() },
-    });
+    await updateUser(actor.id, { mfaEnabled: true, mfaEnrolledAt: new Date() });
     await markMfaVerified(actor.sessionToken);
 
     await recordPlatformAudit({
@@ -88,10 +77,7 @@ export async function confirmMfaEnrolmentAction(formData: FormData) {
 
 export async function disableMfaAction(formData: FormData) {
   return runAdminAction(formData, async (actor, data) => {
-    const user = await db.user.findUnique({
-      where: { id: actor.id },
-      select: { passwordHash: true, mfaEnabled: true },
-    });
+    const user = await getUser(actor.id);
     if (!user?.mfaEnabled) return { error: "Two-factor authentication is not enabled." };
 
     // The password, not a code: somebody who has lost their authenticator still
@@ -100,10 +86,7 @@ export async function disableMfaAction(formData: FormData) {
       return { error: "That password is not correct." };
     }
 
-    await db.user.update({
-      where: { id: actor.id },
-      data: { mfaEnabled: false, mfaSecret: null, mfaEnrolledAt: null },
-    });
+    await updateUser(actor.id, { mfaEnabled: false, mfaSecret: null, mfaEnrolledAt: null });
 
     await recordPlatformAudit({
       actorUserId: actor.id,
@@ -129,10 +112,7 @@ export async function changeOwnPasswordAction(formData: FormData) {
 
     if (next !== confirm) return { error: "The two new passwords do not match." };
 
-    const user = await db.user.findUnique({
-      where: { id: actor.id },
-      select: { passwordHash: true, email: true, name: true },
-    });
+    const user = await getUser(actor.id);
     if (!user) return { error: "Your account is no longer available." };
 
     if (!(await verifyPassword(current, user.passwordHash))) {
@@ -145,21 +125,15 @@ export async function changeOwnPasswordAction(formData: FormData) {
     const verdict = checkPassword(next, { email: user.email, name: user.name });
     if (!verdict.ok) return { error: verdict.problems.join(" ") };
 
-    await db.user.update({
-      where: { id: actor.id },
-      data: {
-        passwordHash: await hashPassword(next),
-        mustChangePassword: false,
-        passwordChangedAt: new Date(),
-      },
+    await updateUser(actor.id, {
+      passwordHash: await hashPassword(next),
+      mustChangePassword: false,
+      passwordChangedAt: new Date(),
     });
 
     // Other sessions go; this one is left alive so the operator is not thrown
     // out of the page they are standing on.
-    await db.session.updateMany({
-      where: { userId: actor.id, revokedAt: null, token: { not: actor.sessionToken } },
-      data: { revokedAt: new Date() },
-    });
+    await revokeOtherSessionsForUser(actor.id, actor.sessionToken);
 
     await recordPlatformAudit({
       actorUserId: actor.id,

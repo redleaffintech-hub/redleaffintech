@@ -4,7 +4,8 @@ import { requirePlatformAdmin } from "@/server/admin/guard";
 import { getClient } from "@/server/admin/clients";
 import { seatsUsed as countSeats } from "@/server/admin/subscriptions";
 import { sellablePlans } from "@/server/plans/catalogue";
-import { db } from "@/lib/db";
+import { getCompany } from "@/server/db/companies";
+import { listPlatformAudit } from "@/server/db/platform";
 import { formatDate, formatDateTime, relativeTime } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
 import { CYCLE_BILLED_AS, CYCLE_LABELS, type BillingCycle } from "@/lib/plans";
@@ -28,7 +29,7 @@ import type { AdminParams } from "@/lib/admin-constants";
 
 export async function generateMetadata({ params }: { params: AdminParams<"companyId"> }) {
   const { companyId } = await params;
-  const company = await db.company.findUnique({ where: { id: companyId }, select: { name: true } });
+  const company = await getCompany(companyId);
   return { title: company?.name ?? "Client" };
 }
 
@@ -47,16 +48,19 @@ export default async function ClientDetailPage({ params }: { params: AdminParams
   const company = await getClient(companyId);
   if (!company) notFound();
 
-  const [seatsUsed, plans, recentAudit] = await Promise.all([
+  const [seatsUsed, plans, allAudit] = await Promise.all([
     countSeats(companyId),
     sellablePlans(),
-    db.platformAuditLog.findMany({
-      where: { OR: [{ entityId: companyId }, { entityType: "Subscription", entityId: company.subscription?.id }] },
-      orderBy: { createdAt: "desc" },
-      take: 8,
-      select: { id: true, action: true, summary: true, actorEmail: true, createdAt: true },
-    }),
+    listPlatformAudit({ limit: 2000 }),
   ]);
+  const subId = company.subscription?.id;
+  const recentAudit = allAudit
+    .filter(
+      (e) =>
+        e.entityId === companyId ||
+        (e.entityType === "Subscription" && subId != null && e.entityId === subId),
+    )
+    .slice(0, 8);
 
   const subscription = company.subscription;
   const access = accessFor(subscription);

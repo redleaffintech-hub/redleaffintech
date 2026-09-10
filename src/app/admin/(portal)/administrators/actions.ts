@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { db } from "@/lib/db";
+import { getUserByEmail } from "@/server/db/users";
 import {
   promoteToAdministrator,
   removeAdministrator,
@@ -41,7 +41,7 @@ export async function promoteAdministratorAction(formData: FormData) {
     // Addressed by email so the operator types something they can verify by
     // reading, rather than an opaque id copied from a URL.
     const email = normalizeEmail(str(data, "email"));
-    const user = await db.user.findUnique({ where: { email }, select: { id: true, name: true } });
+    const user = await getUserByEmail(email);
     if (!user) return { error: `No account exists for ${email}. Create the user first.` };
 
     await promoteToAdministrator(actor, { userId: user.id, reason: str(data, "reason") });
