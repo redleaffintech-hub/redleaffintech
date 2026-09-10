@@ -13,6 +13,7 @@
     "seed": "tsx prisma/seed.ts",
     "plans:seed": "node --conditions=react-server --import tsx scripts/seed-plans.ts",
     "admin:create": "node --conditions=react-server --import tsx scripts/create-platform-admin.ts",
+    "user:create": "node --conditions=react-server --import tsx scripts/create-company-user.ts",
     "verify": "node --conditions=react-server --import tsx scripts/verify.ts",
     "migrate:firestore": "node --conditions=react-server --import tsx scripts/migrate-to-firestore.ts",
     "backfill:inventory-accounts": "node --conditions=react-server --import tsx scripts/backfill-inventory-accounts.ts",
