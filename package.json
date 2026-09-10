@@ -15,7 +15,8 @@
     "migrate:firestore": "node --conditions=react-server --import tsx scripts/migrate-to-firestore.ts",
     "backfill:inventory-accounts": "node --conditions=react-server --import tsx scripts/backfill-inventory-accounts.ts",
     "backfill:company-modules": "node --conditions=react-server --import tsx scripts/backfill-company-modules.ts",
-    "db:migrate": "prisma migrate deploy"
+    "db:migrate": "prisma migrate deploy",
+    "smoke:firestore": "node --conditions=react-server --import tsx scripts/smoke-firestore.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.9.1",

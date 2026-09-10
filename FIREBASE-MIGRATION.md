@@ -478,6 +478,20 @@ Documented as a deliberate deviation from strict single-transaction atomicity.
       `redleaf-fintech-e4c4d` + ADC + Cloud Secret Manager `SESSION_SECRET`.
     - **No file under `src/`** imports `@/lib/db` any more. Production build
       green.
+  - [x] **8a-emulator — full smoke test against a live Firestore emulator.**
+    `scripts/smoke-firestore.ts` (`npm run smoke:firestore`, with the emulator
+    on :8080) — 47 assertions across provisioning → invoice post (journal
+    graph + `accountPeriodBalances` roll-up + tax entries) → trial balance /
+    income statement / balance sheet all balance / A/R aging → receipt +
+    allocation → bill approval + post → manual journal + reversal → period
+    close + rejection of a post into it → bank CSV import + duplicate
+    detection → final whole-company trial balance. **Caught and fixed a real
+    read-after-write bug:** `refreshInvoiceStatusTx` / `refreshBillStatusTx`
+    did their own `getTx` inside the write phase of `recordPayment` /
+    `applyPayment` / `voidPayment` / `applyCreditNote` — illegal in a Firestore
+    transaction; would have broken every payment and credit-note application in
+    production. Both now take the doc fields they need (read in the caller's
+    read phase).
   - [ ] **8b — deploy (needs the account owner).** Enable Blaze on
     `redleaf-fintech-e4c4d`; `firebase apphosting:secrets:set SESSION_SECRET`;
     with a service-account key, `npm run migrate:firestore -- --yes` (reads the

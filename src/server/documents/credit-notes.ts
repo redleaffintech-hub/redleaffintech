@@ -211,9 +211,14 @@ export async function applyCreditNote(
       throw new Error(`Only $${(credit.balanceCents / 100).toFixed(2)} of this credit remains.`);
     }
 
-    // Existing allocations per invoice, for the status recompute.
+    // Existing allocations + invoice fields for the status recompute — all read
+    // here, before any write, so the write phase never reads after a write.
     const existingByInvoice = new Map<string, { amountCents: number; kind: string }[]>();
+    const invoiceDoc = new Map<string, { totalCents: number; status: string; dueDate: Date }>();
     for (const a of allocations) {
+      const inv = await invoices.getTx(tx, companyId, a.invoiceId);
+      if (!inv) throw new Error("Invoice not found in this company.");
+      invoiceDoc.set(a.invoiceId, { totalCents: inv.totalCents, status: inv.status, dueDate: inv.dueDate });
       const rows = await listAllocationsForInvoice(companyId, a.invoiceId);
       existingByInvoice.set(
         a.invoiceId,
@@ -241,7 +246,7 @@ export async function applyCreditNote(
     });
 
     for (const a of allocations) {
-      await refreshInvoiceStatusTx(tx, companyId, a.invoiceId, [
+      refreshInvoiceStatusTx(tx, companyId, a.invoiceId, invoiceDoc.get(a.invoiceId)!, [
         ...(existingByInvoice.get(a.invoiceId) ?? []),
         { amountCents: a.amountCents, kind: "CREDIT" },
       ]);

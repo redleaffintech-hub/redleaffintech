@@ -105,8 +105,13 @@ export async function recordPayment(input: PaymentInput) {
         : SYSTEM_ACCOUNTS.ACCOUNTS_PAYABLE;
     const control = await getSystemAccount(tx, input.companyId, controlKey);
 
-    const touchedInvoices = new Map<string, { totalCents: number; existing: { amountCents: number; kind: string }[] }>();
-    const touchedBills = new Map<string, { totalCents: number; existing: { amountCents: number; kind: string }[] }>();
+    type Touched = {
+      totalCents: number;
+      doc: { totalCents: number; status: string; dueDate: Date };
+      existing: { amountCents: number; kind: string }[];
+    };
+    const touchedInvoices = new Map<string, Touched>();
+    const touchedBills = new Map<string, Touched>();
 
     for (const a of allocations) {
       if (a.amountCents <= 0) throw new Error("Allocation amounts must be positive.");
@@ -122,6 +127,7 @@ export async function recordPayment(input: PaymentInput) {
         const existing = await listAllocationsForInvoice(input.companyId, a.invoiceId);
         touchedInvoices.set(a.invoiceId, {
           totalCents: invoice.totalCents,
+          doc: { totalCents: invoice.totalCents, status: invoice.status, dueDate: invoice.dueDate },
           existing: existing.map((e) => ({ amountCents: e.amountCents, kind: e.kind })),
         });
       }
@@ -136,6 +142,7 @@ export async function recordPayment(input: PaymentInput) {
         const existing = await listAllocationsForBill(input.companyId, a.billId);
         touchedBills.set(a.billId, {
           totalCents: bill.totalCents,
+          doc: { totalCents: bill.totalCents, status: bill.status, dueDate: bill.dueDate },
           existing: existing.map((e) => ({ amountCents: e.amountCents, kind: e.kind })),
         });
       }
@@ -219,14 +226,14 @@ export async function recordPayment(input: PaymentInput) {
     for (const a of allocations) {
       if (a.invoiceId) {
         const t = touchedInvoices.get(a.invoiceId)!;
-        await refreshInvoiceStatusTx(tx, input.companyId, a.invoiceId, [
+        refreshInvoiceStatusTx(tx, input.companyId, a.invoiceId, t.doc, [
           ...t.existing,
           { amountCents: a.amountCents, kind: "PAYMENT" },
         ]);
       }
       if (a.billId) {
         const t = touchedBills.get(a.billId)!;
-        await refreshBillStatusTx(tx, input.companyId, a.billId, [
+        refreshBillStatusTx(tx, input.companyId, a.billId, t.doc, [
           ...t.existing,
           { amountCents: a.amountCents, kind: "PAYMENT" },
         ]);
@@ -252,11 +259,18 @@ export async function applyPayment(
       throw new Error(`Only $${(payment.unappliedCents / 100).toFixed(2)} of this payment is unapplied.`);
     }
 
-    // Existing allocations per touched doc, for the status recompute.
+    // Existing allocations + the doc fields the status recompute needs, all
+    // read here so the write phase never reads after a write.
+    type RefreshDoc = { totalCents: number; status: string; dueDate: Date };
     const invoiceExisting = new Map<string, { amountCents: number; kind: string }[]>();
     const billExisting = new Map<string, { amountCents: number; kind: string }[]>();
+    const invoiceDoc = new Map<string, RefreshDoc>();
+    const billDoc = new Map<string, RefreshDoc>();
     for (const a of allocations) {
       if (a.invoiceId && !invoiceExisting.has(a.invoiceId)) {
+        const inv = await invoices.getTx(tx, companyId, a.invoiceId);
+        if (!inv) throw new Error("Invoice not found in this company.");
+        invoiceDoc.set(a.invoiceId, { totalCents: inv.totalCents, status: inv.status, dueDate: inv.dueDate });
         invoiceExisting.set(
           a.invoiceId,
           (await listAllocationsForInvoice(companyId, a.invoiceId)).map((r) => ({
@@ -266,6 +280,9 @@ export async function applyPayment(
         );
       }
       if (a.billId && !billExisting.has(a.billId)) {
+        const bl = await bills.getTx(tx, companyId, a.billId);
+        if (!bl) throw new Error("Bill not found in this company.");
+        billDoc.set(a.billId, { totalCents: bl.totalCents, status: bl.status, dueDate: bl.dueDate });
         billExisting.set(
           a.billId,
           (await listAllocationsForBill(companyId, a.billId)).map((r) => ({
@@ -296,13 +313,13 @@ export async function applyPayment(
 
     for (const a of allocations) {
       if (a.invoiceId) {
-        await refreshInvoiceStatusTx(tx, companyId, a.invoiceId, [
+        refreshInvoiceStatusTx(tx, companyId, a.invoiceId, invoiceDoc.get(a.invoiceId)!, [
           ...(invoiceExisting.get(a.invoiceId) ?? []),
           { amountCents: a.amountCents, kind: "PAYMENT" },
         ]);
       }
       if (a.billId) {
-        await refreshBillStatusTx(tx, companyId, a.billId, [
+        refreshBillStatusTx(tx, companyId, a.billId, billDoc.get(a.billId)!, [
           ...(billExisting.get(a.billId) ?? []),
           { amountCents: a.amountCents, kind: "PAYMENT" },
         ]);
@@ -323,9 +340,13 @@ export async function voidPayment(companyId: string, paymentId: string, userId?:
     const touchedInvoices = new Set(allocs.map((a) => a.invoiceId).filter(Boolean) as string[]);
     const touchedBills = new Set(allocs.map((a) => a.billId).filter(Boolean) as string[]);
 
-    // Remaining allocations per doc after this payment's are removed.
+    type RefreshDoc = { totalCents: number; status: string; dueDate: Date };
+    // Remaining allocations + doc fields per touched doc — read before any write.
     const invoiceRemainder = new Map<string, { amountCents: number; kind: string }[]>();
+    const invoiceDoc = new Map<string, RefreshDoc>();
     for (const id of touchedInvoices) {
+      const inv = await invoices.getTx(tx, companyId, id);
+      if (inv) invoiceDoc.set(id, { totalCents: inv.totalCents, status: inv.status, dueDate: inv.dueDate });
       const all = await listAllocationsForInvoice(companyId, id);
       invoiceRemainder.set(
         id,
@@ -333,7 +354,10 @@ export async function voidPayment(companyId: string, paymentId: string, userId?:
       );
     }
     const billRemainder = new Map<string, { amountCents: number; kind: string }[]>();
+    const billDoc = new Map<string, RefreshDoc>();
     for (const id of touchedBills) {
+      const bl = await bills.getTx(tx, companyId, id);
+      if (bl) billDoc.set(id, { totalCents: bl.totalCents, status: bl.status, dueDate: bl.dueDate });
       const all = await listAllocationsForBill(companyId, id);
       billRemainder.set(
         id,
@@ -356,10 +380,12 @@ export async function voidPayment(companyId: string, paymentId: string, userId?:
     });
 
     for (const [id, remaining] of invoiceRemainder) {
-      await refreshInvoiceStatusTx(tx, companyId, id, remaining);
+      const doc = invoiceDoc.get(id);
+      if (doc) refreshInvoiceStatusTx(tx, companyId, id, doc, remaining);
     }
     for (const [id, remaining] of billRemainder) {
-      await refreshBillStatusTx(tx, companyId, id, remaining);
+      const doc = billDoc.get(id);
+      if (doc) refreshBillStatusTx(tx, companyId, id, doc, remaining);
     }
 
     return payment;

@@ -565,14 +565,22 @@ export async function voidInvoice(
 
 // ── Status refresh (called by the payment flow) ─────────────────────────────
 
-export async function refreshInvoiceStatusTx(
+/**
+ * Recompute an invoice's paid/balance/status from its allocations and write it.
+ *
+ * Takes the invoice fields it needs as `doc` — already read in the caller's
+ * read phase — because this runs during the write phase of the payment/credit
+ * transaction and Firestore forbids a read after a write.
+ */
+export function refreshInvoiceStatusTx(
   tx: Tx,
   companyId: string,
   invoiceId: string,
+  doc: { totalCents: number; status: string; dueDate: Date },
   allocations: { amountCents: number; kind: string }[],
-): Promise<void> {
-  const invoice = await invoices.getTx(tx, companyId, invoiceId);
-  if (!invoice || invoice.status === "VOID" || invoice.status === "DRAFT") return;
+): void {
+  const invoice = doc;
+  if (invoice.status === "VOID" || invoice.status === "DRAFT") return;
 
   const settled = allocations.reduce((s, a) => s + a.amountCents, 0);
   const cashPaid = allocations

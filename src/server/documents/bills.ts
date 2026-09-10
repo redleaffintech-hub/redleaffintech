@@ -463,14 +463,20 @@ export async function voidBill(
 
 // ── Status refresh (called by the payment flow) ─────────────────────────────
 
-export async function refreshBillStatusTx(
+/**
+ * Recompute a bill's paid/balance/status from its allocations and write it.
+ * Takes the bill fields as `doc` (already read by the caller) — this runs in
+ * the write phase and Firestore forbids read-after-write.
+ */
+export function refreshBillStatusTx(
   tx: Tx,
   companyId: string,
   billId: string,
+  doc: { totalCents: number; status: string; dueDate: Date },
   allocations: { amountCents: number; kind: string }[],
-): Promise<void> {
-  const bill = await bills.getTx(tx, companyId, billId);
-  if (!bill || bill.status === "VOID" || bill.status === "DRAFT") return;
+): void {
+  const bill = doc;
+  if (bill.status === "VOID" || bill.status === "DRAFT") return;
 
   const settled = allocations.reduce((s, a) => s + a.amountCents, 0);
   const cashPaid = allocations
