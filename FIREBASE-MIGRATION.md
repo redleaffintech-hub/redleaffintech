@@ -236,10 +236,20 @@ Documented as a deliberate deviation from strict single-transaction atomicity.
   **Deviation:** create-and-post and edit-a-posted-invoice run as a short
   sequence of single-purpose transactions, not one — a Firestore transaction
   can't re-read what it just wrote, and each step is individually atomic.
-- [ ] **Phase 5 — remaining posting flows** (bills, expenses, estimates→invoice
-  conversion, credit notes) + **reports** rewritten against
-  `accountPeriodBalances` + collection queries + `closeChecklist`; CSV export.
-- [ ] **Phase 5b — banking & reconciliation, HR, payroll, recurring, projects,
+- [x] **Phase 5 — remaining document posting flows.**
+  `documents/bills-fs.ts` (`createBill`, `approveBill`, `postBill`, `voidBill` —
+  incl. inventory receipt costing + ITC split), `expenses-fs.ts`
+  (`createExpense`, `postExpense`, `voidExpense`), `credit-notes-fs.ts`
+  (`createCreditNote`, `applyCreditNote`, `writeOffInvoice` — negated tax rows),
+  `estimates-fs.ts` (`createEstimate`, `setEstimateStatus`,
+  `convertEstimateToInvoice`). Same two-phase / multi-transaction shape as
+  invoices-fs. `tsc` + `eslint` clean.
+- [ ] **Phase 5b — reports** rewritten against `accountPeriodBalances` (full
+  months) + `journalLines` line-scan for the partial boundary months:
+  `financials-fs.ts` (trial balance, balance sheet, P&L, cash flow, GL),
+  `aging-fs.ts` (AR/AP), `tax-fs.ts` (summary/detail), `dashboard-fs.ts`,
+  `closeChecklist`; CSV export.
+- [ ] **Phase 5c — banking & reconciliation, HR, payroll, recurring, projects,
   budgets, attachments, notifications.**
 - [ ] **Phase 6 — rewire call sites**: every `src/app/**/actions.ts`, page and
   `src/server/**` module off `@/lib/db` and onto the repos / `-fs` engines.
