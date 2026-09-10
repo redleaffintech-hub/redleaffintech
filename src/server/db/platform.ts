@@ -112,6 +112,12 @@ export function createSubscriptionEventTx(tx: Tx, input: Omit<SubscriptionEvent,
   const row = { ...input, id: newId(), createdAt: new Date() } as SubscriptionEvent;
   tx.set(top("subscriptionEvents").doc(row.id), encEvt(row));
 }
+export async function addSubscriptionEvent(
+  input: Omit<SubscriptionEvent, "id" | "createdAt">,
+): Promise<void> {
+  const row = { ...input, id: newId(), createdAt: new Date() } as SubscriptionEvent;
+  await top("subscriptionEvents").doc(row.id).set(encEvt(row));
+}
 export async function addSubscriptionNote(
   input: Omit<SubscriptionNote, "id" | "createdAt">,
 ): Promise<SubscriptionNote> {

@@ -1,25 +1,19 @@
 /**
  * Subscription administration.
  *
- * Every mutation in here does the same four things, in the same order, and the
- * ordering is deliberate:
+ * Every mutation: validate against the state machine (src/lib/subscriptions.ts),
+ * write the subscription, push the access consequence onto `Company.isReadOnly`
+ * (a status nobody enforces is decoration), then record it twice — a typed
+ * `subscriptionEvents` doc for the timeline and a `platformAuditLogs` row.
  *
- *   1. validate the change against the state machine in `src/lib/subscriptions.ts`;
- *   2. write the subscription;
- *   3. apply the access consequence to the company (suspending a subscription
- *      must actually make the file read-only — a status nobody enforces is
- *      decoration);
- *   4. record it twice — a typed `SubscriptionEvent` for the timeline on the
- *      detail page, and a `PlatformAuditLog` row for compliance.
- *
- * Steps 1–3 run inside one transaction so a subscription can never end up
- * suspended while the company it belongs to is still writable. Step 4 runs
- * after the commit, because a failure to write the audit trail must not roll
- * back a change an operator has already been told about.
+ * DEVIATION: Firestore has no cross-collection transaction, so the write +
+ * access-consequence + event now run in sequence rather than atomically. The
+ * access flip follows the subscription write immediately; a crash between them
+ * leaves a subscription whose status is ahead of the company flag, which the
+ * next lifecycle change corrects.
  */
 
 import "server-only";
-import { db, type Tx } from "@/lib/db";
 import { addDays, addMonths } from "@/lib/dates";
 import {
   accessFor,
@@ -29,6 +23,17 @@ import {
 } from "@/lib/subscriptions";
 import { CYCLE_MONTHS, isValidCycle, type BillingCycle } from "@/lib/plans";
 import { assignmentFromPlan, sellablePlanByCode, type PlanAssignment } from "@/server/plans/catalogue";
+import { getCompany, updateCompany } from "@/server/db/companies";
+import { listMembershipsForCompany } from "@/server/db/company-users";
+import {
+  addSubscriptionEvent,
+  addSubscriptionNote,
+  getSubscriptionForCompany,
+  plans as plansRepo,
+  subscriptions as subsRepo,
+} from "@/server/db/platform";
+import { newId } from "@/server/db/firestore";
+import type { Subscription } from "@/server/db/types";
 import { AUDIT_ACTIONS, recordPlatformAudit } from "./audit";
 import type { AdminActor } from "./guard";
 
@@ -39,29 +44,30 @@ export class SubscriptionError extends Error {
   }
 }
 
-/** Seats in use — invited members hold a seat, because they are about to use one. */
-export async function seatsUsed(companyId: string, client: Tx | typeof db = db): Promise<number> {
-  return client.companyUser.count({
-    where: { companyId, status: { in: ["ACTIVE", "INVITED"] } },
-  });
+/** Seats in use — invited members hold a seat. */
+export async function seatsUsed(companyId: string): Promise<number> {
+  const members = await listMembershipsForCompany(companyId);
+  return members.filter((m) => ["ACTIVE", "INVITED"].includes(m.status)).length;
 }
 
-/**
- * Push the subscription's access consequence onto the company.
- *
- * `Company.isReadOnly` is the flag the whole accounting app already respects, so
- * rather than teach every posting path about subscriptions, the lifecycle keeps
- * that one flag true. The cost is that an operator toggling read-only by hand on
- * a suspended company will see it flip back on the next lifecycle change, which
- * is the correct precedence.
- */
-async function applyAccess(tx: Tx, companyId: string, status: string, trialEndsAt: Date | null) {
+/** Kept for the admin subscription page's Prisma select until 6g rewires it. */
+export const SUBSCRIPTION_DETAIL_SELECT = {
+  id: true, companyId: true, plan: true, planId: true, planVersionId: true,
+  status: true, billingCycle: true, currency: true, priceCents: true,
+  monthlyEquivalentCents: true, seats: true, seatsOverridden: true,
+  seatOverrideReason: true, seatOverrideAt: true, trialStartsAt: true,
+  trialEndsAt: true, startedAt: true, currentPeriodStart: true, currentPeriodEnd: true,
+  pastDueSince: true, suspendedAt: true, suspendReason: true, cancelAt: true,
+  cancelledAt: true, cancelReason: true, providerRef: true, createdAt: true, updatedAt: true,
+} as const;
+
+async function applyAccess(companyId: string, status: string, trialEndsAt: Date | null) {
   const access = accessFor({ status, trialEndsAt });
-  await tx.company.update({ where: { id: companyId }, data: { isReadOnly: !access.writable } });
+  await updateCompany(companyId, { isReadOnly: !access.writable });
   return access;
 }
 
-interface EventInput {
+async function recordEvent(input: {
   subscriptionId: string;
   type: string;
   summary: string;
@@ -69,57 +75,20 @@ interface EventInput {
   before?: unknown;
   after?: unknown;
   actor: AdminActor;
-}
-
-async function recordEvent(tx: Tx, input: EventInput) {
-  await tx.subscriptionEvent.create({
-    data: {
-      subscriptionId: input.subscriptionId,
-      type: input.type,
-      summary: input.summary,
-      reason: input.reason ?? null,
-      beforeJson: input.before === undefined ? null : JSON.stringify(input.before),
-      afterJson: input.after === undefined ? null : JSON.stringify(input.after),
-      actorUserId: input.actor.id,
-      actorEmail: input.actor.email,
-    },
+}) {
+  await addSubscriptionEvent({
+    subscriptionId: input.subscriptionId,
+    type: input.type,
+    summary: input.summary,
+    reason: input.reason ?? null,
+    beforeJson: input.before === undefined ? null : JSON.stringify(input.before),
+    afterJson: input.after === undefined ? null : JSON.stringify(input.after),
+    actorUserId: input.actor.id,
+    actorEmail: input.actor.email,
   });
 }
 
-export const SUBSCRIPTION_DETAIL_SELECT = {
-  id: true,
-  companyId: true,
-  plan: true,
-  planId: true,
-  planVersionId: true,
-  status: true,
-  billingCycle: true,
-  currency: true,
-  priceCents: true,
-  monthlyEquivalentCents: true,
-  seats: true,
-  seatsOverridden: true,
-  seatOverrideReason: true,
-  seatOverrideAt: true,
-  trialStartsAt: true,
-  trialEndsAt: true,
-  startedAt: true,
-  currentPeriodStart: true,
-  currentPeriodEnd: true,
-  pastDueSince: true,
-  suspendedAt: true,
-  suspendReason: true,
-  cancelAt: true,
-  cancelledAt: true,
-  cancelReason: true,
-  providerRef: true,
-  createdAt: true,
-  updatedAt: true,
-} as const;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Creation and plan assignment
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Creation and plan assignment ───────────────────────────────────────────
 
 export interface AssignPlanInput {
   companyId: string;
@@ -129,7 +98,6 @@ export interface AssignPlanInput {
   trialStartsAt?: Date | null;
   trialEndsAt?: Date | null;
   currentPeriodEnd?: Date | null;
-  /** An explicit seat allowance, overriding the plan's. Requires a reason. */
   seatOverride?: number | null;
   seatOverrideReason?: string | null;
   reason?: string | null;
@@ -141,27 +109,15 @@ async function resolvePlan(planCode: string, cycle: string): Promise<PlanAssignm
   if (!plan) {
     throw new SubscriptionError("That plan is not published, so it cannot be sold. Publish it first.");
   }
-  if (plan.contactOnly) {
-    // Not a hard refusal — a quoted plan is exactly the kind an operator assigns
-    // by hand — but it must be a deliberate act, so the price is taken from the
-    // published snapshot rather than left at zero.
-    if (plan.prices[cycle as BillingCycle]?.cycleAmountCents === 0) {
-      throw new SubscriptionError(
-        `${plan.name} is a contact-sales plan with no published ${cycle.toLowerCase()} price. Set one before assigning it.`,
-      );
-    }
+  if (plan.contactOnly && plan.prices[cycle as BillingCycle]?.cycleAmountCents === 0) {
+    throw new SubscriptionError(
+      `${plan.name} is a contact-sales plan with no published ${cycle.toLowerCase()} price. Set one before assigning it.`,
+    );
   }
   return assignmentFromPlan(plan, cycle);
 }
 
-/**
- * Assign a plan to a company — creating the subscription if there is none.
- *
- * The agreed price is snapshotted onto the row here and never recalculated. An
- * administrator editing the plan's public price tomorrow changes what new
- * customers pay, and nothing else.
- */
-export async function assignPlan(actor: AdminActor, input: AssignPlanInput) {
+export async function assignPlan(actor: AdminActor, input: AssignPlanInput): Promise<Subscription> {
   const assignment = await resolvePlan(input.planCode, input.cycle);
 
   const status = input.status ?? "TRIALING";
@@ -183,18 +139,17 @@ export async function assignPlan(actor: AdminActor, input: AssignPlanInput) {
   }
 
   const now = new Date();
-  const existing = await db.subscription.findUnique({
-    where: { companyId: input.companyId },
-    select: SUBSCRIPTION_DETAIL_SELECT,
-  });
+  const existing = await getSubscriptionForCompany(input.companyId);
 
   const trialEndsAt =
-    status === "TRIALING" ? (input.trialEndsAt ?? existing?.trialEndsAt ?? addDays(now, 30)) : (input.trialEndsAt ?? null);
-
+    status === "TRIALING"
+      ? (input.trialEndsAt ?? existing?.trialEndsAt ?? addDays(now, 30))
+      : (input.trialEndsAt ?? null);
   const periodEnd =
-    input.currentPeriodEnd ?? (status === "ACTIVE" ? addMonths(now, CYCLE_MONTHS[assignment.billingCycle]) : null);
+    input.currentPeriodEnd ??
+    (status === "ACTIVE" ? addMonths(now, CYCLE_MONTHS[assignment.billingCycle]) : null);
 
-  const data = {
+  const data: Partial<Subscription> = {
     plan: assignment.planCode,
     planId: assignment.planId,
     planVersionId: assignment.planVersionId,
@@ -208,43 +163,41 @@ export async function assignPlan(actor: AdminActor, input: AssignPlanInput) {
     seatOverrideReason: input.seatOverride != null ? (input.seatOverrideReason ?? null) : null,
     seatOverrideAt: input.seatOverride != null ? now : null,
     seatOverrideById: input.seatOverride != null ? actor.id : null,
-    trialStartsAt: status === "TRIALING" ? (input.trialStartsAt ?? existing?.trialStartsAt ?? now) : (input.trialStartsAt ?? null),
+    trialStartsAt:
+      status === "TRIALING" ? (input.trialStartsAt ?? existing?.trialStartsAt ?? now) : (input.trialStartsAt ?? null),
     trialEndsAt,
     startedAt: existing?.startedAt ?? (status === "ACTIVE" ? now : null),
     currentPeriodStart: existing?.currentPeriodStart ?? (status === "ACTIVE" ? now : null),
     currentPeriodEnd: periodEnd,
-    // Assigning a plan clears the terminal states: this is a live subscription again.
     suspendedAt: status === "SUSPENDED" ? (existing?.suspendedAt ?? now) : null,
-    suspendReason: status === "SUSPENDED" ? existing?.suspendReason ?? null : null,
+    suspendReason: status === "SUSPENDED" ? (existing?.suspendReason ?? null) : null,
     pastDueSince: status === "PAST_DUE" ? (existing?.pastDueSince ?? now) : null,
     cancelledAt: status === "CANCELLED" ? (existing?.cancelledAt ?? now) : null,
-    cancelAt: status === "CANCELLED" ? existing?.cancelAt ?? null : null,
-    cancelReason: status === "CANCELLED" ? existing?.cancelReason ?? null : null,
+    cancelAt: status === "CANCELLED" ? (existing?.cancelAt ?? null) : null,
+    cancelReason: status === "CANCELLED" ? (existing?.cancelReason ?? null) : null,
   };
 
-  const subscription = await db.$transaction(async (tx) => {
-    const row = await tx.subscription.upsert({
-      where: { companyId: input.companyId },
-      create: { companyId: input.companyId, ...data },
-      update: data,
-      select: SUBSCRIPTION_DETAIL_SELECT,
-    });
+  let row: Subscription;
+  if (existing) {
+    await subsRepo.update(existing.id, data);
+    row = { ...existing, ...data } as Subscription;
+  } else {
+    const id = newId();
+    await subsRepo.set(id, { id, companyId: input.companyId, ...data } as Partial<Subscription>);
+    row = { id, companyId: input.companyId, ...data } as Subscription;
+  }
 
-    await applyAccess(tx, input.companyId, row.status, row.trialEndsAt);
-
-    await recordEvent(tx, {
-      subscriptionId: row.id,
-      type: existing ? "PLAN_CHANGED" : "CREATED",
-      summary: existing
-        ? `Plan changed from ${existing.plan} to ${assignment.planCode} (${assignment.billingCycle.toLowerCase()})`
-        : `Subscription created on ${assignment.planCode} (${assignment.billingCycle.toLowerCase()})`,
-      reason: input.reason ?? null,
-      before: existing ?? undefined,
-      after: row,
-      actor,
-    });
-
-    return row;
+  await applyAccess(input.companyId, row.status, row.trialEndsAt);
+  await recordEvent({
+    subscriptionId: row.id,
+    type: existing ? "PLAN_CHANGED" : "CREATED",
+    summary: existing
+      ? `Plan changed from ${existing.plan} to ${assignment.planCode} (${assignment.billingCycle.toLowerCase()})`
+      : `Subscription created on ${assignment.planCode} (${assignment.billingCycle.toLowerCase()})`,
+    reason: input.reason ?? null,
+    before: existing ?? undefined,
+    after: row,
+    actor,
   });
 
   await recordPlatformAudit({
@@ -252,36 +205,36 @@ export async function assignPlan(actor: AdminActor, input: AssignPlanInput) {
     actorEmail: actor.email,
     action: existing ? AUDIT_ACTIONS.SUBSCRIPTION_PLAN_CHANGED : AUDIT_ACTIONS.SUBSCRIPTION_CREATED,
     entityType: "Subscription",
-    entityId: subscription.id,
+    entityId: row.id,
     summary: existing
       ? `${assignment.planCode} assigned (was ${existing.plan})`
       : `Subscription created on ${assignment.planCode}`,
     reason: input.reason ?? null,
     before: existing ?? undefined,
-    after: subscription,
+    after: row,
   });
 
-  return subscription;
+  return row;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Status transitions
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Status transitions ─────────────────────────────────────────────────────
 
 export interface StatusChangeInput {
   subscriptionId: string;
   to: string;
   reason?: string | null;
-  /** For CANCELLED: cancel at period end rather than immediately. */
   atPeriodEnd?: boolean;
 }
 
-export async function changeStatus(actor: AdminActor, input: StatusChangeInput) {
-  const existing = await db.subscription.findUnique({
-    where: { id: input.subscriptionId },
-    select: { ...SUBSCRIPTION_DETAIL_SELECT, company: { select: { id: true, name: true } } },
-  });
+async function loadWithCompany(subscriptionId: string) {
+  const existing = await subsRepo.get(subscriptionId);
   if (!existing) throw new SubscriptionError("That subscription no longer exists.");
+  const company = await getCompany(existing.companyId);
+  return { existing, companyName: company?.name ?? "—" };
+}
+
+export async function changeStatus(actor: AdminActor, input: StatusChangeInput): Promise<Subscription> {
+  const { existing, companyName } = await loadWithCompany(input.subscriptionId);
 
   if (!isSubscriptionStatus(input.to)) throw new SubscriptionError("That is not a subscription status.");
   if (existing.status === input.to) {
@@ -303,43 +256,34 @@ export async function changeStatus(actor: AdminActor, input: StatusChangeInput) 
   const now = new Date();
   const to = input.to as SubscriptionStatus;
 
-  // A scheduled cancellation is not a cancellation: the status stays put and
-  // only `cancelAt` is set, so the client keeps working until the date arrives.
   if (to === "CANCELLED" && input.atPeriodEnd) {
     const effective = existing.currentPeriodEnd ?? existing.trialEndsAt ?? addDays(now, 30);
-    const updated = await db.$transaction(async (tx) => {
-      const row = await tx.subscription.update({
-        where: { id: existing.id },
-        data: { cancelAt: effective, cancelReason: reason },
-        select: SUBSCRIPTION_DETAIL_SELECT,
-      });
-      await recordEvent(tx, {
-        subscriptionId: row.id,
-        type: "CANCEL_SCHEDULED",
-        summary: `Cancellation scheduled for ${effective.toISOString().slice(0, 10)}`,
-        reason,
-        before: { cancelAt: existing.cancelAt },
-        after: { cancelAt: row.cancelAt },
-        actor,
-      });
-      return row;
+    await subsRepo.update(existing.id, { cancelAt: effective, cancelReason: reason });
+    const row = { ...existing, cancelAt: effective, cancelReason: reason };
+    await recordEvent({
+      subscriptionId: row.id,
+      type: "CANCEL_SCHEDULED",
+      summary: `Cancellation scheduled for ${effective.toISOString().slice(0, 10)}`,
+      reason,
+      before: { cancelAt: existing.cancelAt },
+      after: { cancelAt: row.cancelAt },
+      actor,
     });
-
     await recordPlatformAudit({
       actorUserId: actor.id,
       actorEmail: actor.email,
       action: AUDIT_ACTIONS.SUBSCRIPTION_CANCELLED,
       entityType: "Subscription",
       entityId: existing.id,
-      summary: `${existing.company.name}: cancellation scheduled for ${effective.toISOString().slice(0, 10)}`,
+      summary: `${companyName}: cancellation scheduled for ${effective.toISOString().slice(0, 10)}`,
       reason,
       before: { cancelAt: existing.cancelAt, status: existing.status },
-      after: { cancelAt: updated.cancelAt, status: updated.status },
+      after: { cancelAt: row.cancelAt, status: row.status },
     });
-    return updated;
+    return row;
   }
 
-  const data: Record<string, unknown> = { status: to };
+  const data: Partial<Subscription> = { status: to };
   switch (to) {
     case "ACTIVE":
       data.startedAt = existing.startedAt ?? now;
@@ -348,7 +292,6 @@ export async function changeStatus(actor: AdminActor, input: StatusChangeInput) 
         existing.currentPeriodEnd && existing.currentPeriodEnd > now
           ? existing.currentPeriodEnd
           : addMonths(now, CYCLE_MONTHS[(existing.billingCycle as BillingCycle) ?? "MONTHLY"] ?? 1);
-      // Restoring clears every reason the account was withheld.
       data.suspendedAt = null;
       data.suspendReason = null;
       data.pastDueSince = null;
@@ -368,28 +311,21 @@ export async function changeStatus(actor: AdminActor, input: StatusChangeInput) 
       data.cancelReason = reason;
       data.cancelAt = null;
       break;
-    case "TRIALING":
     default:
       break;
   }
 
-  const updated = await db.$transaction(async (tx) => {
-    const row = await tx.subscription.update({
-      where: { id: existing.id },
-      data,
-      select: SUBSCRIPTION_DETAIL_SELECT,
-    });
-    await applyAccess(tx, row.companyId, row.status, row.trialEndsAt);
-    await recordEvent(tx, {
-      subscriptionId: row.id,
-      type: "STATUS_CHANGED",
-      summary: `Status ${existing.status} → ${row.status}`,
-      reason,
-      before: { status: existing.status },
-      after: { status: row.status },
-      actor,
-    });
-    return row;
+  await subsRepo.update(existing.id, data);
+  const row = { ...existing, ...data } as Subscription;
+  await applyAccess(row.companyId, row.status, row.trialEndsAt);
+  await recordEvent({
+    subscriptionId: row.id,
+    type: "STATUS_CHANGED",
+    summary: `Status ${existing.status} → ${row.status}`,
+    reason,
+    before: { status: existing.status },
+    after: { status: row.status },
+    actor,
   });
 
   await recordPlatformAudit({
@@ -399,28 +335,22 @@ export async function changeStatus(actor: AdminActor, input: StatusChangeInput) 
       to === "CANCELLED" ? AUDIT_ACTIONS.SUBSCRIPTION_CANCELLED : AUDIT_ACTIONS.SUBSCRIPTION_STATUS_CHANGED,
     entityType: "Subscription",
     entityId: existing.id,
-    summary: `${existing.company.name}: ${existing.status} → ${to}`,
+    summary: `${companyName}: ${existing.status} → ${to}`,
     reason,
     before: { status: existing.status },
     after: { status: to },
   });
 
-  return updated;
+  return row;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Trials, seats, periods, notes
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Trials, seats, periods, notes ──────────────────────────────────────────
 
 export async function extendTrial(
   actor: AdminActor,
   input: { subscriptionId: string; days?: number; until?: Date | null; reason?: string | null },
-) {
-  const existing = await db.subscription.findUnique({
-    where: { id: input.subscriptionId },
-    select: { ...SUBSCRIPTION_DETAIL_SELECT, company: { select: { name: true } } },
-  });
-  if (!existing) throw new SubscriptionError("That subscription no longer exists.");
+): Promise<Subscription> {
+  const { existing, companyName } = await loadWithCompany(input.subscriptionId);
 
   const base = existing.trialEndsAt && existing.trialEndsAt > new Date() ? existing.trialEndsAt : new Date();
   const until = input.until ?? (input.days ? addDays(base, input.days) : null);
@@ -428,29 +358,20 @@ export async function extendTrial(
   if (Number.isNaN(until.getTime())) throw new SubscriptionError("That is not a valid date.");
   if (until <= new Date()) throw new SubscriptionError("A trial cannot be extended to a date in the past.");
 
-  const updated = await db.$transaction(async (tx) => {
-    const row = await tx.subscription.update({
-      where: { id: existing.id },
-      data: {
-        trialEndsAt: until,
-        // Extending a trial on a lapsed account puts it back in the trial, which
-        // is what the operator means by the button.
-        status: existing.status === "TRIALING" ? existing.status : existing.status,
-        trialStartsAt: existing.trialStartsAt ?? existing.createdAt,
-      },
-      select: SUBSCRIPTION_DETAIL_SELECT,
-    });
-    await applyAccess(tx, row.companyId, row.status, row.trialEndsAt);
-    await recordEvent(tx, {
-      subscriptionId: row.id,
-      type: "TRIAL_EXTENDED",
-      summary: `Trial extended to ${until.toISOString().slice(0, 10)}`,
-      reason: input.reason ?? null,
-      before: { trialEndsAt: existing.trialEndsAt },
-      after: { trialEndsAt: row.trialEndsAt },
-      actor,
-    });
-    return row;
+  await subsRepo.update(existing.id, {
+    trialEndsAt: until,
+    trialStartsAt: existing.trialStartsAt ?? existing.createdAt,
+  });
+  const row = { ...existing, trialEndsAt: until };
+  await applyAccess(row.companyId, row.status, row.trialEndsAt);
+  await recordEvent({
+    subscriptionId: row.id,
+    type: "TRIAL_EXTENDED",
+    summary: `Trial extended to ${until.toISOString().slice(0, 10)}`,
+    reason: input.reason ?? null,
+    before: { trialEndsAt: existing.trialEndsAt },
+    after: { trialEndsAt: row.trialEndsAt },
+    actor,
   });
 
   await recordPlatformAudit({
@@ -459,66 +380,55 @@ export async function extendTrial(
     action: AUDIT_ACTIONS.SUBSCRIPTION_TRIAL_EXTENDED,
     entityType: "Subscription",
     entityId: existing.id,
-    summary: `${existing.company.name}: trial extended to ${until.toISOString().slice(0, 10)}`,
+    summary: `${companyName}: trial extended to ${until.toISOString().slice(0, 10)}`,
     reason: input.reason ?? null,
     before: { trialEndsAt: existing.trialEndsAt },
     after: { trialEndsAt: until },
   });
 
-  return updated;
+  return row;
 }
 
 export async function overrideSeats(
   actor: AdminActor,
   input: { subscriptionId: string; seats: number; reason: string },
-) {
-  const existing = await db.subscription.findUnique({
-    where: { id: input.subscriptionId },
-    select: { ...SUBSCRIPTION_DETAIL_SELECT, company: { select: { id: true, name: true } } },
-  });
-  if (!existing) throw new SubscriptionError("That subscription no longer exists.");
+): Promise<Subscription> {
+  const { existing, companyName } = await loadWithCompany(input.subscriptionId);
 
   if (!Number.isInteger(input.seats) || input.seats < 1) {
     throw new SubscriptionError("Seat allowance must be a whole number of at least 1.");
   }
   const reason = input.reason?.trim();
-  if (!reason) throw new SubscriptionError("A seat override needs a reason. It is a commercial exception, and it is logged.");
+  if (!reason) {
+    throw new SubscriptionError("A seat override needs a reason. It is a commercial exception, and it is logged.");
+  }
 
   const used = await seatsUsed(existing.companyId);
   if (input.seats < used) {
-    // Never silently evict anyone: refusing is the only safe answer, because the
-    // alternative is choosing which of a client's staff loses their login.
     throw new SubscriptionError(
       `${used} people currently have access. Reduce the team to ${input.seats} first — lowering the allowance never removes anyone automatically.`,
     );
   }
 
-  const planSeats = existing.planId
-    ? (await db.plan.findUnique({ where: { id: existing.planId }, select: { seats: true } }))?.seats ?? null
-    : null;
+  const planSeats = existing.planId ? (await plansRepo.get(existing.planId))?.seats ?? null : null;
+  const atPlanDefault = planSeats !== null && input.seats === planSeats;
 
-  const updated = await db.$transaction(async (tx) => {
-    const row = await tx.subscription.update({
-      where: { id: existing.id },
-      data: {
-        seats: input.seats,
-        seatsOverridden: planSeats === null ? true : input.seats !== planSeats,
-        seatOverrideReason: planSeats !== null && input.seats === planSeats ? null : reason,
-        seatOverrideAt: planSeats !== null && input.seats === planSeats ? null : new Date(),
-        seatOverrideById: planSeats !== null && input.seats === planSeats ? null : actor.id,
-      },
-      select: SUBSCRIPTION_DETAIL_SELECT,
-    });
-    await recordEvent(tx, {
-      subscriptionId: row.id,
-      type: "SEATS_OVERRIDDEN",
-      summary: `Seat allowance ${existing.seats} → ${row.seats}`,
-      reason,
-      before: { seats: existing.seats, seatsOverridden: existing.seatsOverridden },
-      after: { seats: row.seats, seatsOverridden: row.seatsOverridden },
-      actor,
-    });
-    return row;
+  await subsRepo.update(existing.id, {
+    seats: input.seats,
+    seatsOverridden: planSeats === null ? true : input.seats !== planSeats,
+    seatOverrideReason: atPlanDefault ? null : reason,
+    seatOverrideAt: atPlanDefault ? null : new Date(),
+    seatOverrideById: atPlanDefault ? null : actor.id,
+  });
+  const row = { ...existing, seats: input.seats, seatsOverridden: !atPlanDefault };
+  await recordEvent({
+    subscriptionId: row.id,
+    type: "SEATS_OVERRIDDEN",
+    summary: `Seat allowance ${existing.seats} → ${row.seats}`,
+    reason,
+    before: { seats: existing.seats, seatsOverridden: existing.seatsOverridden },
+    after: { seats: row.seats, seatsOverridden: row.seatsOverridden },
+    actor,
   });
 
   await recordPlatformAudit({
@@ -527,45 +437,35 @@ export async function overrideSeats(
     action: AUDIT_ACTIONS.SUBSCRIPTION_SEATS_OVERRIDDEN,
     entityType: "Subscription",
     entityId: existing.id,
-    summary: `${existing.company.name}: seats ${existing.seats} → ${input.seats}`,
+    summary: `${companyName}: seats ${existing.seats} → ${input.seats}`,
     reason,
     before: { seats: existing.seats },
     after: { seats: input.seats },
   });
 
-  return updated;
+  return row;
 }
 
 export async function setPeriodEnd(
   actor: AdminActor,
   input: { subscriptionId: string; currentPeriodEnd: Date; reason?: string | null },
-) {
-  const existing = await db.subscription.findUnique({
-    where: { id: input.subscriptionId },
-    select: { ...SUBSCRIPTION_DETAIL_SELECT, company: { select: { name: true } } },
-  });
-  if (!existing) throw new SubscriptionError("That subscription no longer exists.");
+): Promise<Subscription> {
+  const { existing, companyName } = await loadWithCompany(input.subscriptionId);
   if (Number.isNaN(input.currentPeriodEnd.getTime())) throw new SubscriptionError("That is not a valid date.");
   if (existing.currentPeriodStart && input.currentPeriodEnd <= existing.currentPeriodStart) {
     throw new SubscriptionError("The period end must fall after the period start.");
   }
 
-  const updated = await db.$transaction(async (tx) => {
-    const row = await tx.subscription.update({
-      where: { id: existing.id },
-      data: { currentPeriodEnd: input.currentPeriodEnd },
-      select: SUBSCRIPTION_DETAIL_SELECT,
-    });
-    await recordEvent(tx, {
-      subscriptionId: row.id,
-      type: "PERIOD_CHANGED",
-      summary: `Period end set to ${input.currentPeriodEnd.toISOString().slice(0, 10)}`,
-      reason: input.reason ?? null,
-      before: { currentPeriodEnd: existing.currentPeriodEnd },
-      after: { currentPeriodEnd: row.currentPeriodEnd },
-      actor,
-    });
-    return row;
+  await subsRepo.update(existing.id, { currentPeriodEnd: input.currentPeriodEnd });
+  const row = { ...existing, currentPeriodEnd: input.currentPeriodEnd };
+  await recordEvent({
+    subscriptionId: row.id,
+    type: "PERIOD_CHANGED",
+    summary: `Period end set to ${input.currentPeriodEnd.toISOString().slice(0, 10)}`,
+    reason: input.reason ?? null,
+    before: { currentPeriodEnd: existing.currentPeriodEnd },
+    after: { currentPeriodEnd: row.currentPeriodEnd },
+    actor,
   });
 
   await recordPlatformAudit({
@@ -574,13 +474,13 @@ export async function setPeriodEnd(
     action: AUDIT_ACTIONS.SUBSCRIPTION_PERIOD_CHANGED,
     entityType: "Subscription",
     entityId: existing.id,
-    summary: `${existing.company.name}: period end ${input.currentPeriodEnd.toISOString().slice(0, 10)}`,
+    summary: `${companyName}: period end ${input.currentPeriodEnd.toISOString().slice(0, 10)}`,
     reason: input.reason ?? null,
     before: { currentPeriodEnd: existing.currentPeriodEnd },
     after: { currentPeriodEnd: input.currentPeriodEnd },
   });
 
-  return updated;
+  return row;
 }
 
 export async function addNote(actor: AdminActor, input: { subscriptionId: string; body: string }) {
@@ -588,13 +488,11 @@ export async function addNote(actor: AdminActor, input: { subscriptionId: string
   if (!body) throw new SubscriptionError("Write something first.");
   if (body.length > 4000) throw new SubscriptionError("That note is too long — keep it under 4000 characters.");
 
-  const note = await db.subscriptionNote.create({
-    data: {
-      subscriptionId: input.subscriptionId,
-      body,
-      authorUserId: actor.id,
-      authorEmail: actor.email,
-    },
+  const note = await addSubscriptionNote({
+    subscriptionId: input.subscriptionId,
+    body,
+    authorUserId: actor.id,
+    authorEmail: actor.email,
   });
 
   await recordPlatformAudit({
@@ -604,9 +502,6 @@ export async function addNote(actor: AdminActor, input: { subscriptionId: string
     entityType: "Subscription",
     entityId: input.subscriptionId,
     summary: "Internal note added",
-    // The note body itself is not copied into the audit trail: it is already
-    // stored, and duplicating free text into a compliance log is how personal
-    // data ends up in two places with one retention policy.
   });
 
   return note;
@@ -615,13 +510,12 @@ export async function addNote(actor: AdminActor, input: { subscriptionId: string
 export async function setProviderRef(
   actor: AdminActor,
   input: { subscriptionId: string; providerRef: string | null },
-) {
+): Promise<Subscription> {
   const ref = input.providerRef?.trim() || null;
-  const updated = await db.subscription.update({
-    where: { id: input.subscriptionId },
-    data: { providerRef: ref },
-    select: SUBSCRIPTION_DETAIL_SELECT,
-  });
+  const existing = await subsRepo.get(input.subscriptionId);
+  if (!existing) throw new SubscriptionError("That subscription no longer exists.");
+  await subsRepo.update(input.subscriptionId, { providerRef: ref });
+
   await recordPlatformAudit({
     actorUserId: actor.id,
     actorEmail: actor.email,
@@ -631,5 +525,5 @@ export async function setProviderRef(
     summary: ref ? "Payment provider reference set" : "Payment provider reference cleared",
     after: { providerRef: ref },
   });
-  return updated;
+  return { ...existing, providerRef: ref };
 }

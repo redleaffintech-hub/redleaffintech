@@ -380,8 +380,19 @@ Documented as a deliberate deviation from strict single-transaction atomicity.
     `deleteClient` (**`recursiveDelete` on `companies/{id}`** — Firestore has no
     `onDelete: Cascade` — plus explicit sweeps of the top-level companyUsers /
     subscription / subscriptionCompanies).
-  - [ ] **6c‑7 — `admin/subscriptions.ts`** (plan changes, trial extensions,
-    seat overrides, cancellations, the lifecycle state machine).
+  - [x] **6c‑7 — subscription lifecycle.** `admin/subscriptions.ts` —
+    `seatsUsed`, `assignPlan` (create-or-update, price snapshotted, clears
+    terminal states), `changeStatus` (the `canTransition` state machine;
+    scheduled vs immediate cancel), `extendTrial`, `overrideSeats` (refuses to
+    drop below current headcount), `setPeriodEnd`, `addNote`, `setProviderRef`.
+    Each: write the subscription → `applyAccess` flips `Company.isReadOnly` →
+    typed `subscriptionEvents` doc + `platformAuditLogs` row. **Deviation:** the
+    three steps run in sequence, not one transaction.
+
+  **`src/server/**` is now entirely on Firestore** — the only remaining
+  `@/lib/db` imports are the old Prisma engine files (`ledger.ts`,
+  `invoices.ts`, … ) that have `-fs` twins and `reports/exports.ts`; all are
+  deleted at cutover.
   - [ ] **6d–6h — `src/app/**`**: sales, purchases, accounting/banking/tax,
     company/hr/payroll/inventory, reports/dashboard, admin pages, login + api
     routes + marketing. `reports/exports.ts` folds in here.
