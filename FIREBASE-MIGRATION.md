@@ -297,8 +297,19 @@ Documented as a deliberate deviation from strict single-transaction atomicity.
   `suggestMatches` + `scoreMatch`, `matchTransactionToDocuments` — records the
   payment in its own transaction then flags the bank line —, `detectTransfers` /
   `confirmTransfer`).
-- [ ] **Phase 5h — monthly bank reconciliation** (`banking/reconcile.ts`, 8
-  functions incl. the workspace builder) and `reports/exports.ts` (CSV).
+- [x] **Phase 5h — monthly bank reconciliation.** `banking/reconcile-fs.ts` —
+  `getOrStartReconciliation` (deterministic id `{acct}_{yyyy}-{mm}`, opening
+  carried from the prior COMPLETED month), `saveStatementBalances`, `matchSelected`
+  / `removeMatch` (the match write is one transaction; the stored balance
+  snapshot is refreshed by `persistSummary` *after* it commits — a Firestore
+  transaction can't re-read what it wrote), `buildWorkspace` (statement panel vs
+  posted bank-ledger panel, reversal pairs excluded via a parent-entry fetch),
+  `completeReconciliation` (freezes the month-end report JSON, optimistic
+  `version` check, marks statement txns RECONCILED), `reconciliationHistory`.
+  Behaviour matches the Prisma version. tsc + eslint clean.
+- [ ] **Phase 5i — `reports/exports.ts` (CSV).** Mechanical: swap
+  `./financials`→`-fs` etc. and ~6 direct `db.*` reads to repos. Folds into the
+  Phase 6 rewire.
 - [ ] **Phase 5c — banking & reconciliation, HR, payroll, recurring, projects,
   budgets, attachments, notifications.**
 - [ ] **Phase 6 — rewire call sites**: every `src/app/**/actions.ts`, page and

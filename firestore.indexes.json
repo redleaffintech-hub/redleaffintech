@@ -121,6 +121,14 @@
       ]
     },
     {
+      "collectionGroup": "bankReconciliations",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "bankAccountId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "recurring",
       "queryScope": "COLLECTION",
       "fields": [
