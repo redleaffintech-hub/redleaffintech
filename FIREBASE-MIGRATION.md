@@ -196,12 +196,19 @@ Documented as a deliberate deviation from strict single-transaction atomicity.
   `firestore.rules` (deny-all; server SDK bypasses), `firestore.indexes.json`,
   `apphosting.yaml`, `src/lib/firebase-admin.ts`, `src/server/db/firestore.ts`,
   this document. Deps: `firebase-admin`, `firebase`.
-- [ ] **Phase 1 — data-access layer.** `src/server/db/<collection>.ts` repository
-  per collection: typed CRUD + the queries §2 lists, converting `Timestamp`↔`Date`
-  at the boundary. Establish the pattern on `companies`, `accounts`, `users`.
-- [ ] **Phase 2 — posting engine.** `src/server/accounting/ledger.ts` +
-  `journals.ts` on `runTransaction`, including `accountPeriodBalances` upkeep.
-  This is the correctness core — port with its tests first.
+- [x] **Phase 1 — data-access layer.** `src/server/db/`: `types.ts`,
+  `companies.ts` (+ `bumpSequenceTx`), `accounts.ts` (+ code guard doc),
+  `users.ts` (+ email guard), `company-users.ts`, `audit-logs.ts`. Call sites
+  still on Prisma; rewired per module in later phases.
+- [x] **Phase 2 — posting engine.** `src/server/accounting/ledger-fs.ts`
+  (`postJournal`, `reverseJournal`, `getSystemAccount`, `resolveOpenPeriod`,
+  `naturalBalance`, `checkLedgerIntegrity`) and `journals-fs.ts`
+  (`postManualJournal`, `closePeriod`, `reopenPeriod`, `closeFiscalYear`,
+  `postOpeningBalances`) on `runTransaction`. New repos: `journal-entries.ts`,
+  `fiscal-periods.ts`, `account-balances.ts` (the `accountPeriodBalances`
+  roll-up, incremented per line inside every posting tx). Composite indexes
+  declared. `closeChecklist` deferred to Phase 5. Year-end close over ~240
+  income-statement accounts still needs the BulkWriter fallback (§6).
 - [ ] **Phase 3 — documents.** invoices, bills, expenses, estimates, credit
   notes, payments + their server actions.
 - [ ] **Phase 4 — banking & reconciliation, tax engine, HR, payroll.**

@@ -143,3 +143,77 @@ export interface AuditLog {
   ipAddress: string | null;
   createdAt: Date;
 }
+
+// ── Phase 2: general ledger ──────────────────────────────────────────────────
+
+export interface FiscalPeriod {
+  id: string;
+  companyId: string;
+  fiscalYear: number;
+  periodNumber: number;
+  name: string;
+  startDate: Date;
+  endDate: Date;
+  status: string; // OPEN | CLOSED | LOCKED
+  closedAt: Date | null;
+  closedById: string | null;
+  reopenedAt: Date | null;
+  notes: string | null;
+}
+
+export interface JournalLine {
+  id: string;
+  journalEntryId: string;
+  companyId: string;
+  date: Date;
+  lineNo: number;
+  accountId: string;
+  accountType: string;
+  description: string | null;
+  debitCents: number;
+  creditCents: number;
+  customerId: string | null;
+  vendorId: string | null;
+  projectId: string | null;
+  taxCodeId: string | null;
+}
+
+export interface JournalEntry {
+  id: string;
+  companyId: string;
+  entryNo: string;
+  date: Date;
+  memo: string | null;
+  sourceType: string;
+  sourceId: string | null;
+  sourceNumber: string | null;
+  status: string; // DRAFT | POSTED | REVERSED
+  isAdjusting: boolean;
+  reversalOfId: string | null;
+  fiscalPeriodId: string | null;
+  totalDebitCents: number;
+  totalCreditCents: number;
+  createdById: string | null;
+  postedAt: Date | null;
+  createdAt: Date;
+}
+
+/** A posted entry together with its lines, as callers that used `include` expect. */
+export interface JournalEntryWithLines extends JournalEntry {
+  lines: JournalLine[];
+}
+
+/**
+ * `companies/{companyId}/accountPeriodBalances/{accountId}_{YYYYMM}` — the
+ * reporting roll-up that replaces `groupBy(accountId) + _sum(...)` over
+ * journalLines. Incremented inside every posting transaction (§4).
+ */
+export interface AccountPeriodBalance {
+  id: string; // `${accountId}_${YYYYMM}`
+  accountId: string;
+  accountType: string;
+  year: number;
+  month: number; // 1-12
+  debitCents: number;
+  creditCents: number;
+}
