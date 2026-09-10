@@ -1,4 +1,7 @@
-import { db } from "@/lib/db";
+import { getCompanyOrThrow } from "@/server/db/companies";
+import { listEntries } from "@/server/db/journal-entries";
+import { listAccounts } from "@/server/db/accounts";
+import { listMembershipsForCompany } from "@/server/db/company-users";
 import { requireVisible } from "@/server/auth/context";
 import { CAPABILITIES, can } from "@/lib/permissions";
 import { formatDate } from "@/lib/dates";
@@ -13,12 +16,15 @@ export default async function CompanyPage() {
   const { company, role } = await requireVisible(CAPABILITIES.COMPANY_SETTINGS);
   const editable = can(role, CAPABILITIES.COMPANY_SETTINGS);
 
-  const record = await db.company.findUniqueOrThrow({ where: { id: company.id } });
-  const [postedEntries, accounts, users] = await Promise.all([
-    db.journalEntry.count({ where: { companyId: company.id } }),
-    db.account.count({ where: { companyId: company.id, isActive: true } }),
-    db.companyUser.count({ where: { companyId: company.id, status: "ACTIVE" } }),
+  const [record, entries, allAccounts, memberships] = await Promise.all([
+    getCompanyOrThrow(company.id),
+    listEntries(company.id),
+    listAccounts(company.id),
+    listMembershipsForCompany(company.id),
   ]);
+  const postedEntries = entries.length;
+  const accounts = allAccounts.filter((a) => a.isActive).length;
+  const users = memberships.filter((m) => m.status === "ACTIVE").length;
 
   const provinceName = PROVINCES.find((p) => p.code === record.province)?.name ?? record.province;
 

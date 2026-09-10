@@ -1,9 +1,9 @@
 import Link from "next/link";
-import { db } from "@/lib/db";
+import { listAuditLogs } from "@/server/db/audit-logs";
+import { listUsersByIds } from "@/server/db/users";
 import { requireVisible } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
 import { formatDateTime, relativeTime } from "@/lib/dates";
-import { contains } from "@/lib/search";
 import { Badge, Card, EmptyState, PageHeader, Table, Td, Th, Tr, type Tone } from "@/components/ui";
 import { FilterBar } from "@/components/filter-bar";
 
@@ -45,28 +45,37 @@ export default async function AuditLogPage({ searchParams }: PageProps<"/company
   const query = typeof params.q === "string" ? params.q : "";
   const page = Math.max(1, Number(typeof params.page === "string" ? params.page : 1) || 1);
 
-  const where = {
-    companyId: company.id,
-    ...(action ? { action } : {}),
-    ...(query
-      ? { OR: [{ summary: contains(query) }, { entityType: contains(query) }] }
-      : {}),
-  };
+  const q = query.toLowerCase();
+  const allLogs = await listAuditLogs(company.id, { limit: 5000 });
 
-  const [entries, total, byAction] = await Promise.all([
-    db.auditLog.findMany({
-      where,
-      include: { user: { select: { name: true, email: true } } },
-      orderBy: { createdAt: "desc" },
-      skip: (page - 1) * PAGE_SIZE,
-      take: PAGE_SIZE,
-    }),
-    db.auditLog.count({ where }),
-    db.auditLog.groupBy({ by: ["action"], where: { companyId: company.id }, _count: { _all: true } }),
-  ]);
+  const actionCount = new Map<string, number>();
+  for (const l of allLogs) actionCount.set(l.action, (actionCount.get(l.action) ?? 0) + 1);
+  const countOf = (name: string) => actionCount.get(name) ?? 0;
 
-  const countOf = (name: string) => byAction.find((row) => row.action === name)?._count._all ?? 0;
+  const matched = allLogs
+    .filter((l) => !action || l.action === action)
+    .filter(
+      (l) =>
+        !q ||
+        (l.summary ?? "").toLowerCase().includes(q) ||
+        (l.entityType ?? "").toLowerCase().includes(q),
+    );
+  const total = matched.length;
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const pageRows = matched.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+  const users = await listUsersByIds(
+    pageRows.map((l) => l.userId).filter((x): x is string => Boolean(x)),
+  );
+  const userById = new Map(users.map((u) => [u.id, u]));
+  const entries = pageRows.map((l) => ({
+    ...l,
+    user: l.userId
+      ? userById.get(l.userId)
+        ? { name: userById.get(l.userId)!.name, email: userById.get(l.userId)!.email }
+        : null
+      : null,
+  }));
 
   const queryString = (nextPage: number) => {
     const next = new URLSearchParams();

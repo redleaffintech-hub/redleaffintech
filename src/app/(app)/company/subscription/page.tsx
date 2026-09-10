@@ -1,4 +1,5 @@
-import { db } from "@/lib/db";
+import { getSubscriptionForCompany } from "@/server/db/platform";
+import { listMembershipsForCompany } from "@/server/db/company-users";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
 import { daysBetween, formatDate, today } from "@/lib/dates";
@@ -17,11 +18,12 @@ export default async function SubscriptionPage() {
 
   // The same published catalogue the marketing site quotes from, so a customer
   // is never offered a plan or a price the public page does not show.
-  const [subscription, seatsUsed, plans] = await Promise.all([
-    db.subscription.findUnique({ where: { companyId: company.id } }),
-    db.companyUser.count({ where: { companyId: company.id, status: { in: ["ACTIVE", "INVITED"] } } }),
+  const [subscription, memberships, plans] = await Promise.all([
+    getSubscriptionForCompany(company.id),
+    listMembershipsForCompany(company.id),
     sellablePlans(),
   ]);
+  const seatsUsed = memberships.filter((m) => ["ACTIVE", "INVITED"].includes(m.status)).length;
 
   const current = plans.find((plan) => plan.code === subscription?.plan);
   const trialDaysLeft = subscription?.trialEndsAt ? daysBetween(today(), subscription.trialEndsAt) : null;

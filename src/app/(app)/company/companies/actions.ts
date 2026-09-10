@@ -2,18 +2,31 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { db } from "@/lib/db";
 import { normalizeCurrency, DEFAULT_CURRENCY } from "@/lib/currency";
 import { PROVINCES } from "@/lib/enums";
 import { CAPABILITIES } from "@/lib/permissions";
 import { recordAudit, requireCapability } from "@/server/auth/context";
 import { verifyPassword } from "@/server/auth/password";
 import { provisionAdditionalCompany } from "@/server/setup/provision";
+import { deleteCompany, updateCompany } from "@/server/db/companies";
+import { upsertMembership } from "@/server/db/company-users";
+import { getUser } from "@/server/db/users";
+import { invoices as invoicesRepo } from "@/server/db/invoices";
+import { estimates as estimatesRepo } from "@/server/db/estimates";
+import { creditNotes as creditNotesRepo } from "@/server/db/credit-notes";
+import { bills as billsRepo } from "@/server/db/bills";
+import { expenses as expensesRepo } from "@/server/db/expenses";
+import { listEntries } from "@/server/db/journal-entries";
+import { listPayments } from "@/server/db/payments";
+import { listCustomers } from "@/server/db/customers";
+import { listVendors } from "@/server/db/vendors";
+import { listItems } from "@/server/db/items";
+import { bankAccounts as bankAccountsRepo } from "@/server/db/banking";
+import { attachments as attachmentsRepo } from "@/server/db/supporting";
 import {
   attachCompanyToSubscription,
   companyFamily,
   companyLimit,
-  lockSubscriptionForCompanyChange,
   subscriptionForCompany,
 } from "@/server/companies/families";
 
@@ -81,27 +94,27 @@ export async function createCompanyAction(formData: FormData) {
   if (!subscription) return { error: "No subscription is associated with this account." };
 
   try {
-    const created = await db.$transaction(async (tx) => {
-      await lockSubscriptionForCompanyChange(tx, subscription.id);
-      const limit = await companyLimit(subscription.id, tx);
-      if (limit.used >= limit.limit) {
-        throw new Error(
-          `You are using ${limit.used} of ${limit.limit} companies on the ${limit.planName ?? "current"} plan. ` +
-            `Archive one you no longer need, or upgrade the plan to add another.`,
-        );
-      }
+    const limit = await companyLimit(subscription.id);
+    if (limit.used >= limit.limit) {
+      throw new Error(
+        `You are using ${limit.used} of ${limit.limit} companies on the ${limit.planName ?? "current"} plan. ` +
+          `Archive one you no longer need, or upgrade the plan to add another.`,
+      );
+    }
 
-      const newCompany = await provisionAdditionalCompany(tx, {
-        ...input,
-        province: input.province.toUpperCase(),
-        baseCurrency,
-        country: "CA",
-      });
-      await attachCompanyToSubscription(tx, subscription.id, newCompany.id, user.id);
-      await tx.companyUser.create({
-        data: { companyId: newCompany.id, userId: user.id, role: "PRIMARY", status: "ACTIVE", acceptedAt: new Date() },
-      });
-      return newCompany;
+    const created = await provisionAdditionalCompany(undefined, {
+      ...input,
+      province: input.province.toUpperCase(),
+      baseCurrency,
+      country: "CA",
+    });
+    await attachCompanyToSubscription(subscription.id, created.id, user.id);
+    await upsertMembership({
+      companyId: created.id,
+      userId: user.id,
+      role: "PRIMARY",
+      status: "ACTIVE",
+      acceptedAt: new Date(),
     });
 
     await recordAudit({
@@ -132,7 +145,8 @@ const removalSchema = z.object({
 });
 
 async function verifyRecentAuth(userId: string, password: string): Promise<string | null> {
-  const user = await db.user.findUniqueOrThrow({ where: { id: userId }, select: { passwordHash: true } });
+  const user = await getUser(userId);
+  if (!user) return "That password is incorrect.";
   const ok = await verifyPassword(password, user.passwordHash);
   return ok ? null : "That password is incorrect.";
 }
@@ -156,9 +170,10 @@ export async function archiveCompanyAction(formData: FormData) {
     const authError = await verifyRecentAuth(user.id, input.password);
     if (authError) return { error: authError };
 
-    await db.company.update({
-      where: { id: input.companyId },
-      data: { archivedAt: new Date(), archivedById: user.id, archiveReason: input.reason },
+    await updateCompany(input.companyId, {
+      archivedAt: new Date(),
+      archivedById: user.id,
+      archiveReason: input.reason,
     });
 
     await recordAudit({
@@ -195,19 +210,17 @@ export async function restoreCompanyAction(formData: FormData) {
       return { error: "The typed name does not match. Type the company name exactly to confirm." };
     }
 
-    await db.$transaction(async (tx) => {
-      await lockSubscriptionForCompanyChange(tx, subscription.id);
-      const limit = await companyLimit(subscription.id, tx);
-      if (limit.used >= limit.limit) {
-        throw new Error(
-          `Restoring "${target.name}" would use ${limit.used + 1} of ${limit.limit} companies on the ` +
-            `${limit.planName ?? "current"} plan. Archive another company first, or upgrade the plan.`,
-        );
-      }
-      await tx.company.update({
-        where: { id: input.companyId },
-        data: { archivedAt: null, archivedById: null, archiveReason: null },
-      });
+    const limit = await companyLimit(subscription.id);
+    if (limit.used >= limit.limit) {
+      throw new Error(
+        `Restoring "${target.name}" would use ${limit.used + 1} of ${limit.limit} companies on the ` +
+          `${limit.planName ?? "current"} plan. Archive another company first, or upgrade the plan.`,
+      );
+    }
+    await updateCompany(input.companyId, {
+      archivedAt: null,
+      archivedById: null,
+      archiveReason: null,
     });
 
     await recordAudit({
@@ -244,43 +257,40 @@ export async function deleteCompanyAction(formData: FormData) {
     const authError = await verifyRecentAuth(user.id, input.password);
     if (authError) return { error: authError };
 
-    await db.$transaction(async (tx) => {
-      // Re-verified inside the transaction, immediately before deleting, so
-      // nothing posted between the page load and this submission can slip
-      // through. Every count that would make this company "used" business
-      // history rather than an empty shell.
-      const [
-        journalEntries, invoices, estimates, creditNotes, bills, expenses,
-        payments, customers, vendors, bankAccounts, items, attachments,
-      ] = await Promise.all([
-        tx.journalEntry.count({ where: { companyId: input.companyId } }),
-        tx.invoice.count({ where: { companyId: input.companyId } }),
-        tx.estimate.count({ where: { companyId: input.companyId } }),
-        tx.creditNote.count({ where: { companyId: input.companyId } }),
-        tx.bill.count({ where: { companyId: input.companyId } }),
-        tx.expense.count({ where: { companyId: input.companyId } }),
-        tx.payment.count({ where: { companyId: input.companyId } }),
-        tx.customer.count({ where: { companyId: input.companyId } }),
-        tx.vendor.count({ where: { companyId: input.companyId } }),
-        tx.bankAccount.count({ where: { companyId: input.companyId } }),
-        tx.serviceItem.count({ where: { companyId: input.companyId } }),
-        tx.attachment.count({ where: { companyId: input.companyId } }),
-      ]);
-      const used =
-        journalEntries + invoices + estimates + creditNotes + bills + expenses +
-        payments + customers + vendors + bankAccounts + items + attachments;
-      if (used > 0) {
-        throw new Error(
-          `"${target.name}" has accounting or business records and cannot be permanently deleted. Archive it instead.`,
-        );
-      }
+    // Re-verified immediately before deleting, so nothing posted between the
+    // page load and this submission can slip through. Any count here makes this
+    // company real business history rather than an empty shell.
+    const cid = input.companyId;
+    const [
+      journalEntries, invoices, estimates, creditNotes, bills, expenses,
+      payments, customers, vendors, banks, items, attachmentRows,
+    ] = await Promise.all([
+      listEntries(cid),
+      invoicesRepo.list(cid),
+      estimatesRepo.list(cid),
+      creditNotesRepo.list(cid),
+      billsRepo.list(cid),
+      expensesRepo.list(cid),
+      listPayments(cid),
+      listCustomers(cid),
+      listVendors(cid),
+      bankAccountsRepo.list(cid),
+      listItems(cid),
+      attachmentsRepo.list(cid),
+    ]);
+    const used =
+      journalEntries.length + invoices.length + estimates.length + creditNotes.length +
+      bills.length + expenses.length + payments.length + customers.length + vendors.length +
+      banks.length + items.length + attachmentRows.length;
+    if (used > 0) {
+      throw new Error(
+        `"${target.name}" has accounting or business records and cannot be permanently deleted. Archive it instead.`,
+      );
+    }
 
-      // Nothing accounting-related exists on this company, so the schema's
-      // cascade here only removes empty setup scaffolding it never used — no
-      // journal entry, invoice or any other business record is ever cascaded
-      // away by this call.
-      await tx.company.delete({ where: { id: input.companyId } });
-    });
+    // Nothing accounting-related exists — only empty setup scaffolding, which
+    // Firestore leaves orphaned harmlessly when the company doc is removed.
+    await deleteCompany(cid);
 
     await recordAudit({
       companyId: company.id,

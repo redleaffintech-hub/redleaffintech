@@ -2,11 +2,18 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { db } from "@/lib/db";
 import { ITEM_TYPES } from "@/lib/enums";
 import { toCents } from "@/lib/money";
 import { CAPABILITIES } from "@/lib/permissions";
 import { recordAudit, requireCapability } from "@/server/auth/context";
+import { createItem, deleteItem, getItem, listItems, updateItem } from "@/server/db/items";
+import { getAccount } from "@/server/db/accounts";
+import { getTaxCode } from "@/server/db/tax-codes";
+import { listMovementsForItem } from "@/server/db/inventory-movements";
+import { invoices as invoicesRepo } from "@/server/db/invoices";
+import { estimates as estimatesRepo } from "@/server/db/estimates";
+import { creditNotes as creditNotesRepo } from "@/server/db/credit-notes";
+import { bills as billsRepo } from "@/server/db/bills";
 
 /**
  * Products & services catalogue.
@@ -51,10 +58,7 @@ async function validate(
 ): Promise<{ error: string } | { data: Record<string, unknown> }> {
   const code = input.code.toUpperCase();
 
-  const clash = await db.serviceItem.findFirst({
-    where: { companyId, code, ...(existingId ? { NOT: { id: existingId } } : {}) },
-    select: { id: true, name: true },
-  });
+  const clash = (await listItems(companyId)).find((i) => i.code === code && i.id !== existingId);
   if (clash) return { error: `Code ${code} is already used by "${clash.name}".` };
 
   let unitPriceCents = 0;
@@ -76,16 +80,10 @@ async function validate(
   // Every referenced row must belong to this company. The ids come from a form,
   // so they are not trusted just because they are well-formed.
   const [income, expense, salesTax, purchaseTax] = await Promise.all([
-    input.incomeAccountId
-      ? db.account.findFirst({ where: { id: input.incomeAccountId, companyId }, select: { id: true, type: true } })
-      : null,
-    input.expenseAccountId
-      ? db.account.findFirst({ where: { id: input.expenseAccountId, companyId }, select: { id: true, type: true } })
-      : null,
-    input.taxCodeId ? db.taxCode.findFirst({ where: { id: input.taxCodeId, companyId }, select: { id: true } }) : null,
-    input.purchaseTaxCodeId
-      ? db.taxCode.findFirst({ where: { id: input.purchaseTaxCodeId, companyId }, select: { id: true } })
-      : null,
+    input.incomeAccountId ? getAccount(companyId, input.incomeAccountId) : null,
+    input.expenseAccountId ? getAccount(companyId, input.expenseAccountId) : null,
+    input.taxCodeId ? getTaxCode(companyId, input.taxCodeId) : null,
+    input.purchaseTaxCodeId ? getTaxCode(companyId, input.purchaseTaxCodeId) : null,
   ]);
 
   if (input.incomeAccountId && !income) return { error: "That income account is not in this company's chart." };
@@ -132,10 +130,7 @@ export async function createItemAction(formData: FormData) {
   const result = await validate(company.id, parsed.data);
   if ("error" in result) return result;
 
-  const item = await db.serviceItem.create({
-    data: { companyId: company.id, ...result.data } as never,
-    select: { id: true, code: true, name: true, type: true },
-  });
+  const item = await createItem({ companyId: company.id, ...(result.data as Record<string, unknown>) } as never);
 
   await recordAudit({
     companyId: company.id,
@@ -152,10 +147,7 @@ export async function createItemAction(formData: FormData) {
 
 export async function updateItemAction(itemId: string, formData: FormData) {
   const { company, user } = await requireCapability(CAPABILITIES.COMPANY_SETTINGS);
-  const existing = await db.serviceItem.findFirst({
-    where: { id: itemId, companyId: company.id },
-    select: { id: true, code: true, name: true },
-  });
+  const existing = await getItem(company.id, itemId);
   if (!existing) return { error: "That catalogue item does not belong to this company." };
 
   const parsed = itemSchema.safeParse(Object.fromEntries(formData));
@@ -166,7 +158,7 @@ export async function updateItemAction(itemId: string, formData: FormData) {
   const result = await validate(company.id, parsed.data, itemId);
   if ("error" in result) return result;
 
-  await db.serviceItem.update({ where: { id: itemId }, data: result.data as never });
+  await updateItem(company.id, itemId, result.data as never);
 
   await recordAudit({
     companyId: company.id,
@@ -185,13 +177,10 @@ export async function updateItemAction(itemId: string, formData: FormData) {
 
 export async function setItemActiveAction(itemId: string, isActive: boolean) {
   const { company, user } = await requireCapability(CAPABILITIES.COMPANY_SETTINGS);
-  const item = await db.serviceItem.findFirst({
-    where: { id: itemId, companyId: company.id },
-    select: { id: true, code: true, name: true },
-  });
+  const item = await getItem(company.id, itemId);
   if (!item) return { error: "That catalogue item does not belong to this company." };
 
-  await db.serviceItem.update({ where: { id: itemId }, data: { isActive } });
+  await updateItem(company.id, itemId, { isActive });
 
   await recordAudit({
     companyId: company.id,
@@ -215,16 +204,24 @@ export async function setItemActiveAction(itemId: string, isActive: boolean) {
  * counts server-side instead.
  */
 async function itemUsageCount(companyId: string, itemId: string): Promise<number> {
+  const countLines = (docs: { lines?: { itemId: string | null }[] }[]) =>
+    docs.reduce((n, d) => n + (d.lines ?? []).filter((l) => l.itemId === itemId).length, 0);
   const [invoices, estimates, credits, bills, movements] = await Promise.all([
-    db.invoiceLine.count({ where: { itemId, invoice: { companyId } } }),
-    db.estimateLine.count({ where: { itemId, estimate: { companyId } } }),
-    db.creditNoteLine.count({ where: { itemId, creditNote: { companyId } } }),
-    db.billLine.count({ where: { itemId, bill: { companyId } } }),
+    invoicesRepo.list(companyId),
+    estimatesRepo.list(companyId),
+    creditNotesRepo.list(companyId),
+    billsRepo.list(companyId),
     // A tracked item can carry inventory movements (e.g. a manual stock
     // adjustment) with no document line at all — still not safe to delete.
-    db.inventoryMovement.count({ where: { itemId, companyId } }),
+    listMovementsForItem(companyId, itemId),
   ]);
-  return invoices + estimates + credits + bills + movements;
+  return (
+    countLines(invoices) +
+    countLines(estimates) +
+    countLines(credits) +
+    countLines(bills) +
+    movements.length
+  );
 }
 
 /**
@@ -237,10 +234,7 @@ async function itemUsageCount(companyId: string, itemId: string): Promise<number
  */
 export async function deleteItemAction(itemId: string) {
   const { company, user } = await requireCapability(CAPABILITIES.COMPANY_SETTINGS);
-  const item = await db.serviceItem.findFirst({
-    where: { id: itemId, companyId: company.id },
-    select: { id: true, code: true, name: true },
-  });
+  const item = await getItem(company.id, itemId);
   if (!item) return { error: "That catalogue item does not belong to this company." };
 
   const used = await itemUsageCount(company.id, itemId);
@@ -250,7 +244,7 @@ export async function deleteItemAction(itemId: string) {
     };
   }
 
-  await db.serviceItem.delete({ where: { id: itemId } });
+  await deleteItem(company.id, itemId);
 
   await recordAudit({
     companyId: company.id,

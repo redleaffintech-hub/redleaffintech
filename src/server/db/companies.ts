@@ -87,6 +87,15 @@ export function updateCompanyTx(tx: Tx, id: string, data: Partial<Company>): voi
 }
 
 /**
+ * Delete the company document. Only ever called for a company with no business
+ * records (checked by the caller); Firestore has no cascade, so any leftover
+ * setup scaffolding under it is orphaned harmlessly rather than removed.
+ */
+export async function deleteCompany(id: string): Promise<void> {
+  await companyRef(id).delete();
+}
+
+/**
  * Consume the next number in a company sequence and return it formatted, e.g.
  * "JE-00042" or "INV-1042". MUST run inside a transaction so two concurrent
  * postings can never take the same number (replaces Prisma's

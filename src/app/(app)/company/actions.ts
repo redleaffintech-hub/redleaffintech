@@ -2,15 +2,31 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { db } from "@/lib/db";
 import { addDays, isoDate } from "@/lib/dates";
-import { applyFiscalYearChange, planFiscalYearChange } from "@/server/accounting/fiscal-calendar";
+import { applyFiscalYearChange, planFiscalYearChange } from "@/server/accounting/fiscal-calendar-fs";
 import { normalizeCurrency } from "@/lib/currency";
 import { COMPANY_ROLES, PROVINCES } from "@/lib/enums";
 import { CAPABILITIES } from "@/lib/permissions";
 import { assignmentFromPlan, sellablePlanByCode } from "@/server/plans/catalogue";
 import { hashPassword } from "@/server/auth/password";
 import { recordAudit, requireCapability } from "@/server/auth/context";
+import { getCompany, updateCompany } from "@/server/db/companies";
+import { listEntries } from "@/server/db/journal-entries";
+import {
+  deleteMembership,
+  getMembership,
+  listMembershipsForCompany,
+  updateMembership,
+  upsertMembership,
+} from "@/server/db/company-users";
+import { createUser, getUser, getUserByEmail } from "@/server/db/users";
+import { getSubscriptionForCompany, subscriptions } from "@/server/db/platform";
+
+/** Membership doc ids are `${companyId}__${userId}`; the UI passes the doc id. */
+function userIdFromMembership(membershipId: string, companyId: string): string | null {
+  const prefix = `${companyId}__`;
+  return membershipId.startsWith(prefix) ? membershipId.slice(prefix.length) : null;
+}
 
 // ── Profile & preferences ───────────────────────────────────────────────────
 
@@ -65,7 +81,7 @@ export async function saveCompanyProfileAction(formData: FormData) {
   }
   const currencyChanged = baseCurrency !== company.baseCurrency;
   if (currencyChanged) {
-    const posted = await db.journalEntry.count({ where: { companyId: company.id } });
+    const posted = (await listEntries(company.id)).length;
     if (posted > 0 && input.confirmCurrencyChange !== "on") {
       return {
         error:
@@ -83,27 +99,24 @@ export async function saveCompanyProfileAction(formData: FormData) {
   // rest of the profile must never move it as a side effect.
   const fiscalYearStartChanged = input.fiscalYearStartMonth !== company.fiscalYearStartMonth;
 
-  await db.company.update({
-    where: { id: company.id },
-    data: {
-      name: input.name,
-      legalName: input.legalName || null,
-      businessNumber: input.businessNumber || null,
-      gstNumber: input.gstNumber || null,
-      qstNumber: input.qstNumber || null,
-      pstNumber: input.pstNumber || null,
-      baseCurrency,
-      province: input.province.toUpperCase(),
-      addressLine1: input.addressLine1 || null,
-      city: input.city || null,
-      postalCode: input.postalCode || null,
-      phone: input.phone || null,
-      email: input.email || null,
-      website: input.website || null,
-      defaultPaymentTermsDays: input.defaultPaymentTermsDays,
-      defaultTaxInclusive: input.defaultTaxInclusive === "on",
-      invoiceFooter: input.invoiceFooter || null,
-    },
+  await updateCompany(company.id, {
+    name: input.name,
+    legalName: input.legalName || null,
+    businessNumber: input.businessNumber || null,
+    gstNumber: input.gstNumber || null,
+    qstNumber: input.qstNumber || null,
+    pstNumber: input.pstNumber || null,
+    baseCurrency,
+    province: input.province.toUpperCase(),
+    addressLine1: input.addressLine1 || null,
+    city: input.city || null,
+    postalCode: input.postalCode || null,
+    phone: input.phone || null,
+    email: input.email || null,
+    website: input.website || null,
+    defaultPaymentTermsDays: input.defaultPaymentTermsDays,
+    defaultTaxInclusive: input.defaultTaxInclusive === "on",
+    invoiceFooter: input.invoiceFooter || null,
   });
 
   await recordAudit({
@@ -143,7 +156,7 @@ export async function updateCompanyLogoAction(dataUrl: string | null) {
     return { error: "That doesn't look like a valid image." };
   }
 
-  await db.company.update({ where: { id: company.id }, data: { logoUrl: dataUrl } });
+  await updateCompany(company.id, { logoUrl: dataUrl });
 
   await recordAudit({
     companyId: company.id,
@@ -242,28 +255,23 @@ export async function changeFiscalYearStartAction(formData: FormData) {
   }
 
   try {
-    const result = await db.$transaction(async (tx) => {
-      // Re-read inside the transaction: another change may have landed between
-      // the preview and the save.
-      const fresh = await tx.company.findUniqueOrThrow({
-        where: { id: company.id },
-        select: { fiscalYearStartMonth: true },
-      });
-      if (fresh.fiscalYearStartMonth !== plan.currentStartMonth) {
-        throw new Error("The fiscal year start changed while you were confirming. Reload and try again.");
-      }
-      return applyFiscalYearChange(
-        tx,
-        {
-          companyId: company.id,
-          userId: user.id,
-          newStartMonth: input.fiscalYearStartMonth,
-          effectiveYear: input.effectiveYear,
-          reason: input.reason,
-        },
-        plan,
-      );
-    });
+    // Re-read just before applying: another change may have landed between the
+    // preview and the save. `applyFiscalYearChange` does its own writes.
+    const fresh = await getCompany(company.id);
+    if (!fresh) throw new Error("Company not found.");
+    if (fresh.fiscalYearStartMonth !== plan.currentStartMonth) {
+      throw new Error("The fiscal year start changed while you were confirming. Reload and try again.");
+    }
+    const result = await applyFiscalYearChange(
+      {
+        companyId: company.id,
+        userId: user.id,
+        newStartMonth: input.fiscalYearStartMonth,
+        effectiveYear: input.effectiveYear,
+        reason: input.reason,
+      },
+      plan,
+    );
 
     const monthName = (m: number) =>
       new Intl.DateTimeFormat("en-CA", { month: "long", timeZone: "UTC" }).format(new Date(Date.UTC(2000, m - 1, 1)));
@@ -324,7 +332,7 @@ export async function saveNumberingAction(formData: FormData) {
   const parsed = numberingSchema.safeParse(Object.fromEntries(formData));
   if (!parsed.success) return { error: "Prefixes must be 10 characters or fewer." };
 
-  await db.company.update({ where: { id: company.id }, data: parsed.data });
+  await updateCompany(company.id, parsed.data);
   await recordAudit({
     companyId: company.id,
     userId: user.id,
@@ -361,36 +369,31 @@ export async function inviteUserAction(formData: FormData) {
   const input = parsed.data;
   const email = input.email.toLowerCase();
 
-  const subscription = await db.subscription.findUnique({ where: { companyId: company.id } });
-  const activeSeats = await db.companyUser.count({
-    where: { companyId: company.id, status: { in: ["ACTIVE", "INVITED"] } },
-  });
+  const subscription = await getSubscriptionForCompany(company.id);
+  const memberships = await listMembershipsForCompany(company.id);
+  const activeSeats = memberships.filter((m) => ["ACTIVE", "INVITED"].includes(m.status)).length;
   if (subscription && activeSeats >= subscription.seats) {
     return { error: `All ${subscription.seats} seats on the ${subscription.plan.toLowerCase()} plan are in use.` };
   }
 
-  let target = await db.user.findUnique({ where: { email } });
+  let target = await getUserByEmail(email);
   if (target) {
-    const existing = await db.companyUser.findFirst({ where: { companyId: company.id, userId: target.id } });
+    const existing = await getMembership(company.id, target.id);
     if (existing) return { error: `${email} already has access to this company.` };
   } else {
-    target = await db.user.create({
-      data: {
-        email,
-        name: input.name,
-        passwordHash: await hashPassword(input.temporaryPassword),
-      },
+    target = await createUser({
+      email,
+      name: input.name,
+      passwordHash: await hashPassword(input.temporaryPassword),
     });
   }
 
-  await db.companyUser.create({
-    data: {
-      companyId: company.id,
-      userId: target.id,
-      role: input.role,
-      status: "INVITED",
-      invitedAt: new Date(),
-    },
+  await upsertMembership({
+    companyId: company.id,
+    userId: target.id,
+    role: input.role,
+    status: "INVITED",
+    invitedAt: new Date(),
   });
 
   await recordAudit({
@@ -412,29 +415,29 @@ export async function setMembershipRoleAction(membershipId: string, role: string
     return { error: "That is not a valid role." };
   }
 
-  const membership = await db.companyUser.findFirst({
-    where: { id: membershipId, companyId: company.id },
-    include: { user: { select: { email: true } } },
-  });
-  if (!membership) return { error: "That user is not a member of this company." };
+  const targetUserId = userIdFromMembership(membershipId, company.id);
+  const membership = targetUserId ? await getMembership(company.id, targetUserId) : null;
+  if (!membership || !targetUserId) return { error: "That user is not a member of this company." };
+  const memberUser = await getUser(targetUserId);
 
   // A company must keep at least one active primary user, or nobody can ever
   // grant access again.
   if (membership.role === "PRIMARY" && role !== "PRIMARY") {
-    const primaries = await db.companyUser.count({
-      where: { companyId: company.id, role: "PRIMARY", status: "ACTIVE", NOT: { id: membershipId } },
-    });
+    const all = await listMembershipsForCompany(company.id);
+    const primaries = all.filter(
+      (m) => m.role === "PRIMARY" && m.status === "ACTIVE" && m.id !== membershipId,
+    ).length;
     if (primaries === 0) return { error: "This is the last primary user. Promote someone else first." };
   }
 
-  await db.companyUser.update({ where: { id: membershipId }, data: { role } });
+  await updateMembership(company.id, targetUserId, { role });
   await recordAudit({
     companyId: company.id,
     userId: user.id,
     action: "UPDATE",
     entityType: "CompanyUser",
     entityId: membershipId,
-    summary: `${membership.user.email} role changed to ${role.toLowerCase()}`,
+    summary: `${memberUser?.email ?? "user"} role changed to ${role.toLowerCase()}`,
   });
 
   revalidatePath("/company/users");
@@ -445,23 +448,23 @@ export async function setMembershipStatusAction(membershipId: string, status: st
   const { company, user } = await requireCapability(CAPABILITIES.USERS);
   if (!["ACTIVE", "SUSPENDED"].includes(status)) return { error: "That is not a valid status." };
 
-  const membership = await db.companyUser.findFirst({
-    where: { id: membershipId, companyId: company.id },
-    include: { user: { select: { id: true, email: true } } },
-  });
-  if (!membership) return { error: "That user is not a member of this company." };
+  const targetUserId = userIdFromMembership(membershipId, company.id);
+  const membership = targetUserId ? await getMembership(company.id, targetUserId) : null;
+  if (!membership || !targetUserId) return { error: "That user is not a member of this company." };
   if (membership.userId === user.id) return { error: "You cannot suspend your own access." };
+  const memberUser = await getUser(targetUserId);
 
   if (status === "SUSPENDED" && membership.role === "PRIMARY") {
-    const primaries = await db.companyUser.count({
-      where: { companyId: company.id, role: "PRIMARY", status: "ACTIVE", NOT: { id: membershipId } },
-    });
+    const all = await listMembershipsForCompany(company.id);
+    const primaries = all.filter(
+      (m) => m.role === "PRIMARY" && m.status === "ACTIVE" && m.id !== membershipId,
+    ).length;
     if (primaries === 0) return { error: "This is the last active primary user." };
   }
 
-  await db.companyUser.update({
-    where: { id: membershipId },
-    data: { status, acceptedAt: status === "ACTIVE" ? (membership.acceptedAt ?? new Date()) : membership.acceptedAt },
+  await updateMembership(company.id, targetUserId, {
+    status,
+    acceptedAt: status === "ACTIVE" ? (membership.acceptedAt ?? new Date()) : membership.acceptedAt,
   });
 
   await recordAudit({
@@ -470,7 +473,7 @@ export async function setMembershipStatusAction(membershipId: string, status: st
     action: "UPDATE",
     entityType: "CompanyUser",
     entityId: membershipId,
-    summary: `${membership.user.email} access ${status === "ACTIVE" ? "activated" : "suspended"}`,
+    summary: `${memberUser?.email ?? "user"} access ${status === "ACTIVE" ? "activated" : "suspended"}`,
   });
 
   revalidatePath("/company/users");
@@ -479,28 +482,28 @@ export async function setMembershipStatusAction(membershipId: string, status: st
 
 export async function removeMembershipAction(membershipId: string) {
   const { company, user } = await requireCapability(CAPABILITIES.USERS);
-  const membership = await db.companyUser.findFirst({
-    where: { id: membershipId, companyId: company.id },
-    include: { user: { select: { id: true, email: true } } },
-  });
-  if (!membership) return { error: "That user is not a member of this company." };
+  const targetUserId = userIdFromMembership(membershipId, company.id);
+  const membership = targetUserId ? await getMembership(company.id, targetUserId) : null;
+  if (!membership || !targetUserId) return { error: "That user is not a member of this company." };
   if (membership.userId === user.id) return { error: "You cannot remove your own access." };
+  const memberUser = await getUser(targetUserId);
 
   if (membership.role === "PRIMARY") {
-    const primaries = await db.companyUser.count({
-      where: { companyId: company.id, role: "PRIMARY", status: "ACTIVE", NOT: { id: membershipId } },
-    });
+    const all = await listMembershipsForCompany(company.id);
+    const primaries = all.filter(
+      (m) => m.role === "PRIMARY" && m.status === "ACTIVE" && m.id !== membershipId,
+    ).length;
     if (primaries === 0) return { error: "This is the last primary user." };
   }
 
-  await db.companyUser.delete({ where: { id: membershipId } });
+  await deleteMembership(company.id, targetUserId);
   await recordAudit({
     companyId: company.id,
     userId: user.id,
     action: "UPDATE",
     entityType: "CompanyUser",
     entityId: membershipId,
-    summary: `${membership.user.email} removed from the company`,
+    summary: `${memberUser?.email ?? "user"} removed from the company`,
   });
 
   revalidatePath("/company/users");
@@ -518,16 +521,16 @@ export async function changePlanAction(plan: string) {
   const catalogue = await sellablePlanByCode(plan);
   if (!catalogue) return { error: "That is not a plan we offer." };
 
-  const existing = await db.subscription.findUnique({ where: { companyId: company.id } });
+  const existing = await getSubscriptionForCompany(company.id);
 
   // A negotiated seat allowance set by Red Leaf support outranks the plan's, and
   // a self-serve plan change must not quietly take those extra seats away.
   const seats =
     existing?.seatsOverridden && existing.seats > catalogue.seats ? existing.seats : catalogue.seats;
 
-  const inUse = await db.companyUser.count({
-    where: { companyId: company.id, status: { in: ["ACTIVE", "INVITED"] } },
-  });
+  const inUse = (await listMembershipsForCompany(company.id)).filter((m) =>
+    ["ACTIVE", "INVITED"].includes(m.status),
+  ).length;
   if (inUse > seats) {
     return { error: `${inUse} people have access — the ${catalogue.name} plan only includes ${seats} seats.` };
   }
@@ -536,9 +539,20 @@ export async function changePlanAction(plan: string) {
   // change how often they are billed.
   const assignment = assignmentFromPlan(catalogue, (existing?.billingCycle as never) ?? "MONTHLY");
 
-  await db.subscription.upsert({
-    where: { companyId: company.id },
-    create: {
+  if (existing) {
+    await subscriptions.update(existing.id, {
+      plan: assignment.planCode,
+      planId: assignment.planId,
+      // The snapshot moves with the plan: this *is* a new agreement, made now,
+      // at the price currently published.
+      planVersionId: assignment.planVersionId,
+      currency: assignment.currency,
+      priceCents: assignment.priceCents,
+      monthlyEquivalentCents: assignment.monthlyEquivalentCents,
+      seats,
+    });
+  } else {
+    await subscriptions.create({
       companyId: company.id,
       plan: assignment.planCode,
       planId: assignment.planId,
@@ -551,19 +565,8 @@ export async function changePlanAction(plan: string) {
       status: "TRIALING",
       trialStartsAt: new Date(),
       trialEndsAt: addDays(new Date(), 30),
-    },
-    update: {
-      plan: assignment.planCode,
-      planId: assignment.planId,
-      // The snapshot moves with the plan: this *is* a new agreement, made now,
-      // at the price currently published.
-      planVersionId: assignment.planVersionId,
-      currency: assignment.currency,
-      priceCents: assignment.priceCents,
-      monthlyEquivalentCents: assignment.monthlyEquivalentCents,
-      seats,
-    },
-  });
+    });
+  }
 
   await recordAudit({
     companyId: company.id,

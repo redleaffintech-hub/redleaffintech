@@ -1,4 +1,6 @@
-import { db } from "@/lib/db";
+import { listMembershipsForCompany } from "@/server/db/company-users";
+import { listUsersByIds } from "@/server/db/users";
+import { getSubscriptionForCompany } from "@/server/db/platform";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES, MATRIX_FOR_DISPLAY, type AccessLevel, type Capability } from "@/lib/permissions";
 import { COMPANY_ROLES, ROLE_LABELS, type CompanyRole } from "@/lib/enums";
@@ -36,14 +38,27 @@ const CAPABILITY_LABELS: Record<string, string> = {
 export default async function CompanyUsersPage() {
   const { company, user } = await requireCapability(CAPABILITIES.USERS);
 
-  const [memberships, subscription] = await Promise.all([
-    db.companyUser.findMany({
-      where: { companyId: company.id },
-      include: { user: { select: { id: true, name: true, email: true, lastLoginAt: true, mfaEnabled: true } } },
-      orderBy: [{ status: "asc" }, { createdAt: "asc" }],
-    }),
-    db.subscription.findUnique({ where: { companyId: company.id } }),
+  const [rawMemberships, subscription] = await Promise.all([
+    listMembershipsForCompany(company.id),
+    getSubscriptionForCompany(company.id),
   ]);
+  const memberUsers = await listUsersByIds(rawMemberships.map((m) => m.userId));
+  const userById = new Map(memberUsers.map((u) => [u.id, u]));
+  const memberships = [...rawMemberships]
+    .sort((a, b) => a.status.localeCompare(b.status) || a.createdAt.getTime() - b.createdAt.getTime())
+    .map((m) => {
+      const u = userById.get(m.userId);
+      return {
+        ...m,
+        user: {
+          id: m.userId,
+          name: u?.name ?? "—",
+          email: u?.email ?? "",
+          lastLoginAt: u?.lastLoginAt ?? null,
+          mfaEnabled: u?.mfaEnabled ?? false,
+        },
+      };
+    });
 
   const seatsUsed = memberships.filter((m) => m.status !== "SUSPENDED").length;
   const seats = subscription?.seats ?? memberships.length;

@@ -122,3 +122,12 @@ export function updateItemTx(
 ): void {
   tx.update(col(companyId).doc(id), { ...encode(data), updatedAt: toTimestamp(new Date()) });
 }
+
+export async function deleteItem(companyId: string, id: string): Promise<void> {
+  const item = await getItem(companyId, id);
+  if (!item) return;
+  await companyRef(companyId).firestore.runTransaction(async (tx) => {
+    tx.delete(col(companyId).doc(id));
+    tx.delete(codeGuard(companyId, item.code));
+  });
+}

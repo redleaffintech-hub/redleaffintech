@@ -1,5 +1,10 @@
-import { db } from "@/lib/db";
-import { contains } from "@/lib/search";
+import { listItems } from "@/server/db/items";
+import { listAccounts } from "@/server/db/accounts";
+import { listTaxCodes } from "@/server/db/tax-codes";
+import { invoices as invoicesRepo } from "@/server/db/invoices";
+import { estimates as estimatesRepo } from "@/server/db/estimates";
+import { creditNotes as creditNotesRepo } from "@/server/db/credit-notes";
+import { bills as billsRepo } from "@/server/db/bills";
 import { requireVisible } from "@/server/auth/context";
 import { CAPABILITIES, can } from "@/lib/permissions";
 import { ITEM_TYPE_LABELS, ITEM_UNITS, itemUnitLabel, type ItemType } from "@/lib/enums";
@@ -24,69 +29,71 @@ export default async function ProductsServicesPage({
   const filter = typeof params.filter === "string" ? params.filter : "";
   const query = typeof params.q === "string" ? params.q : "";
 
-  const where = {
-    companyId: company.id,
-    ...(filter === "PRODUCT" || filter === "SERVICE" ? { type: filter } : {}),
-    ...(filter === "ACTIVE" ? { isActive: true } : {}),
-    ...(filter === "INACTIVE" ? { isActive: false } : {}),
-    ...(query
-      ? { OR: [{ code: contains(query) }, { name: contains(query) }, { description: contains(query) }] }
-      : {}),
-  };
+  const q = query.toLowerCase();
 
-  const [items, counts, accounts, taxCodes] = await Promise.all([
-    db.serviceItem.findMany({
-      where,
-      orderBy: [{ isActive: "desc" }, { code: "asc" }],
-      include: {
-        incomeAccount: { select: { code: true, name: true } },
-        expenseAccount: { select: { code: true, name: true } },
-        taxCode: { select: { code: true } },
-        purchaseTaxCode: { select: { code: true } },
-      },
-    }),
-    Promise.all([
-      db.serviceItem.count({ where: { companyId: company.id } }),
-      db.serviceItem.count({ where: { companyId: company.id, type: "PRODUCT" } }),
-      db.serviceItem.count({ where: { companyId: company.id, type: "SERVICE" } }),
-      db.serviceItem.count({ where: { companyId: company.id, isActive: true } }),
-      db.serviceItem.count({ where: { companyId: company.id, isActive: false } }),
-    ]),
-    db.account.findMany({
-      where: { companyId: company.id, isActive: true, type: { in: ["REVENUE", "EXPENSE", "ASSET"] } },
-      select: { id: true, code: true, name: true, type: true },
-      orderBy: { code: "asc" },
-    }),
-    db.taxCode.findMany({
-      where: { companyId: company.id, isActive: true },
-      select: { id: true, code: true, name: true },
-      orderBy: { code: "asc" },
-    }),
-  ]);
+  const [allItems, allAccounts, allTaxCodes, invoiceDocs, estimateDocs, creditNoteDocs, billDocs] =
+    await Promise.all([
+      listItems(company.id),
+      listAccounts(company.id),
+      listTaxCodes(company.id, { activeOnly: true }),
+      invoicesRepo.list(company.id),
+      estimatesRepo.list(company.id),
+      creditNotesRepo.list(company.id),
+      billsRepo.list(company.id),
+    ]);
+  const accountById = new Map(allAccounts.map((a) => [a.id, a]));
+  const taxCodeById = new Map(allTaxCodes.map((c) => [c.id, c]));
+
+  const total = allItems.length;
+  const products = allItems.filter((i) => i.type === "PRODUCT").length;
+  const services = allItems.filter((i) => i.type === "SERVICE").length;
+  const active = allItems.filter((i) => i.isActive).length;
+  const inactive = allItems.filter((i) => !i.isActive).length;
+
+  const items = allItems
+    .filter((i) => {
+      if (filter === "PRODUCT" || filter === "SERVICE") return i.type === filter;
+      if (filter === "ACTIVE") return i.isActive;
+      if (filter === "INACTIVE") return !i.isActive;
+      return true;
+    })
+    .filter(
+      (i) =>
+        !q ||
+        i.code.toLowerCase().includes(q) ||
+        i.name.toLowerCase().includes(q) ||
+        (i.description ?? "").toLowerCase().includes(q),
+    )
+    .sort((a, b) => Number(b.isActive) - Number(a.isActive) || a.code.localeCompare(b.code))
+    .map((i) => ({
+      ...i,
+      incomeAccount: i.incomeAccountId ? accountById.get(i.incomeAccountId) ?? null : null,
+      expenseAccount: i.expenseAccountId ? accountById.get(i.expenseAccountId) ?? null : null,
+      taxCode: i.taxCodeId ? taxCodeById.get(i.taxCodeId) ?? null : null,
+      purchaseTaxCode: i.purchaseTaxCodeId ? taxCodeById.get(i.purchaseTaxCodeId) ?? null : null,
+    }));
 
   // How many documents reference each item. An item that has been used can be
   // archived but never deleted, and the table says so rather than letting
   // someone discover it only when the delete fails.
-  const usage = await db.$transaction([
-    db.invoiceLine.groupBy({ by: ["itemId"], where: { itemId: { not: null }, invoice: { companyId: company.id } }, _count: true, orderBy: { itemId: "asc" } }),
-    db.estimateLine.groupBy({ by: ["itemId"], where: { itemId: { not: null }, estimate: { companyId: company.id } }, _count: true, orderBy: { itemId: "asc" } }),
-    db.creditNoteLine.groupBy({ by: ["itemId"], where: { itemId: { not: null }, creditNote: { companyId: company.id } }, _count: true, orderBy: { itemId: "asc" } }),
-    db.billLine.groupBy({ by: ["itemId"], where: { itemId: { not: null }, bill: { companyId: company.id } }, _count: true, orderBy: { itemId: "asc" } }),
-  ]);
   const usedCount = new Map<string, number>();
-  for (const group of usage) {
-    for (const row of group) {
-      if (!row.itemId) continue;
-      const n = typeof row._count === "number" ? row._count : 0;
-      usedCount.set(row.itemId, (usedCount.get(row.itemId) ?? 0) + n);
+  for (const docs of [invoiceDocs, estimateDocs, creditNoteDocs, billDocs]) {
+    for (const d of docs) {
+      for (const line of d.lines ?? []) {
+        if (!line.itemId) continue;
+        usedCount.set(line.itemId, (usedCount.get(line.itemId) ?? 0) + 1);
+      }
     }
   }
 
-  const [total, products, services, active, inactive] = counts;
+  const accounts = allAccounts
+    .filter((a) => a.isActive && ["REVENUE", "EXPENSE", "ASSET"].includes(a.type))
+    .sort((a, b) => a.code.localeCompare(b.code))
+    .map((a) => ({ id: a.id, code: a.code, name: a.name, type: a.type }));
   const options = {
     incomeAccounts: accounts.filter((a) => a.type === "REVENUE"),
     expenseAccounts: accounts.filter((a) => a.type === "EXPENSE" || a.type === "ASSET"),
-    taxCodes,
+    taxCodes: allTaxCodes.map((c) => ({ id: c.id, code: c.code, name: c.name })),
     units: [...ITEM_UNITS],
     currency: company.baseCurrency,
   };
