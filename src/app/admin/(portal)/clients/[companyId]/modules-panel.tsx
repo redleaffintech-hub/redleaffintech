@@ -12,6 +12,18 @@ import { updateClientModulesAction } from "../actions";
  * server/admin/clients.ts). Enforced in the app: the sidebar hides a group
  * whose module isn't checked here, and the HR/Payroll/Inventory routes
  * redirect a direct hit on the URL too.
+ *
+ * `useState`'s initializer only runs once, on mount — but this panel would
+ * otherwise stay mounted across a save (the server action revalidates the
+ * page in place, it does not navigate). A save built the *next* save's
+ * starting point from whatever `selected` happened to hold locally; if that
+ * had drifted from the company's real `enabledModules` (a slow
+ * revalidation, a second tab, a teammate saving moments earlier), the next
+ * "add one more module" click would silently resubmit the stale set and
+ * wipe out modules that were already on — exactly the bug this fixes.
+ * The caller keys this component on `enabledModules` so React remounts it
+ * (resetting `selected` from the fresh prop) whenever the server's own
+ * value changes, instead of a `useEffect` fighting the local state.
  */
 export function ModulesPanel({
   csrfToken,

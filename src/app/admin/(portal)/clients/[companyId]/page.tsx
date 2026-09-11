@@ -127,6 +127,11 @@ export default async function ClientDetailPage({ params }: { params: AdminParams
           />
 
           <ModulesPanel
+            // Remount (and so re-sync its local checkbox state) whenever the
+            // company's real enabledModules changes underneath it, rather than
+            // letting a stale local Set silently outlive a save — see the
+            // comment on ModulesPanel.
+            key={company.enabledModules.join(",")}
             csrfToken={actor.csrfToken}
             companyId={companyId}
             modules={MODULE_CATALOG}
