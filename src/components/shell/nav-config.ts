@@ -58,7 +58,12 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [{ label: "All expenses", href: "/expenses", capability: CAPABILITIES.EXPENSES, exact: true }],
   },
   {
-    label: "Bank Reconciliation",
+    // Shortened from "Bank Reconciliation" for the top nav trigger only — the
+    // pages underneath it still say "Bank Reconciliation" in full on their own
+    // breadcrumbs and headers. At the full 11-group nav width (every module
+    // enabled), the long label was the single biggest reason the row wrapped
+    // to an orphaned second line instead of fitting on one.
+    label: "Banking",
     module: "ACCOUNTING",
     icon: "bank",
     items: [

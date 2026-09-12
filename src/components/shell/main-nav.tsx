@@ -146,7 +146,7 @@ function NavGroupMenu({
 
 function triggerClass(active: boolean) {
   return clsx(
-    "relative flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-[0.6875rem] text-[0.8125rem] font-medium transition-colors",
+    "relative flex shrink-0 items-center gap-1 whitespace-nowrap px-2 py-[0.6875rem] text-[0.8125rem] font-medium transition-colors",
     // The active marker is an inset bottom border so it sits on the nav's own
     // baseline rather than adding height and shifting the row.
     "after:absolute after:inset-x-2 after:bottom-0 after:h-[2px] after:rounded-t-full",
