@@ -6,6 +6,7 @@ import { DEFAULT_CURRENCY, currencyLabel, currencyOptions } from "@/lib/currency
 import { PROVINCES } from "@/lib/enums";
 import { Badge, Card, CardHeader, DefinitionList, PageHeader } from "@/components/ui";
 import { CompanyProfileForm, NumberingForm } from "./company-form";
+import { CompanyLogoCard } from "./logo-card";
 
 export const metadata = { title: "Company profile" };
 
@@ -104,6 +105,8 @@ export default async function CompanyPage() {
         </div>
 
         <div className="space-y-4">
+          <CompanyLogoCard logoUrl={record.logoUrl} editable={editable} />
+
           <Card>
             <CardHeader title="This file" />
             <dl className="mt-3 space-y-2.5 text-[0.8125rem]">
