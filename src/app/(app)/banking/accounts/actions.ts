@@ -3,7 +3,9 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { normalizeCurrency } from "@/lib/currency";
+import { normalizeCurrency, DEFAULT_CURRENCY } from "@/lib/currency";
+import { toCents } from "@/lib/money";
+import { toUtcDay } from "@/lib/dates";
 import { CAPABILITIES } from "@/lib/permissions";
 import { recordAudit, requireCapability } from "@/server/auth/context";
 
@@ -19,6 +21,92 @@ const editSchema = z.object({
   accountId: z.string().min(1),
   isActive: z.string().optional(),
 });
+
+const createSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  institution: z.string().trim().max(120).optional(),
+  accountNumberMasked: z.string().trim().max(30).optional(),
+  type: z.enum(BANK_ACCOUNT_TYPES),
+  currency: z.string().trim().min(3).max(3),
+  accountId: z.string().min(1),
+  openingBalance: z.string().trim().optional(),
+  openingDate: z.string().trim().optional(),
+});
+
+/**
+ * Link a general-ledger account into the reconciliation module.
+ *
+ * A GL account (from the Chart of Accounts) and a BankAccount (this) are
+ * deliberately separate: the GL account is what the books post to, this row
+ * is what the reconciliation, CSV-import and rules screens operate on. Every
+ * company starts with zero of these — the Chart of Accounts having a "Business
+ * Chequing" account does not, by itself, make it reconcilable — so this is the
+ * one and only place that gap is closed.
+ */
+export async function createBankAccountAction(formData: FormData) {
+  const { company, user } = await requireCapability(CAPABILITIES.BANKING);
+  const parsed = createSchema.safeParse(Object.fromEntries(formData));
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? "Check the account details and try again." };
+  }
+  const input = parsed.data;
+
+  const currency = normalizeCurrency(input.currency) ?? normalizeCurrency(company.baseCurrency) ?? DEFAULT_CURRENCY;
+
+  const glAccount = await db.account.findFirst({
+    where: { id: input.accountId, companyId: company.id, isActive: true },
+    select: { id: true, type: true },
+  });
+  if (!glAccount) return { error: "Choose a GL account that belongs to this company." };
+  if (input.type === "CREDIT_CARD" && glAccount.type !== "LIABILITY") {
+    return { error: "A credit card account must link to a liability account." };
+  }
+  if (input.type !== "CREDIT_CARD" && glAccount.type !== "ASSET") {
+    return { error: "A bank or cash account must link to an asset account." };
+  }
+
+  const alreadyLinked = await db.bankAccount.findUnique({
+    where: { accountId: input.accountId },
+    select: { id: true, name: true },
+  });
+  if (alreadyLinked) {
+    return { error: `${alreadyLinked.name} already reconciles against that GL account. Each GL account can back only one bank/card account.` };
+  }
+
+  let openingBalanceCents = 0;
+  try {
+    openingBalanceCents = toCents(input.openingBalance);
+  } catch {
+    return { error: "That opening balance doesn't look like an amount." };
+  }
+
+  const created = await db.bankAccount.create({
+    data: {
+      companyId: company.id,
+      accountId: input.accountId,
+      name: input.name,
+      institution: input.institution || null,
+      accountNumberMasked: input.accountNumberMasked || null,
+      type: input.type,
+      currency,
+      openingBalanceCents,
+      openingDate: input.openingDate ? toUtcDay(input.openingDate) : null,
+    },
+  });
+
+  await recordAudit({
+    companyId: company.id,
+    userId: user.id,
+    action: "CREATE",
+    entityType: "BankAccount",
+    entityId: created.id,
+    summary: `Bank account "${created.name}" added, linked to the general ledger`,
+  });
+
+  revalidatePath("/banking/accounts");
+  revalidatePath("/banking/reconcile");
+  return { ok: true as const };
+}
 
 /**
  * Edit a bank/card account.

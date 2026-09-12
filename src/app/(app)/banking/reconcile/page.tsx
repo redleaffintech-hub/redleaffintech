@@ -3,7 +3,7 @@ import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
 import { buildWorkspace, reconciliationHistory } from "@/server/banking/reconcile";
 import { today, formatMonthLong } from "@/lib/dates";
-import { EmptyState, PageHeader } from "@/components/ui";
+import { EmptyState, LinkButton, PageHeader } from "@/components/ui";
 import { ReconcileClient } from "./reconcile-workspace";
 
 export const metadata = { title: "Bank Reconciliation" };
@@ -34,7 +34,8 @@ export default async function ReconcilePage({ searchParams }: PageProps<"/bankin
         />
         <EmptyState
           title="No bank accounts"
-          description="Add a bank account under Bank Reconciliation → Accounts before reconciling."
+          description="A Chart of Accounts entry alone isn't reconcilable — link one under Bank Reconciliation → Accounts first."
+          action={<LinkButton href="/banking/accounts" variant="primary">Go to Accounts</LinkButton>}
         />
       </>
     );

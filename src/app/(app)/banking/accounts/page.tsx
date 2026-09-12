@@ -3,8 +3,9 @@ import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES, can } from "@/lib/permissions";
 import { accountBalance } from "@/server/reports/financials";
 import { formatDate, formatDateTime, today } from "@/lib/dates";
-import { Badge, Card, LinkButton, Money, PageHeader, Table, Td, Th, Tr } from "@/components/ui";
+import { Badge, Card, EmptyState, LinkButton, Money, PageHeader, Table, Td, Th, Tr } from "@/components/ui";
 import { EditBankAccountButton } from "./edit-bank-account";
+import { AddBankAccountButton } from "./add-bank-account";
 
 export const metadata = { title: "Bank accounts" };
 
@@ -53,9 +54,28 @@ export default async function BankAccountsPage() {
         title="Bank & card accounts"
         breadcrumb={[{ label: "Bank Reconciliation", href: "/banking" }, { label: "Accounts" }]}
         description="Each account is bound to a general-ledger account, so the balance here and the balance sheet are the same number."
-        actions={<LinkButton href="/banking/reconcile" variant="primary">Reconcile an account</LinkButton>}
+        actions={
+          <div className="flex items-center gap-2">
+            {rows.length > 0 && (
+              <LinkButton href="/banking/reconcile">Reconcile an account</LinkButton>
+            )}
+            {canEdit && <AddBankAccountButton glAccounts={glAccounts} currency={company.baseCurrency} />}
+          </div>
+        }
       />
 
+      {rows.length === 0 ? (
+        <Card className="p-5">
+          <EmptyState
+            title="No bank or card accounts yet"
+            description={
+              canEdit
+                ? "A Chart of Accounts entry alone isn't reconcilable — link one here to start importing statements and matching transactions."
+                : "Ask someone with banking access to link a Chart of Accounts entry here before reconciliation can be used."
+            }
+          />
+        </Card>
+      ) : (
       <Card className="p-5">
         <Table>
           <thead>
@@ -132,6 +152,7 @@ export default async function BankAccountsPage() {
           transaction arrived from a CSV, an OFX file or a live open-banking feed.
         </p>
       </Card>
+      )}
     </>
   );
 }
