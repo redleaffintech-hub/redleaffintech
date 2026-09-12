@@ -299,6 +299,25 @@ export function DocumentForm({
   const [secondDate, setSecondDate] = useState(
     initial?.secondDate ?? new Date(Date.now() + defaultTermsDays * 86_400_000).toISOString().slice(0, 10),
   );
+
+  /**
+   * Moving the issue date shifts the second date by the same number of days,
+   * so a due date (or a quote's "valid until") set by terms — or by hand —
+   * keeps its length instead of freezing at whatever it was calculated from
+   * the moment the party was selected or the form was opened.
+   */
+  function handleIssueDateChange(nextIssueDate: string) {
+    if (config.secondDateLabel) {
+      const oldIssue = Date.parse(issueDate);
+      const oldSecond = Date.parse(secondDate);
+      const newIssue = Date.parse(nextIssueDate);
+      if (!Number.isNaN(oldIssue) && !Number.isNaN(oldSecond) && !Number.isNaN(newIssue)) {
+        const termDays = Math.round((oldSecond - oldIssue) / 86_400_000);
+        setSecondDate(new Date(newIssue + termDays * 86_400_000).toISOString().slice(0, 10));
+      }
+    }
+    setIssueDate(nextIssueDate);
+  }
   const [taxInclusive, setTaxInclusive] = useState(initial?.taxInclusive ?? defaultTaxInclusive);
   const [memo, setMemo] = useState(initial?.memo ?? "");
   const [reference, setReference] = useState(initial?.reference ?? "");
@@ -665,7 +684,7 @@ export function DocumentForm({
               <input
                 type="date"
                 value={issueDate}
-                onChange={(event) => setIssueDate(event.target.value)}
+                onChange={(event) => handleIssueDateChange(event.target.value)}
                 className={inputClass}
               />
             </Field>
