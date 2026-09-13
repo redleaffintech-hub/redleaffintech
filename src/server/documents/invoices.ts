@@ -409,14 +409,23 @@ export async function postInvoiceInTx(
       totalCogsCents += totalCostCents;
     }
 
+    // An item with no recorded cost yet (never received into inventory at a
+    // cost, e.g. sold before its first purchase was ever posted) computes a
+    // real, correct $0 of COGS — but a $0/$0 debit-credit pair is not a
+    // journal line, it's nothing, and planPosting rejects a zero-amount line
+    // outright. Drop it rather than let a costless item block the invoice.
     cogsLines = [
-      ...[...cogsByAccount.entries()].map(([accountId, cents]) => ({
-        accountId,
-        debitCents: cents,
-        description: `Cost of goods sold — ${invoice.number}`,
-        customerId: invoice.customerId,
-      })),
-      { accountId: inventoryAsset.id, creditCents: totalCogsCents, description: `Stock sold — ${invoice.number}`, customerId: invoice.customerId },
+      ...[...cogsByAccount.entries()]
+        .filter(([, cents]) => cents !== 0)
+        .map(([accountId, cents]) => ({
+          accountId,
+          debitCents: cents,
+          description: `Cost of goods sold — ${invoice.number}`,
+          customerId: invoice.customerId,
+        })),
+      ...(totalCogsCents !== 0
+        ? [{ accountId: inventoryAsset.id, creditCents: totalCogsCents, description: `Stock sold — ${invoice.number}`, customerId: invoice.customerId }]
+        : []),
     ];
   }
 
