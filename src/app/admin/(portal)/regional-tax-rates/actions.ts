@@ -240,4 +240,47 @@ export async function setRateActiveAction(formData: FormData) {
   });
 }
 
+/**
+ * Permanent delete — allowed only for a rate that has never come into force.
+ *
+ * A rate already in effect may have been the one a company's TaxCode
+ * materialised from; deleting the reference row afterward would not rewrite
+ * that TaxCode (it's a fully independent, already-snapshotted copy — see
+ * server/tax/regional-rates.ts), but it would erase this table's own
+ * historical record of what was ever in force, which the audit log and every
+ * "what did Ontario charge in 2019" question depend on. `endRateAction`
+ * (close the range) is the only way to retire a published rate; this is for
+ * undoing a typo before it ever went live.
+ */
+export async function deleteRateAction(formData: FormData) {
+  return runAdminAction(formData, async (actor) => {
+    const id = str(formData, "id");
+    const reason = optionalStr(formData, "reason") ?? null;
+    if (!id) return { error: "Missing rate id." };
+    if (!reason) return { error: "Give a reason for deleting this rate." };
+
+    const existing = await db.regionalTaxRate.findUnique({ where: { id } });
+    if (!existing) return { error: "That rate no longer exists." };
+    if (existing.effectiveFrom <= new Date()) {
+      return { error: "This rate is already in effect and cannot be deleted. End it instead — that keeps the history intact." };
+    }
+
+    await db.regionalTaxRate.delete({ where: { id } });
+
+    await recordPlatformAudit({
+      actorUserId: actor.id,
+      actorEmail: actor.email,
+      action: "DELETE",
+      entityType: "RegionalTaxRate",
+      entityId: id,
+      summary: `Unpublished regional tax rate deleted — ${summariseRate(existing as unknown as RegionalRateInput)}`,
+      reason,
+      before: existing,
+    });
+
+    revalidatePath("/admin/regional-tax-rates");
+    return { ok: true, message: "Rate deleted." };
+  });
+}
+
 export { combinedRateMicro };

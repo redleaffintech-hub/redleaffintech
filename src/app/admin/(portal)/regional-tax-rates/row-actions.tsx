@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { ConfirmAction } from "@/components/admin/forms";
-import { endRateAction, setRateActiveAction } from "./actions";
+import { deleteRateAction, endRateAction, setRateActiveAction } from "./actions";
 
 export function RegionalTaxRateRowActions({
   csrfToken,
@@ -20,12 +20,29 @@ export function RegionalTaxRateRowActions({
   return (
     <div className="flex flex-wrap justify-end gap-1.5">
       {isFuture && (
-        <Link
-          href={`/admin/regional-tax-rates/${rateId}/edit`}
-          className="inline-flex h-9 items-center rounded-lg border border-paper-400 bg-white px-3.5 text-[0.8125rem] font-medium text-ink-800 hover:bg-paper-100"
-        >
-          Edit
-        </Link>
+        <>
+          <Link
+            href={`/admin/regional-tax-rates/${rateId}/edit`}
+            className="inline-flex h-9 items-center rounded-lg border border-paper-400 bg-white px-3.5 text-[0.8125rem] font-medium text-ink-800 hover:bg-paper-100"
+          >
+            Edit
+          </Link>
+
+          {/* Only ever offered for a rate that hasn't taken effect yet — once
+              published, End (close its range) is the only way to retire one,
+              so the history stays intact. */}
+          <ConfirmAction
+            action={deleteRateAction}
+            csrfToken={csrfToken}
+            label="Delete"
+            title={`Delete the future rate for ${regionLabel}`}
+            description="Permanent — this rate has never taken effect, so nothing depends on it. Choose End instead for a rate already in force."
+            confirmLabel="Delete rate"
+            reasonRequired
+            reasonLabel="Reason"
+            hidden={{ id: rateId }}
+          />
+        </>
       )}
 
       <ConfirmAction

@@ -1,26 +1,46 @@
 import { db } from "@/lib/db";
-import { requireCapability } from "@/server/auth/context";
-import { CAPABILITIES } from "@/lib/permissions";
-import { SYSTEM_ACCOUNTS } from "@/lib/enums";
+import { requireVisible } from "@/server/auth/context";
+import { CAPABILITIES, can } from "@/lib/permissions";
+import { SYSTEM_ACCOUNTS, ITEM_UNITS } from "@/lib/enums";
 import { today } from "@/lib/dates";
 import { Card, EmptyState, Money, PageHeader, Table, Td, Th, Tr } from "@/components/ui";
 import { ReconciliationBanner } from "@/components/report-shell";
 import { AdjustStockButton } from "./adjust-stock-dialog";
 import { inventoryAdjustmentFormOptions } from "./actions";
+import { itemUsageCounts } from "@/server/documents/item-usage";
+import { CatalogueRowActions, NewItemButton, type CatalogueOptions } from "../company/products-services/catalogue-client";
 
 export const metadata = { title: "Inventory" };
 
 export default async function InventoryPage() {
-  const { company } = await requireCapability(CAPABILITIES.REPORTS);
+  const { company, role } = await requireVisible(CAPABILITIES.REPORTS);
+  // Adding, editing and deleting a catalogue item is a company-settings
+  // change (it's the same action products-services uses) — a role that can
+  // only view reports still gets the read + adjust-stock view underneath.
+  const manage = can(role, CAPABILITIES.COMPANY_SETTINGS);
 
-  const [items, inventoryAsset, { accounts }] = await Promise.all([
+  const [items, inventoryAsset, { accounts }, usage, glAccounts, taxCodes] = await Promise.all([
     db.serviceItem.findMany({
       where: { companyId: company.id, trackInventory: true },
       orderBy: [{ isActive: "desc" }, { code: "asc" }],
-      select: { id: true, code: true, name: true, unit: true, isActive: true, quantityOnHandMilli: true, averageCostCents: true },
     }),
     db.account.findFirst({ where: { companyId: company.id, systemKey: SYSTEM_ACCOUNTS.INVENTORY_ASSET } }),
     inventoryAdjustmentFormOptions(),
+    manage ? itemUsageCounts(company.id) : Promise.resolve(new Map<string, number>()),
+    manage
+      ? db.account.findMany({
+          where: { companyId: company.id, isActive: true, type: { in: ["REVENUE", "EXPENSE", "ASSET"] } },
+          select: { id: true, code: true, name: true, type: true },
+          orderBy: { code: "asc" },
+        })
+      : Promise.resolve([]),
+    manage
+      ? db.taxCode.findMany({
+          where: { companyId: company.id, isActive: true },
+          select: { id: true, code: true, name: true },
+          orderBy: { code: "asc" },
+        })
+      : Promise.resolve([]),
   ]);
 
   const rows = items.map((item) => ({
@@ -39,12 +59,29 @@ export default async function InventoryPage() {
   }
   const differenceCents = totalValueCents - glBalanceCents;
 
+  const catalogueOptions: CatalogueOptions = {
+    incomeAccounts: glAccounts.filter((a) => a.type === "REVENUE"),
+    expenseAccounts: glAccounts.filter((a) => a.type === "EXPENSE" || a.type === "ASSET"),
+    taxCodes,
+    units: [...ITEM_UNITS],
+    currency: company.baseCurrency,
+  };
+
   return (
     <>
       <PageHeader
         title="Inventory"
         breadcrumb={[{ label: "Inventory" }]}
         description="Stock on hand at weighted-average cost. A bill for a tracked item adds stock; an invoice sells it and posts cost of goods sold automatically."
+        actions={
+          manage ? (
+            <NewItemButton
+              options={catalogueOptions}
+              initial={{ type: "PRODUCT", trackInventory: true, unit: "each" }}
+              label="Add inventory item"
+            />
+          ) : undefined
+        }
       />
 
       <ReconciliationBanner
@@ -61,7 +98,20 @@ export default async function InventoryPage() {
         {rows.length === 0 ? (
           <EmptyState
             title="No tracked items yet"
-            description={'Turn on "Track inventory" on a product in Products & services to start counting its stock here.'}
+            description={
+              manage
+                ? 'Add an item here, or turn on "Track inventory" on an existing product in Products & services.'
+                : 'Turn on "Track inventory" on a product in Products & services to start counting its stock here.'
+            }
+            action={
+              manage ? (
+                <NewItemButton
+                  options={catalogueOptions}
+                  initial={{ type: "PRODUCT", trackInventory: true, unit: "each" }}
+                  label="Add inventory item"
+                />
+              ) : undefined
+            }
           />
         ) : (
           <Table>
@@ -72,7 +122,7 @@ export default async function InventoryPage() {
                 <Th width="8rem" align="right">On hand</Th>
                 <Th width="8rem" align="right">Avg cost</Th>
                 <Th width="8rem" align="right">Value</Th>
-                <Th width="7rem" align="right">{""}</Th>
+                <Th width={manage ? "14rem" : "7rem"} align="right">{""}</Th>
               </tr>
             </thead>
             <tbody>
@@ -86,7 +136,33 @@ export default async function InventoryPage() {
                   <Td align="right"><Money cents={item.averageCostCents} currency={company.baseCurrency} /></Td>
                   <Td align="right"><Money cents={item.valueCents} currency={company.baseCurrency} bold /></Td>
                   <Td align="right">
-                    <AdjustStockButton itemId={item.id} itemName={`${item.code} — ${item.name}`} averageCostCents={item.averageCostCents} accounts={accounts} />
+                    <span className="inline-flex items-center gap-1">
+                      <AdjustStockButton itemId={item.id} itemName={`${item.code} — ${item.name}`} averageCostCents={item.averageCostCents} accounts={accounts} />
+                      {manage && (
+                        <CatalogueRowActions
+                          item={{
+                            id: item.id,
+                            type: item.type,
+                            code: item.code,
+                            name: item.name,
+                            description: item.description ?? "",
+                            unit: item.unit,
+                            unitPriceCents: item.unitPriceCents,
+                            discountPercentMicro: item.discountPercentMicro,
+                            incomeAccountId: item.incomeAccountId ?? "",
+                            expenseAccountId: item.expenseAccountId ?? "",
+                            taxCodeId: item.taxCodeId ?? "",
+                            purchaseTaxCodeId: item.purchaseTaxCodeId ?? "",
+                            isActive: item.isActive,
+                            trackInventory: item.trackInventory,
+                            quantityOnHandMilli: item.quantityOnHandMilli,
+                            averageCostCents: item.averageCostCents,
+                          }}
+                          options={catalogueOptions}
+                          usedOnDocuments={usage.get(item.id) ?? 0}
+                        />
+                      )}
+                    </span>
                   </Td>
                 </Tr>
               ))}

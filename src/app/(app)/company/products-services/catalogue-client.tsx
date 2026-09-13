@@ -57,15 +57,24 @@ const BLANK: CatalogueItem = {
   averageCostCents: 0,
 };
 
-export function NewItemButton({ options }: { options: CatalogueOptions }) {
+export function NewItemButton({
+  options,
+  initial,
+  label = "Add product or service",
+}: {
+  options: CatalogueOptions;
+  /** Pre-fills the dialog — e.g. the Inventory page opens it already set to a tracked product. */
+  initial?: Partial<CatalogueItem>;
+  label?: string;
+}) {
   const [open, setOpen] = useState(false);
   return (
     <>
       <Button variant="primary" onClick={() => setOpen(true)}>
         <Icon name="plus" className="h-3.5 w-3.5" />
-        Add product or service
+        {label}
       </Button>
-      {open && <ItemDialog item={BLANK} options={options} onClose={() => setOpen(false)} />}
+      {open && <ItemDialog item={{ ...BLANK, ...initial }} options={options} onClose={() => setOpen(false)} />}
     </>
   );
 }

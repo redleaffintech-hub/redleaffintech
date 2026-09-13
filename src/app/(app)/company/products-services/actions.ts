@@ -147,6 +147,7 @@ export async function createItemAction(formData: FormData) {
   });
 
   revalidatePath("/company/products-services");
+  revalidatePath("/inventory");
   return { ok: true, id: item.id };
 }
 
@@ -180,6 +181,7 @@ export async function updateItemAction(itemId: string, formData: FormData) {
   });
 
   revalidatePath("/company/products-services");
+  revalidatePath("/inventory");
   return { ok: true };
 }
 
@@ -203,6 +205,7 @@ export async function setItemActiveAction(itemId: string, isActive: boolean) {
   });
 
   revalidatePath("/company/products-services");
+  revalidatePath("/inventory");
   return { ok: true };
 }
 
@@ -262,5 +265,6 @@ export async function deleteItemAction(itemId: string) {
   });
 
   revalidatePath("/company/products-services");
+  revalidatePath("/inventory");
   return { ok: true };
 }
