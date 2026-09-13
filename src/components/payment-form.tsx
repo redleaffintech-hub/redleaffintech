@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import clsx from "clsx";
 import { Button, Field, inputClass } from "@/components/ui";
@@ -68,14 +68,25 @@ export function PaymentForm({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  function loadDocuments(id: string) {
-    setPartyId(id);
-    setApplied({});
-    if (!id) return setDocuments([]);
+  // Fetches the selected party's open documents fresh whenever the selection
+  // changes — including on mount, for whichever party the dropdown defaults
+  // to. Without this running on mount too, the pre-selected default party
+  // (the first one in the list, alphabetically — never chosen by an onChange
+  // the user never fired) would show "no open invoices" regardless of what it
+  // actually has, while every party the user actively picked worked fine.
+  useEffect(() => {
     startLoadingDocs(async () => {
-      setDocuments(await openDocumentsAction(id));
+      setApplied({});
+      if (!partyId) {
+        setDocuments([]);
+        return;
+      }
+      setDocuments(await openDocumentsAction(partyId));
     });
-  }
+    // openDocumentsAction is a stable server-action reference; only a change
+    // of party should re-run this.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [partyId]);
 
   const amountCents = safeCents(amount);
   const appliedCents = Object.values(applied).reduce((s, v) => s + safeCents(v), 0);
@@ -127,7 +138,7 @@ export function PaymentForm({
         <section className="rounded-[--radius-card] border border-paper-300 bg-white p-5">
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label={partyLabel} required>
-              <select value={partyId} onChange={(event) => loadDocuments(event.target.value)} className={clsx(inputClass, "pr-8")}>
+              <select value={partyId} onChange={(event) => setPartyId(event.target.value)} className={clsx(inputClass, "pr-8")}>
                 {partyOptions.length === 0 && <option value="">No records yet</option>}
                 {partyOptions.map((party) => (
                   <option key={party.id} value={party.id}>{party.name}</option>
