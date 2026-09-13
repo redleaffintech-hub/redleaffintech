@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import clsx from "clsx";
 import { computeDocument, type RawLine } from "@/server/documents/lines";
@@ -28,6 +28,7 @@ import {
 import { DocumentPreview, type PreviewCompany } from "@/components/document-preview";
 import { CustomerForm, type CustomerFormTaxCode } from "@/components/customer-form";
 import { VendorForm, type VendorFormTaxCode } from "@/components/vendor-form";
+import { addProvincialTaxCodesAction } from "@/app/(app)/tax/actions";
 
 /**
  * The line-based document editor: invoices, sales quotes, customer credit notes
@@ -277,7 +278,10 @@ export function DocumentForm({
   // leaving the form.
   // Tax codes are configured only by an administrator in Tax Centre → Tax codes;
   // this form selects from them and never creates one.
-  const [taxCodes] = useState<TaxCodeSpec[]>(taxCodesProp);
+  const [taxCodes, setTaxCodes] = useState<TaxCodeSpec[]>(taxCodesProp);
+  const [addingCodesFor, setAddingCodesFor] = useState<string | null>(null);
+  const [addCodesError, setAddCodesError] = useState<string | null>(null);
+  const [, startAddCodes] = useTransition();
   const [partyList, setPartyList] = useState<PartyOption[]>(parties);
 
   /**
@@ -430,6 +434,33 @@ export function DocumentForm({
         taxCodeId: resolveLineCode(codes, nextProvince, line.taxCodeId),
       })),
     );
+  }
+
+  /**
+   * Materialise the missing province's published codes without leaving this
+   * half-written document — the whole reason addProvincialTaxCodesAction only
+   * ever pulls from Red Leaf's own published rates (never a custom one) is so
+   * this can be safe to offer inline, right where the gap was noticed.
+   */
+  function addMissingCodes(province: string) {
+    setAddingCodesFor(province);
+    setAddCodesError(null);
+    startAddCodes(async () => {
+      try {
+        const result = await addProvincialTaxCodesAction(province);
+        if (result?.error) {
+          setAddCodesError(result.error);
+        } else if (result?.taxCodes) {
+          const next = [...taxCodes, ...(result.taxCodes as unknown as TaxCodeSpec[])];
+          setTaxCodes(next);
+          repointLines(placeOfSupply, next);
+        }
+      } catch {
+        setAddCodesError("Couldn't add those codes — check that you have tax-settings access on this company.");
+      } finally {
+        setAddingCodesFor(null);
+      }
+    });
   }
 
   function selectParty(id: string) {
@@ -777,11 +808,22 @@ export function DocumentForm({
                     <p className="flex items-start gap-2 text-[0.8125rem] leading-5 text-ink-800">
                       <Icon name="warning" className="mt-0.5 h-4 w-4 shrink-0 text-caution" />
                       <span>
-                        This company has no sales tax code for {provinceName(placeOfSupply!)}. Charging the federal
-                        rate alone would under-collect on a supply delivered there. An administrator must add the
-                        code under Tax Centre → Tax codes before this document can be rated correctly.
+                        This company has no sales tax code for {provinceName(placeOfSupply!)} yet. Charging the
+                        federal rate alone would under-collect on a supply delivered there — add Red
+                        Leaf&rsquo;s published codes for {provinceName(placeOfSupply!)} now, without losing this
+                        document.
                       </span>
                     </p>
+                    <div className="mt-2.5 flex items-center gap-2 pl-6">
+                      <Button
+                        type="button"
+                        disabled={addingCodesFor === placeOfSupply}
+                        onClick={() => addMissingCodes(placeOfSupply!)}
+                      >
+                        {addingCodesFor === placeOfSupply ? "Adding…" : `Add ${provinceName(placeOfSupply!)}'s tax codes`}
+                      </Button>
+                      {addCodesError && <span className="text-[0.75rem] text-negative">{addCodesError}</span>}
+                    </div>
                   </div>
                 ) : (
                   <p className="text-[0.75rem] text-muted-ink">
