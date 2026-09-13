@@ -4,7 +4,7 @@ import { CAPABILITIES, can } from "@/lib/permissions";
 import { formatDate } from "@/lib/dates";
 import { formatRate } from "@/lib/money";
 import { Badge, Card, CardHeader, EmptyState, PageHeader, Table, Td, Th, Tr } from "@/components/ui";
-import { TaxCodeForm, TaxCodeRowActions } from "./tax-code-form";
+import { AddProvinceCodes, TaxCodeRowActions } from "./tax-code-form";
 
 export const metadata = { title: "Tax codes" };
 
@@ -135,7 +135,7 @@ export default async function TaxCodesPage() {
         </Card>
 
         {editable ? (
-          <TaxCodeForm province={company.province} />
+          <AddProvinceCodes homeProvince={company.province} />
         ) : (
           <Card>
             <CardHeader title="Read only" subtitle="Your role can view tax setup but not change it" />

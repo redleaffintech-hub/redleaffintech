@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { addDays, addMonths, toUtcDay, utcDate } from "@/lib/dates";
-import { PROVINCES, SYSTEM_ACCOUNTS, TAX_KINDS } from "@/lib/enums";
+import { PROVINCES } from "@/lib/enums";
 import { CAPABILITIES } from "@/lib/permissions";
 import { recordAudit, requireCapability } from "@/server/auth/context";
 import { setTaxPeriodStatus } from "@/server/reports/tax";
@@ -150,139 +150,6 @@ export async function deleteTaxPeriodAction(periodId: string) {
 }
 
 // ── Tax codes ───────────────────────────────────────────────────────────────
-
-/**
- * Where each kind of tax lands in the ledger. Sales tax is a liability until
- * remitted; GST/HST and QST paid on purchases are recoverable input credits,
- * while PST/RST is not — it stays in the expense (§7).
- */
-const ACCOUNT_KEYS: Record<string, { liability: string; recoverable: string | null }> = {
-  GST: { liability: SYSTEM_ACCOUNTS.GST_HST_PAYABLE, recoverable: SYSTEM_ACCOUNTS.GST_HST_RECOVERABLE },
-  HST: { liability: SYSTEM_ACCOUNTS.GST_HST_PAYABLE, recoverable: SYSTEM_ACCOUNTS.GST_HST_RECOVERABLE },
-  QST: { liability: SYSTEM_ACCOUNTS.QST_PAYABLE, recoverable: SYSTEM_ACCOUNTS.QST_RECOVERABLE },
-  PST: { liability: SYSTEM_ACCOUNTS.PST_PAYABLE, recoverable: null },
-  RST: { liability: SYSTEM_ACCOUNTS.PST_PAYABLE, recoverable: null },
-};
-
-/** "13" | "9.975" -> rate * 1_000_000, exactly, without touching a float. */
-function toRateMicro(input: string): number {
-  const raw = input.trim().replace("%", "");
-  if (!/^\d{1,2}(\.\d{1,4})?$/.test(raw)) {
-    throw new Error(`"${input}" is not a valid rate. Use a percentage such as 13 or 9.975.`);
-  }
-  const [whole, frac = ""] = raw.split(".");
-  return Number(BigInt(whole) * 10_000n + BigInt(frac.padEnd(4, "0")));
-}
-
-const componentSchema = z.object({
-  kind: z.enum(TAX_KINDS),
-  rate: z.string().min(1),
-  compound: z.string().optional(),
-});
-
-const codeSchema = z.object({
-  code: z.string().trim().min(2).max(20).regex(/^[A-Za-z0-9-]+$/, "Use letters, numbers and dashes only."),
-  name: z.string().trim().min(2).max(80),
-  jurisdiction: z.string().trim().min(2).max(2),
-  effectiveFrom: z.string().min(10),
-  treatment: z.enum(["STANDARD", "ZERO_RATED", "EXEMPT"]),
-  appliesTo: z.enum(["BOTH", "SALES", "PURCHASES"]),
-});
-
-export async function createTaxCodeAction(formData: FormData) {
-  const { company, user } = await requireCapability(CAPABILITIES.TAX_SETTINGS);
-  const parsed = codeSchema.safeParse(Object.fromEntries(formData));
-  if (!parsed.success) {
-    return { error: parsed.error.issues[0]?.message ?? "Check the tax code details and try again." };
-  }
-  const input = parsed.data;
-  const code = input.code.toUpperCase();
-
-  const clash = await db.taxCode.findFirst({ where: { companyId: company.id, code } });
-  if (clash) return { error: `Tax code ${code} already exists.` };
-
-  // Component rows arrive as parallel kind/rate fields, one set per row.
-  const components: { kind: string; rateMicro: number; compound: boolean }[] = [];
-  if (input.treatment === "STANDARD") {
-    const kinds = formData.getAll("kind");
-    const rates = formData.getAll("rate");
-    const compounds = formData.getAll("compound");
-    for (let i = 0; i < kinds.length; i++) {
-      const row = componentSchema.safeParse({
-        kind: String(kinds[i] ?? ""),
-        rate: String(rates[i] ?? ""),
-        compound: String(compounds[i] ?? ""),
-      });
-      if (!row.success) continue;
-      if (!row.data.rate.trim()) continue;
-      try {
-        const rateMicro = toRateMicro(row.data.rate);
-        if (rateMicro === 0) continue;
-        components.push({ kind: row.data.kind, rateMicro, compound: row.data.compound === "on" });
-      } catch (error) {
-        return { error: (error as Error).message };
-      }
-    }
-    if (components.length === 0) {
-      return { error: "A standard-rated code needs at least one component with a rate." };
-    }
-  }
-
-  const accounts = await db.account.findMany({
-    where: { companyId: company.id, systemKey: { not: null } },
-    select: { id: true, systemKey: true },
-  });
-  const byKey = new Map(accounts.map((a) => [a.systemKey!, a.id]));
-
-  for (const component of components) {
-    const keys = ACCOUNT_KEYS[component.kind];
-    if (!keys || !byKey.get(keys.liability)) {
-      return { error: `This company has no ${component.kind} control account. Add it to the chart of accounts first.` };
-    }
-  }
-
-  await db.taxCode.create({
-    data: {
-      companyId: company.id,
-      code,
-      name: input.name,
-      jurisdiction: input.jurisdiction.toUpperCase(),
-      isZeroRated: input.treatment === "ZERO_RATED",
-      isExempt: input.treatment === "EXEMPT",
-      appliesToSales: input.appliesTo !== "PURCHASES",
-      appliesToPurchases: input.appliesTo !== "SALES",
-      effectiveFrom: toUtcDay(input.effectiveFrom),
-      components: {
-        create: components.map((component, order) => {
-          const keys = ACCOUNT_KEYS[component.kind];
-          return {
-            name: component.kind,
-            kind: component.kind,
-            rateMicro: component.rateMicro,
-            isRecoverable: keys.recoverable !== null,
-            compoundOnPrevious: component.compound,
-            liabilityAccountId: byKey.get(keys.liability) ?? null,
-            recoverableAccountId: keys.recoverable ? (byKey.get(keys.recoverable) ?? null) : null,
-            sortOrder: order,
-          };
-        }),
-      },
-    },
-  });
-
-  await recordAudit({
-    companyId: company.id,
-    userId: user.id,
-    action: "CREATE",
-    entityType: "TaxCode",
-    summary: `Created tax code ${code} — ${input.name}`,
-    metadata: { components },
-  });
-
-  revalidatePath("/tax/codes");
-  revalidatePath("/tax");
-  return { ok: true };
-}
 
 /**
  * Add the published codes for another province, from the invoice screen.
