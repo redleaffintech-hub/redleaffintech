@@ -6,11 +6,12 @@ import { CAPABILITIES } from "@/lib/permissions";
 import { partyStatement } from "@/server/reports/aging";
 import { fiscalYearOf, fiscalYearRange, isoDate, toUtcDay, today, formatDate } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
-import { Card, CardHeader, DefinitionList, LinkButton, Money, PageHeader } from "@/components/ui";
+import { Card, CardHeader, DefinitionList, LinkButton, PageHeader } from "@/components/ui";
 import { RangePicker, PrintButton } from "@/components/filter-bar";
 import { ExportCsvButton } from "@/components/export-csv-button";
 import { DocumentList, PartyStatement } from "@/components/party-views";
 import { Icon } from "@/components/shell/icons";
+import { CustomerReceipts } from "./customer-receipts";
 
 export default async function CustomerDetailPage({ params, searchParams }: PageProps<"/sales/customers/[id]">) {
   const { company } = await requireCapability(CAPABILITIES.INVOICES);
@@ -28,7 +29,7 @@ export default async function CustomerDetailPage({ params, searchParams }: PageP
   const from = toUtcDay(typeof search.from === "string" ? search.from : isoDate(defaults.start));
   const to = toUtcDay(typeof search.to === "string" ? search.to : isoDate(today()));
 
-  const [statement, invoices, payments, companyProfile, nextOpenInvoice] = await Promise.all([
+  const [statement, invoices, payments, companyProfile, nextOpenInvoice, invoiceTotals, unappliedTotal] = await Promise.all([
     partyStatement(company.id, { customerId: customer.id }, from, to),
     db.invoice.findMany({
       where: { companyId: company.id, customerId: customer.id },
@@ -57,13 +58,22 @@ export default async function CustomerDetailPage({ params, searchParams }: PageP
       orderBy: { dueDate: "asc" },
       select: { dueDate: true },
     }),
+    // Uncapped (issue 7) — the lists above are capped at 25/10 rows for
+    // display, so summing them under-counts a customer with more history
+    // than that. These aggregate over every invoice/receipt regardless.
+    db.invoice.aggregate({
+      where: { companyId: company.id, customerId: customer.id, status: { notIn: ["DRAFT", "VOID"] } },
+      _sum: { balanceCents: true, totalCents: true },
+    }),
+    db.payment.aggregate({
+      where: { companyId: company.id, customerId: customer.id, status: "POSTED" },
+      _sum: { unappliedCents: true },
+    }),
   ]);
 
-  const outstandingCents = invoices.reduce((s, i) => s + i.balanceCents, 0);
-  const lifetimeCents = invoices
-    .filter((i) => i.status !== "VOID" && i.status !== "DRAFT")
-    .reduce((s, i) => s + i.totalCents, 0);
-  const unappliedCents = payments.reduce((s, p) => s + p.unappliedCents, 0);
+  const outstandingCents = invoiceTotals._sum.balanceCents ?? 0;
+  const lifetimeCents = invoiceTotals._sum.totalCents ?? 0;
+  const unappliedCents = unappliedTotal._sum.unappliedCents ?? 0;
 
   // Account summary, derived from the same statement rows so it can never
   // disagree with the transaction table or the closing balance.
@@ -110,7 +120,10 @@ export default async function CustomerDetailPage({ params, searchParams }: PageP
     },
     statementNumber: `STMT-${isoDate(to).replace(/-/g, "")}`,
     statementDate: to,
-    customerRef: customer.id,
+    // The customer's human-readable display code (issue 9), not the internal
+    // cuid — a code that hasn't been backfilled yet falls back to the id so
+    // the statement still prints something rather than a blank field.
+    customerRef: customer.displayCode ?? customer.id,
     paymentDueDate,
     summary: {
       previousBalanceCents: statement.openingCents,
@@ -130,13 +143,16 @@ export default async function CustomerDetailPage({ params, searchParams }: PageP
           { label: "Customers", href: "/sales/customers" },
           { label: customer.name },
         ]}
-        description={`Net ${customer.paymentTermsDays} terms · default tax ${customer.taxCode?.code ?? "none"}`}
+        description={
+          `${customer.displayCode ? `${customer.displayCode} · ` : ""}` +
+          `Net ${customer.paymentTermsDays} terms · default tax ${customer.taxCode?.code ?? "none"}`
+        }
         actions={
           <span className="no-print flex flex-wrap items-center gap-2">
             <PrintButton label="Print statement" />
             <ExportCsvButton report="customer-statement" params={{ party: customer.id }} />
             <LinkButton href={`/sales/customers/${customer.id}/edit`}>Edit customer</LinkButton>
-            <LinkButton href="/sales/invoices/new" variant="primary">
+            <LinkButton href={`/sales/invoices/new?customerId=${customer.id}`} variant="primary">
               <Icon name="plus" className="h-3.5 w-3.5" />
               New invoice
             </LinkButton>
@@ -144,10 +160,16 @@ export default async function CustomerDetailPage({ params, searchParams }: PageP
         }
       />
 
-      <div className="no-print mb-4 grid gap-4 sm:grid-cols-3">
-        <Stat label="Outstanding balance" value={outstandingCents} emphasis currency={currency} />
-        <Stat label="Billed to date" value={lifetimeCents} currency={currency} />
+      <div className="no-print mb-4 grid gap-4 sm:grid-cols-4">
+        <Stat label="Gross open invoices" value={outstandingCents} emphasis currency={currency} />
         <Stat label="Unapplied credit" value={unappliedCents} currency={currency} />
+        <Stat
+          label="Net account balance"
+          value={statement.closingCents}
+          currency={currency}
+          hint="Open invoices minus unapplied credit — netting these never settles an invoice by itself."
+        />
+        <Stat label="Billed to date" value={lifetimeCents} currency={currency} />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[1fr_19rem] lg:items-start">
@@ -230,24 +252,17 @@ export default async function CustomerDetailPage({ params, searchParams }: PageP
 
           <Card>
             <CardHeader title="Recent receipts" />
-            {payments.length === 0 ? (
-              <p className="mt-2 text-[0.8125rem] text-muted-ink">No payments received yet.</p>
-            ) : (
-              <ul className="mt-3 divide-y divide-paper-200">
-                {payments.map((payment) => (
-                  <li key={payment.id} className="flex items-center gap-2 py-2 text-[0.8125rem]">
-                    <span className="min-w-0 flex-1">
-                      <span className="block font-medium text-ink-900">{payment.number}</span>
-                      <span className="text-[0.75rem] text-muted-ink">
-                        {formatDate(payment.date)} · {payment.method}
-                        {payment.unappliedCents > 0 && ` · ${formatMoney(payment.unappliedCents, { currency })} unapplied`}
-                      </span>
-                    </span>
-                    <Money cents={payment.amountCents} bold />
-                  </li>
-                ))}
-              </ul>
-            )}
+            <CustomerReceipts
+              customerId={customer.id}
+              payments={payments.map((p) => ({
+                id: p.id,
+                number: p.number,
+                date: p.date.toISOString(),
+                method: p.method,
+                amountCents: p.amountCents,
+                unappliedCents: p.unappliedCents,
+              }))}
+            />
           </Card>
         </div>
       </div>
@@ -255,11 +270,24 @@ export default async function CustomerDetailPage({ params, searchParams }: PageP
   );
 }
 
-function Stat({ label, value, emphasis, currency }: { label: string; value: number; emphasis?: boolean; currency: string }) {
+function Stat({
+  label,
+  value,
+  emphasis,
+  currency,
+  hint,
+}: {
+  label: string;
+  value: number;
+  emphasis?: boolean;
+  currency: string;
+  hint?: string;
+}) {
   return (
     <div className={`rounded-[--radius-card] border bg-white p-4 ${emphasis ? "border-ink-900/15" : "border-paper-300"}`}>
       <p className="text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-muted-ink">{label}</p>
       <p className="tnum mt-1 text-[1.375rem] font-semibold tracking-[-0.02em] text-ink-950">{formatMoney(value, { currency })}</p>
+      {hint && <p className="mt-1 text-[0.6875rem] leading-4 text-muted-ink">{hint}</p>}
     </div>
   );
 }

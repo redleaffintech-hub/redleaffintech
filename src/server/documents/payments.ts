@@ -46,6 +46,73 @@ export async function recordPayment(input: PaymentInput) {
   return db.$transaction((tx) => recordPaymentInTx(tx, input));
 }
 
+/**
+ * Validate a proposed set of allocations against the party they're being
+ * applied for (issue 7, 15 Sep 2026 review). Every target document must
+ * belong to this company AND to this specific customer/vendor (not just any
+ * party in the company — this is what stops one customer's deposit landing
+ * on another customer's invoice), have room left, and not be targeted twice
+ * within the same request. Shared by recordPaymentInTx (a brand-new
+ * payment) and applyPayment (spending an existing one later), which
+ * previously validated inconsistently: the former checked invoice/bill
+ * balances but never creditNoteId at all; the latter checked neither.
+ */
+async function assertAllocationsValid(
+  tx: Tx,
+  companyId: string,
+  partyId: string | null | undefined,
+  allocations: AllocationInput[],
+) {
+  const seen = new Set<string>();
+  for (const allocation of allocations) {
+    if (allocation.amountCents <= 0) throw new Error("Allocation amounts must be positive.");
+    const target = allocation.invoiceId ?? allocation.billId ?? allocation.creditNoteId;
+    if (!target) throw new Error("Each allocation needs an invoice, bill, or credit note.");
+    if (seen.has(target)) throw new Error("The same document was targeted twice in one request.");
+    seen.add(target);
+
+    if (allocation.invoiceId) {
+      const invoice = await tx.invoice.findFirst({ where: { id: allocation.invoiceId, companyId } });
+      if (!invoice) throw new Error("Invoice not found in this company.");
+      if (partyId && invoice.customerId !== partyId) {
+        throw new Error(`Invoice ${invoice.number} does not belong to this customer.`);
+      }
+      if (invoice.status === "DRAFT") throw new Error(`Invoice ${invoice.number} is not posted yet.`);
+      if (invoice.status === "VOID") throw new Error(`Invoice ${invoice.number} is void.`);
+      if (allocation.amountCents > invoice.balanceCents) {
+        throw new Error(
+          `Cannot apply more than the ${invoice.number} balance of $${(invoice.balanceCents / 100).toFixed(2)}.`,
+        );
+      }
+    }
+    if (allocation.billId) {
+      const bill = await tx.bill.findFirst({ where: { id: allocation.billId, companyId } });
+      if (!bill) throw new Error("Bill not found in this company.");
+      if (partyId && bill.vendorId !== partyId) {
+        throw new Error(`Bill ${bill.number} does not belong to this vendor.`);
+      }
+      if (bill.status === "VOID") throw new Error(`Bill ${bill.number} is void.`);
+      if (allocation.amountCents > bill.balanceCents) {
+        throw new Error(
+          `Cannot apply more than the ${bill.number} balance of $${(bill.balanceCents / 100).toFixed(2)}.`,
+        );
+      }
+    }
+    if (allocation.creditNoteId) {
+      const credit = await tx.creditNote.findFirst({ where: { id: allocation.creditNoteId, companyId } });
+      if (!credit) throw new Error("Credit note not found in this company.");
+      if (credit.status === "VOID" || credit.status === "DRAFT") {
+        throw new Error(`Credit note ${credit.number} is not available to apply.`);
+      }
+      if (allocation.amountCents > credit.balanceCents) {
+        throw new Error(
+          `Cannot apply more than the ${credit.number} balance of $${(credit.balanceCents / 100).toFixed(2)}.`,
+        );
+      }
+    }
+  }
+}
+
 /** A party's open (partially or fully unpaid) documents, oldest due date first, for allocating a payment across. */
 export async function openDocumentsForParty(companyId: string, type: "RECEIPT" | "PAYMENT", partyId: string) {
   if (type === "RECEIPT") {
@@ -77,33 +144,14 @@ export async function recordPaymentInTx(tx: Tx, input: PaymentInput) {
     throw new Error("Allocations exceed the payment amount.");
   }
 
-  // Verify every target document belongs to this company and has room left.
-  for (const allocation of allocations) {
-    if (allocation.amountCents <= 0) throw new Error("Allocation amounts must be positive.");
-    if (allocation.invoiceId) {
-      const invoice = await tx.invoice.findFirst({
-        where: { id: allocation.invoiceId, companyId: input.companyId },
-      });
-      if (!invoice) throw new Error("Invoice not found in this company.");
-      if (invoice.status === "DRAFT") throw new Error(`Invoice ${invoice.number} is not posted yet.`);
-      if (allocation.amountCents > invoice.balanceCents) {
-        throw new Error(
-          `Cannot apply more than the ${invoice.number} balance of $${(invoice.balanceCents / 100).toFixed(2)}.`,
-        );
-      }
-    }
-    if (allocation.billId) {
-      const bill = await tx.bill.findFirst({
-        where: { id: allocation.billId, companyId: input.companyId },
-      });
-      if (!bill) throw new Error("Bill not found in this company.");
-      if (allocation.amountCents > bill.balanceCents) {
-        throw new Error(
-          `Cannot apply more than the ${bill.number} balance of $${(bill.balanceCents / 100).toFixed(2)}.`,
-        );
-      }
-    }
-  }
+  // Verify every target document belongs to this company AND this party,
+  // has room left, and isn't targeted twice in the same request.
+  await assertAllocationsValid(
+    tx,
+    input.companyId,
+    input.type === "RECEIPT" ? input.customerId : input.vendorId,
+    allocations,
+  );
 
   const controlKey =
     input.type === "RECEIPT" ? SYSTEM_ACCOUNTS.ACCOUNTS_RECEIVABLE : SYSTEM_ACCOUNTS.ACCOUNTS_PAYABLE;
@@ -204,6 +252,26 @@ export async function applyPayment(
       );
     }
 
+    await assertAllocationsValid(
+      tx,
+      companyId,
+      payment.type === "RECEIPT" ? payment.customerId : payment.vendorId,
+      allocations,
+    );
+
+    // Conditional UPDATE, not a plain write of the value just read: this is
+    // what stops two concurrent applyPayment calls from both reading the
+    // same unappliedCents and each spending it (issue 7's concurrent-request
+    // requirement) — Postgres serializes competing updates to the same row,
+    // and re-evaluates the WHERE clause against the current committed value.
+    const result = await tx.payment.updateMany({
+      where: { id: paymentId, companyId, unappliedCents: { gte: requested } },
+      data: { appliedCents: { increment: requested }, unappliedCents: { decrement: requested } },
+    });
+    if (result.count === 0) {
+      throw new Error(`Only $${(payment.unappliedCents / 100).toFixed(2)} of this payment is unapplied.`);
+    }
+
     await tx.paymentAllocation.createMany({
       data: allocations.map((a) => ({
         paymentId,
@@ -213,14 +281,6 @@ export async function applyPayment(
         amountCents: a.amountCents,
         date: new Date(),
       })),
-    });
-
-    await tx.payment.update({
-      where: { id: paymentId },
-      data: {
-        appliedCents: payment.appliedCents + requested,
-        unappliedCents: payment.unappliedCents - requested,
-      },
     });
 
     for (const a of allocations) {

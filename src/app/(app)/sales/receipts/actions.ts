@@ -126,6 +126,10 @@ export async function applyReceiptAction(paymentId: string, payload: string) {
     revalidatePath(`/sales/receipts/${paymentId}`);
     revalidatePath("/sales/receipts");
     revalidatePath("/sales/invoices");
+    // Covers every customer detail page (issue 7) — the specific customerId
+    // isn't known here without an extra lookup, and a layout revalidation is
+    // cheap for a low-frequency action like this.
+    revalidatePath("/sales/customers", "layout");
     revalidatePath("/");
     return { ok: true as const };
   } catch (error) {

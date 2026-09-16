@@ -57,3 +57,26 @@ export async function peekNumber(tx: Tx, companyId: string, sequence: Sequence):
 
   return `${company[prefix]}${company[next]}`;
 }
+
+/**
+ * Allocate the next customer display code (issue 9, 15 Sep 2026 review) —
+ * same atomic-increment shape as {@link nextNumber}, but zero-padded (e.g.
+ * `CUST-00042`), since a customer-facing code reads oddly without it while a
+ * document number does not. Call from every customer-creation path,
+ * including inline creation from a document form, inside that create's own
+ * transaction.
+ */
+export async function nextCustomerCode(tx: Tx, companyId: string): Promise<string> {
+  const company = await tx.company.update({
+    where: { id: companyId },
+    data: { nextCustomerCodeNumber: { increment: 1 } },
+    select: { customerCodePrefix: true, customerCodePadding: true, nextCustomerCodeNumber: true },
+  });
+  const n = company.nextCustomerCodeNumber - 1;
+  return `${company.customerCodePrefix}${String(n).padStart(company.customerCodePadding, "0")}`;
+}
+
+/** The customer code the next customer *would* get, without consuming it — for a settings-page live example. */
+export function previewCustomerCode(prefix: string, padding: number, next: number): string {
+  return `${prefix}${String(next).padStart(padding, "0")}`;
+}

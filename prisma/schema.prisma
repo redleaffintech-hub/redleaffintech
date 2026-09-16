@@ -65,22 +65,22 @@ model User {
 }
 
 model Session {
-  id        String   @id @default(cuid())
-  userId    String
-  token     String   @unique
+  id            String    @id @default(cuid())
+  userId        String
+  token         String    @unique
   /// APP for the accounting product, ADMIN for the platform portal. The two ride
   /// on different cookies and are never interchangeable: signing in to the app
   /// must not silently grant the admin portal, and vice versa.
-  scope     String   @default("APP")
-  userAgent String?
-  ipAddress String?
+  scope         String    @default("APP")
+  userAgent     String?
+  ipAddress     String?
   /// When step-up MFA was last satisfied on this session. High-risk admin
   /// actions require it to be recent, not merely present.
   mfaVerifiedAt DateTime?
   lastSeenAt    DateTime?
-  expiresAt DateTime
-  revokedAt DateTime?
-  createdAt DateTime @default(now())
+  expiresAt     DateTime
+  revokedAt     DateTime?
+  createdAt     DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -114,15 +114,15 @@ model FirmUser {
 
 /// The financial & legal boundary. Every tenant-owned row carries companyId.
 model Company {
-  id                   String   @id @default(cuid())
+  id                   String    @id @default(cuid())
   name                 String
   legalName            String?
   businessNumber       String?
   gstNumber            String?
   qstNumber            String?
   pstNumber            String?
-  province             String   @default("ON")
-  country              String   @default("CA")
+  province             String    @default("ON")
+  country              String    @default("CA")
   addressLine1         String?
   addressLine2         String?
   city                 String?
@@ -130,13 +130,13 @@ model Company {
   phone                String?
   email                String?
   website              String?
-  baseCurrency         String   @default("CAD")
-  fiscalYearStartMonth Int      @default(1)
-  locale               String   @default("en-CA")
+  baseCurrency         String    @default("CAD")
+  fiscalYearStartMonth Int       @default(1)
+  locale               String    @default("en-CA")
   industry             String?
   logoUrl              String?
   firmId               String?
-  isReadOnly           Boolean  @default(false)
+  isReadOnly           Boolean   @default(false)
   /// Self-service archive (distinct from `isReadOnly`, which the platform
   /// subscription lifecycle owns). Both are checked at the posting chokepoint,
   /// so restoring an archived company can never silently un-suspend one the
@@ -149,9 +149,9 @@ model Company {
   /// of whatever the assigned Plan's own module list says. Empty means "none
   /// configured yet"; requireCompany() treats that as ACCOUNTING-only so a
   /// company can never be locked out of everything by an unset default.
-  enabledModules       String[] @default([])
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  enabledModules       String[]  @default([])
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
   // Document numbering (§8)
   invoicePrefix      String @default("INV-")
@@ -173,6 +173,26 @@ model Company {
   defaultPaymentTermsDays Int     @default(15)
   defaultTaxInclusive     Boolean @default(false)
   invoiceFooter           String?
+  quoteFooter             String?
+  creditNoteFooter        String?
+
+  /// Explicit sales-tax collection status per registration (issue 1, 15 Sep
+  /// 2026 review). "UNSET" is the migration default for every pre-existing
+  /// company and is a pure compatibility sentinel — like "APPLICABLE" it
+  /// suppresses nothing, so no existing company's calculated tax changes
+  /// until someone explicitly saves a status from the settings form (which
+  /// never offers "UNSET" as a choice). gstHstStatus governs TaxComponent
+  /// kinds GST+HST, qstStatus governs QST, pstStatus governs PST+RST.
+  gstHstStatus String @default("UNSET") // APPLICABLE | EXEMPT | NOT_APPLICABLE | UNSET
+  qstStatus    String @default("UNSET")
+  pstStatus    String @default("UNSET")
+
+  // Customer display-code numbering (issue 9) — separate from the internal
+  // cuid `Customer.id`, which is never shown to a customer. Zero-padded,
+  // unlike the document-number sequences above.
+  customerCodePrefix     String @default("CUST-")
+  customerCodePadding    Int    @default(5)
+  nextCustomerCodeNumber Int    @default(1)
 
   // HR module numbering (§ numbering.ts)
   employeePrefix     String @default("EMP-")
@@ -184,43 +204,43 @@ model Company {
 
   firm Firm? @relation(fields: [firmId], references: [id])
 
-  users            CompanyUser[]
-  accounts         Account[]
-  taxCodes         TaxCode[]
-  taxPeriods       TaxPeriod[]
-  fiscalPeriods    FiscalPeriod[]
-  fiscalCalendarChanges FiscalCalendarChange[]
-  subscriptionCompany   SubscriptionCompany?
-  customers        Customer[]
-  vendors          Vendor[]
-  items            ServiceItem[]
-  inventoryMovements InventoryMovement[]
-  invoices         Invoice[]
-  estimates        Estimate[]
-  creditNotes      CreditNote[]
-  bills            Bill[]
-  expenses         Expense[]
-  payments         Payment[]
-  journalEntries   JournalEntry[]
-  journalLines     JournalLine[]
-  bankAccounts     BankAccount[]
-  bankTransactions BankTransaction[]
-  bankRules        BankRule[]
-  reconciliations  BankReconciliation[]
+  users                     CompanyUser[]
+  accounts                  Account[]
+  taxCodes                  TaxCode[]
+  taxPeriods                TaxPeriod[]
+  fiscalPeriods             FiscalPeriod[]
+  fiscalCalendarChanges     FiscalCalendarChange[]
+  subscriptionCompany       SubscriptionCompany?
+  customers                 Customer[]
+  vendors                   Vendor[]
+  items                     ServiceItem[]
+  inventoryMovements        InventoryMovement[]
+  invoices                  Invoice[]
+  estimates                 Estimate[]
+  creditNotes               CreditNote[]
+  bills                     Bill[]
+  expenses                  Expense[]
+  payments                  Payment[]
+  journalEntries            JournalEntry[]
+  journalLines              JournalLine[]
+  bankAccounts              BankAccount[]
+  bankTransactions          BankTransaction[]
+  bankRules                 BankRule[]
+  reconciliations           BankReconciliation[]
   bankReconciliationMatches BankReconciliationMatch[]
-  taxEntries       TaxEntry[]
-  attachments      Attachment[]
-  auditLogs        AuditLog[]
-  notifications    Notification[]
-  projects         Project[]
-  budgets          Budget[]
-  recurring        RecurringTemplate[]
-  subscription     Subscription?
+  taxEntries                TaxEntry[]
+  attachments               Attachment[]
+  auditLogs                 AuditLog[]
+  notifications             Notification[]
+  projects                  Project[]
+  budgets                   Budget[]
+  recurring                 RecurringTemplate[]
+  subscription              Subscription?
 
-  departments          Department[]
-  employees            Employee[]
-  leaveTypes           LeaveType[]
-  leaveRequests        LeaveRequest[]
+  departments             Department[]
+  employees               Employee[]
+  leaveTypes              LeaveType[]
+  leaveRequests           LeaveRequest[]
   leaveBalanceAdjustments LeaveBalanceAdjustment[]
 
   payRuns     PayRun[]
@@ -270,7 +290,7 @@ model Subscription {
   priceCents             Int?
   monthlyEquivalentCents Int?
 
-  seats Int @default(3)
+  seats              Int       @default(3)
   /// True when the seat allowance was set by a platform administrator rather
   /// than inherited from the plan. Overrides are shown as such in both portals.
   seatsOverridden    Boolean   @default(false)
@@ -289,9 +309,9 @@ model Subscription {
   suspendReason String?
   /// A scheduled cancellation (`cancelAt`, effective at period end) is not the
   /// same as one that has taken effect (`cancelledAt`).
-  cancelAt     DateTime?
-  cancelledAt  DateTime?
-  cancelReason String?
+  cancelAt      DateTime?
+  cancelledAt   DateTime?
+  cancelReason  String?
 
   /// Opaque subscription reference from a payment processor, when one is
   /// connected. No card data is ever stored in this application.
@@ -300,11 +320,11 @@ model Subscription {
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
 
-  company     Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  planRecord  Plan?               @relation(fields: [planId], references: [id])
-  planVersion PlanVersion?        @relation(fields: [planVersionId], references: [id])
-  events      SubscriptionEvent[]
-  notes       SubscriptionNote[]
+  company             Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  planRecord          Plan?                 @relation(fields: [planId], references: [id])
+  planVersion         PlanVersion?          @relation(fields: [planVersionId], references: [id])
+  events              SubscriptionEvent[]
+  notes               SubscriptionNote[]
   additionalCompanies SubscriptionCompany[]
 
   @@index([status])
@@ -340,17 +360,17 @@ model Account {
 
   journalLines           JournalLine[]
   bankAccount            BankAccount?
-  itemsIncome            ServiceItem[]      @relation("ItemIncomeAccount")
-  itemsExpense           ServiceItem[]      @relation("ItemExpenseAccount")
-  taxLiabilityComponents TaxComponent[]     @relation("TaxLiabilityAccount")
-  taxRecoverableComps    TaxComponent[]     @relation("TaxRecoverableAccount")
+  itemsIncome            ServiceItem[]     @relation("ItemIncomeAccount")
+  itemsExpense           ServiceItem[]     @relation("ItemExpenseAccount")
+  taxLiabilityComponents TaxComponent[]    @relation("TaxLiabilityAccount")
+  taxRecoverableComps    TaxComponent[]    @relation("TaxRecoverableAccount")
   invoiceLines           InvoiceLine[]
   estimateLines          EstimateLine[]
   creditNoteLines        CreditNoteLine[]
   billLines              BillLine[]
   expenseLines           ExpenseLine[]
   bankRules              BankRule[]
-  bankTxCategories       BankTransaction[]  @relation("BankTxCategory")
+  bankTxCategories       BankTransaction[] @relation("BankTxCategory")
   budgetLines            BudgetLine[]
 
   @@unique([companyId, code])
@@ -385,8 +405,8 @@ model TaxCode {
 
   customers       Customer[]
   vendors         Vendor[]
-  items           ServiceItem[] @relation("ItemSalesTaxCode")
-  purchaseItems   ServiceItem[] @relation("ItemPurchaseTaxCode")
+  items           ServiceItem[]    @relation("ItemSalesTaxCode")
+  purchaseItems   ServiceItem[]    @relation("ItemPurchaseTaxCode")
   invoiceLines    InvoiceLine[]
   estimateLines   EstimateLine[]
   creditNoteLines CreditNoteLine[]
@@ -400,19 +420,19 @@ model TaxCode {
 }
 
 model TaxComponent {
-  id                    String  @id @default(cuid())
-  taxCodeId             String
-  name                  String // "GST", "HST", "PST", "QST", "RST"
-  kind                  String // GST | HST | PST | QST | RST
+  id                   String  @id @default(cuid())
+  taxCodeId            String
+  name                 String // "GST", "HST", "PST", "QST", "RST"
+  kind                 String // GST | HST | PST | QST | RST
   /// rate * 1_000_000. 13% -> 130000. 9.975% -> 99750.
-  rateMicro             Int
+  rateMicro            Int
   /// Input tax credit eligible (GST/HST/QST typically true; PST typically false)
-  isRecoverable         Boolean @default(true)
+  isRecoverable        Boolean @default(true)
   /// QST historically compounded on GST — supported, off by default.
-  compoundOnPrevious    Boolean @default(false)
-  liabilityAccountId    String?
-  recoverableAccountId  String?
-  sortOrder             Int     @default(0)
+  compoundOnPrevious   Boolean @default(false)
+  liabilityAccountId   String?
+  recoverableAccountId String?
+  sortOrder            Int     @default(0)
 
   taxCode            TaxCode  @relation(fields: [taxCodeId], references: [id], onDelete: Cascade)
   liabilityAccount   Account? @relation("TaxLiabilityAccount", fields: [liabilityAccountId], references: [id])
@@ -424,18 +444,18 @@ model TaxComponent {
 }
 
 model TaxPeriod {
-  id               String    @id @default(cuid())
-  companyId        String
-  name             String
-  startDate        DateTime
-  endDate          DateTime
-  frequency        String // MONTHLY | QUARTERLY | ANNUAL
-  status           String    @default("OPEN") // OPEN | REVIEW | FILED | CLOSED
-  filingReference  String?
-  filedAt          DateTime?
-  lockedAt         DateTime?
-  netFiledCents    Int?
-  createdAt        DateTime  @default(now())
+  id              String    @id @default(cuid())
+  companyId       String
+  name            String
+  startDate       DateTime
+  endDate         DateTime
+  frequency       String // MONTHLY | QUARTERLY | ANNUAL
+  status          String    @default("OPEN") // OPEN | REVIEW | FILED | CLOSED
+  filingReference String?
+  filedAt         DateTime?
+  lockedAt        DateTime?
+  netFiledCents   Int?
+  createdAt       DateTime  @default(now())
 
   company    Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
   taxEntries TaxEntry[]
@@ -551,7 +571,7 @@ model RegionalTaxRate {
   /// means the province does not levy a separate provincial tax at all (every
   /// HST province, plus AB/NT/NU/YT), not that today's rate happens to be zero.
   provincialType      String
-  provincialRateMicro Int @default(0)
+  provincialRateMicro Int    @default(0)
 
   effectiveFrom DateTime
   effectiveTo   DateTime?
@@ -570,7 +590,7 @@ model RegionalTaxRate {
 }
 
 model FiscalCalendarChange {
-  id                  String   @id @default(cuid())
+  id                  String    @id @default(cuid())
   companyId           String
   previousStartMonth  Int
   newStartMonth       Int
@@ -581,14 +601,14 @@ model FiscalCalendarChange {
   /// Required once anything has been posted.
   reason              String?
   /// Journal entries posted at the time of the change, for context when reading back.
-  postedEntryCount    Int      @default(0)
+  postedEntryCount    Int       @default(0)
   /// Fiscal periods created by this change, transition months included.
-  periodsCreated      Int      @default(0)
+  periodsCreated      Int       @default(0)
   /// Whether a short transition block was needed to bridge the two bases.
   transitionStart     DateTime?
   transitionEnd       DateTime?
   changedById         String?
-  createdAt           DateTime @default(now())
+  createdAt           DateTime  @default(now())
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
@@ -621,34 +641,46 @@ model FiscalPeriod {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model Customer {
-  id                 String   @id @default(cuid())
-  companyId          String
-  name               String
-  displayName        String?
-  email              String?
-  phone              String?
-  website            String?
-  addressLine1       String?
-  addressLine2       String?
-  city               String?
-  province           String?
-  postalCode         String?
-  country            String   @default("CA")
+  id                  String   @id @default(cuid())
+  companyId           String
+  name                String
+  displayName         String?
+  email               String?
+  phone               String?
+  website             String?
+  addressLine1        String?
+  addressLine2        String?
+  city                String?
+  province            String?
+  postalCode          String?
+  country             String   @default("CA")
   /// Default ship-to, used to seed an invoice and to pick the place-of-supply
   /// tax code. Null means "same as the billing address above".
-  shipToLine1        String?
-  shipToLine2        String?
-  shipToCity         String?
-  shipToProvince     String?
-  shipToPostalCode   String?
-  shipToCountry      String?
-  taxCodeId          String?
-  paymentTermsDays   Int      @default(15)
-  notes              String?
-  isActive           Boolean  @default(true)
-  openingBalanceCents Int     @default(0)
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  shipToLine1         String?
+  shipToLine2         String?
+  shipToCity          String?
+  shipToProvince      String?
+  shipToPostalCode    String?
+  shipToCountry       String?
+  taxCodeId           String?
+  paymentTermsDays    Int      @default(15)
+  notes               String?
+  isActive            Boolean  @default(true)
+  openingBalanceCents Int      @default(0)
+  /// Per-customer sales-tax exemption (issue 5, 15 Sep 2026 review), layered
+  /// on top of the company's own collection status in Company.*Status.
+  /// Deliberately scoped to GST and PST/RST only — HST and QST customer-level
+  /// exemption is an explicitly unresolved policy question (see
+  /// src/server/tax/policy.ts) and is NOT inferred from these two flags.
+  /// Default false preserves every legacy customer's current behavior.
+  gstExempt           Boolean  @default(false)
+  pstExempt           Boolean  @default(false)
+  /// Human-readable customer code (issue 9), independent of the internal
+  /// cuid `id`. Null until allocated (inline-created customers on old rows,
+  /// pre-backfill). Company-scoped uniqueness only, never reused.
+  displayCode         String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 
   company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   taxCode  TaxCode?  @relation(fields: [taxCodeId], references: [id])
@@ -662,29 +694,30 @@ model Customer {
   journalLines JournalLine[]
   projects     Project[]
 
+  @@unique([companyId, displayCode])
   @@index([companyId, isActive])
 }
 
 model Vendor {
-  id                 String   @id @default(cuid())
-  companyId          String
-  name               String
-  displayName        String?
-  email              String?
-  phone              String?
-  addressLine1       String?
-  city               String?
-  province           String?
-  postalCode         String?
-  country            String   @default("CA")
-  taxCodeId          String?
-  paymentTermsDays   Int      @default(30)
-  businessNumber     String?
-  notes              String?
-  isActive           Boolean  @default(true)
-  openingBalanceCents Int     @default(0)
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  id                  String   @id @default(cuid())
+  companyId           String
+  name                String
+  displayName         String?
+  email               String?
+  phone               String?
+  addressLine1        String?
+  city                String?
+  province            String?
+  postalCode          String?
+  country             String   @default("CA")
+  taxCodeId           String?
+  paymentTermsDays    Int      @default(30)
+  businessNumber      String?
+  notes               String?
+  isActive            Boolean  @default(true)
+  openingBalanceCents Int      @default(0)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 
   company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   taxCode  TaxCode?  @relation(fields: [taxCodeId], references: [id])
@@ -726,44 +759,44 @@ model Contact {
 /// user may then change anything on it, and editing an item later must never
 /// reach back into a document that has already been written.
 model ServiceItem {
-  id              String   @id @default(cuid())
-  companyId       String
+  id                   String   @id @default(cuid())
+  companyId            String
   /// PRODUCT | SERVICE. Existing rows default to SERVICE, which is what they were.
-  type            String   @default("SERVICE")
-  code            String
-  name            String
-  description     String?
+  type                 String   @default("SERVICE")
+  code                 String
+  name                 String
+  description          String?
   /// Default list price, integer minor units of the company's base currency.
-  unitPriceCents  Int      @default(0)
-  unit            String   @default("hour")
+  unitPriceCents       Int      @default(0)
+  unit                 String   @default("hour")
   /// Default discount, percent x 1e6 — the project's precise percentage convention.
-  discountPercentMicro Int @default(0)
-  incomeAccountId String?
-  expenseAccountId String?
+  discountPercentMicro Int      @default(0)
+  incomeAccountId      String?
+  expenseAccountId     String?
   /// Default tax code on SALES documents.
-  taxCodeId       String?
+  taxCodeId            String?
   /// Default tax code on PURCHASE documents; falls back to taxCodeId when unset.
-  purchaseTaxCodeId String?
-  isActive        Boolean  @default(true)
+  purchaseTaxCodeId    String?
+  isActive             Boolean  @default(true)
   /// Weighted-average costing (§inventory). Only meaningful for type PRODUCT.
-  trackInventory  Boolean  @default(false)
+  trackInventory       Boolean  @default(false)
   /// Quantity on hand, in the project's milli-unit convention (quantity x 1000).
-  quantityOnHandMilli Int  @default(0)
+  quantityOnHandMilli  Int      @default(0)
   /// System-maintained weighted-average cost per whole unit, integer cents. Never hand-edited.
-  averageCostCents Int     @default(0)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt @default(now())
+  averageCostCents     Int      @default(0)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @default(now()) @updatedAt
 
-  company        Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  incomeAccount  Account? @relation("ItemIncomeAccount", fields: [incomeAccountId], references: [id])
-  expenseAccount Account? @relation("ItemExpenseAccount", fields: [expenseAccountId], references: [id])
-  taxCode        TaxCode? @relation("ItemSalesTaxCode", fields: [taxCodeId], references: [id])
+  company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  incomeAccount   Account? @relation("ItemIncomeAccount", fields: [incomeAccountId], references: [id])
+  expenseAccount  Account? @relation("ItemExpenseAccount", fields: [expenseAccountId], references: [id])
+  taxCode         TaxCode? @relation("ItemSalesTaxCode", fields: [taxCodeId], references: [id])
   purchaseTaxCode TaxCode? @relation("ItemPurchaseTaxCode", fields: [purchaseTaxCodeId], references: [id])
 
-  invoiceLines    InvoiceLine[]
-  estimateLines   EstimateLine[]
-  billLines       BillLine[]
-  creditNoteLines CreditNoteLine[]
+  invoiceLines       InvoiceLine[]
+  estimateLines      EstimateLine[]
+  billLines          BillLine[]
+  creditNoteLines    CreditNoteLine[]
   inventoryMovements InventoryMovement[]
 
   @@unique([companyId, code])
@@ -773,26 +806,34 @@ model ServiceItem {
 /// Every quantity/cost change to a tracked inventory item (§inventory) — the
 /// audit trail a valuation report and its GL reconciliation both read.
 model InventoryMovement {
-  id             String   @id @default(cuid())
-  companyId      String
-  itemId         String
-  date           DateTime
-  /// PURCHASE | SALE | ADJUSTMENT
-  type           String
+  id                       String   @id @default(cuid())
+  companyId                String
+  itemId                   String
+  date                     DateTime
+  /// PURCHASE | SALE | SALE_RETURN | PURCHASE_RETURN | ADJUSTMENT | REVERSAL
+  /// (SALE_RETURN/PURCHASE_RETURN/REVERSAL added 15 Sep 2026 review, issues
+  /// 3/4/10 — previously returns had no inventory effect at all and a void
+  /// was indistinguishable from a manual ADJUSTMENT in the history view.)
+  type                     String
   /// Signed, milli-unit convention: positive for stock in, negative for stock out.
-  quantityMilli  Int
-  unitCostCents  Int
+  quantityMilli            Int
+  unitCostCents            Int
   /// Signed — matches the sign of quantityMilli.
-  totalCostCents Int
+  totalCostCents           Int
   quantityOnHandAfterMilli Int
   averageCostAfterCents    Int
-  sourceType     String
-  sourceId       String?
-  sourceNumber   String?
-  journalEntryId String?
-  memo           String?
-  createdById    String?
-  createdAt      DateTime @default(now())
+  sourceType               String
+  sourceId                 String?
+  /// The originating BillLine/InvoiceLine/CreditNoteLine id, so a return can
+  /// find the exact line's movement even when the same item appears on more
+  /// than one line of the same document (issue 10). Null on movements
+  /// created before this column existed.
+  sourceLineId             String?
+  sourceNumber             String?
+  journalEntryId           String?
+  memo                     String?
+  createdById              String?
+  createdAt                DateTime @default(now())
 
   company      Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
   item         ServiceItem   @relation(fields: [itemId], references: [id], onDelete: Restrict)
@@ -807,46 +848,82 @@ model InventoryMovement {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model Estimate {
-  id            String    @id @default(cuid())
-  companyId     String
-  customerId    String
-  number        String
-  issueDate     DateTime
-  expiryDate    DateTime?
-  status        String    @default("DRAFT") // DRAFT | SENT | ACCEPTED | DECLINED | CONVERTED | EXPIRED
-  memo          String?
-  terms         String?
-  taxInclusive  Boolean   @default(false)
-  subtotalCents Int       @default(0)
-  taxCents      Int       @default(0)
-  totalCents    Int       @default(0)
-  convertedInvoiceId String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id         String    @id @default(cuid())
+  companyId  String
+  customerId String
+  number     String
+  issueDate  DateTime
+  expiryDate DateTime?
+  status     String    @default("DRAFT") // DRAFT | SENT | ACCEPTED | DECLINED | CONVERTED | EXPIRED
+  memo       String?
+  terms      String?
+
+  /// Addresses are SNAPSHOTTED onto the document, matching Invoice's own
+  /// billTo*/shipTo* columns (added 15 Sep 2026 review, issue 11 — a saved
+  /// quote detail/print view needs something to render; before this, a
+  /// quote's address only ever lived in the editor's transient React state).
+  billToName       String?
+  billToLine1      String?
+  billToLine2      String?
+  billToCity       String?
+  billToProvince   String?
+  billToPostalCode String?
+  billToCountry    String?
+  shipToName       String?
+  shipToLine1      String?
+  shipToLine2      String?
+  shipToCity       String?
+  shipToProvince   String?
+  shipToPostalCode String?
+  shipToCountry    String?
+
+  taxInclusive       Boolean  @default(false)
+  subtotalCents      Int      @default(0)
+  taxCents           Int      @default(0)
+  totalCents         Int      @default(0)
+  /// Snapshot of Company.quoteFooter at creation time (issue 2) — stays
+  /// stable if the company's configured footer changes later. Null on
+  /// documents created before this column existed; those fall back to the
+  /// live company footer at render time (documented compatibility path).
+  footerText         String?
+  /// Set, together with `status = "CONVERTED"`, inside the same transaction
+  /// that creates the linked invoice (see convertEstimateToInvoiceInTx in
+  /// src/server/documents/estimates.ts). @unique so the DB itself rejects a
+  /// second quote ever pointing at the same invoice.
+  convertedInvoiceId String?  @unique
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   company  Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
   customer Customer       @relation(fields: [customerId], references: [id])
   lines    EstimateLine[]
+  invoice  Invoice?       @relation("EstimateInvoice")
 
   @@unique([companyId, number])
   @@index([companyId, status])
 }
 
 model EstimateLine {
-  id            String  @id @default(cuid())
-  estimateId    String
-  lineNo        Int
-  itemId        String?
-  accountId     String
-  description   String
+  id                   String  @id @default(cuid())
+  estimateId           String
+  lineNo               Int
+  itemId               String?
+  accountId            String
+  description          String
   /// quantity * 1000 (supports 0.001 precision without floats)
-  quantityMilli Int     @default(1000)
-  unitPriceCents Int    @default(0)
-  discountPercentMicro Int @default(0)
-  netCents      Int     @default(0)
-  taxCodeId     String?
-  taxCents      Int     @default(0)
-  totalCents    Int     @default(0)
+  quantityMilli        Int     @default(1000)
+  unitPriceCents       Int     @default(0)
+  /// "PERCENT" (use discountPercentMicro) or "FIXED" (use discountAmountCents,
+  /// the total discount on the extended line — not multiplied by quantity
+  /// again). Default PERCENT so every pre-existing row keeps today's meaning
+  /// (issue 6, 15 Sep 2026 review).
+  discountMode         String  @default("PERCENT")
+  discountPercentMicro Int     @default(0)
+  discountAmountCents  Int     @default(0)
+  netCents             Int     @default(0)
+  taxCodeId            String?
+  taxCents             Int     @default(0)
+  totalCents           Int     @default(0)
 
   estimate Estimate     @relation(fields: [estimateId], references: [id], onDelete: Cascade)
   account  Account      @relation(fields: [accountId], references: [id])
@@ -857,61 +934,71 @@ model EstimateLine {
 }
 
 model Invoice {
-  id              String    @id @default(cuid())
-  companyId       String
-  customerId      String
-  number          String
-  issueDate       DateTime
-  dueDate         DateTime
-  status          String    @default("DRAFT") // DRAFT | SENT | PARTIALLY_PAID | PAID | OVERDUE | VOID
-  memo            String?
-  terms           String?
-  poNumber        String?
-  currency        String    @default("CAD")
+  id         String   @id @default(cuid())
+  companyId  String
+  customerId String
+  number     String
+  issueDate  DateTime
+  dueDate    DateTime
+  status     String   @default("DRAFT") // DRAFT | SENT | PARTIALLY_PAID | PAID | OVERDUE | VOID
+  memo       String?
+  terms      String?
+  poNumber   String?
+  currency   String   @default("CAD")
 
   /// Addresses are SNAPSHOTTED onto the document, not read through the customer
   /// relation. An issued invoice is a record of what was sent; editing the
   /// customer afterwards must not rewrite it. `shipToProvince` is also the
   /// place-of-supply that chose the tax codes on the lines.
-  billToName        String?
-  billToLine1       String?
-  billToLine2       String?
-  billToCity        String?
-  billToProvince    String?
-  billToPostalCode  String?
-  billToCountry     String?
-  shipToName        String?
-  shipToLine1       String?
-  shipToLine2       String?
-  shipToCity        String?
-  shipToProvince    String?
-  shipToPostalCode  String?
-  shipToCountry     String?
-  taxInclusive    Boolean   @default(false)
-  subtotalCents   Int       @default(0)
-  discountCents   Int       @default(0)
-  taxCents        Int       @default(0)
-  totalCents      Int       @default(0)
-  amountPaidCents Int       @default(0)
-  balanceCents    Int       @default(0)
-  writtenOffCents Int       @default(0)
-  journalEntryId  String?   @unique
-  estimateId      String?
-  recurringId     String?
-  projectId       String?
-  createdById     String?
-  postedAt        DateTime?
-  sentAt          DateTime?
-  voidedAt        DateTime?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  billToName       String?
+  billToLine1      String?
+  billToLine2      String?
+  billToCity       String?
+  billToProvince   String?
+  billToPostalCode String?
+  billToCountry    String?
+  shipToName       String?
+  shipToLine1      String?
+  shipToLine2      String?
+  shipToCity       String?
+  shipToProvince   String?
+  shipToPostalCode String?
+  shipToCountry    String?
+  taxInclusive     Boolean   @default(false)
+  subtotalCents    Int       @default(0)
+  discountCents    Int       @default(0)
+  taxCents         Int       @default(0)
+  totalCents       Int       @default(0)
+  amountPaidCents  Int       @default(0)
+  balanceCents     Int       @default(0)
+  writtenOffCents  Int       @default(0)
+  /// Snapshot of Company.invoiceFooter at creation time (issue 2). Null on
+  /// documents created before this column existed; those fall back to the
+  /// live company footer at render time (documented compatibility path).
+  footerText       String?
+  journalEntryId   String?   @unique
+  /// The quote this invoice was converted from, if any (issue 11). @unique
+  /// on this side + @unique on Estimate.convertedInvoiceId means the DB
+  /// itself enforces a 1:1 quote<->invoice conversion link even under a
+  /// concurrent double-conversion race.
+  estimateId       String?   @unique
+  recurringId      String?
+  projectId        String?
+  createdById      String?
+  postedAt         DateTime?
+  sentAt           DateTime?
+  voidedAt         DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
-  company      Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  customer     Customer      @relation(fields: [customerId], references: [id])
-  project      Project?      @relation(fields: [projectId], references: [id])
-  journalEntry JournalEntry? @relation(fields: [journalEntryId], references: [id])
+  company      Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  customer     Customer            @relation(fields: [customerId], references: [id])
+  project      Project?            @relation(fields: [projectId], references: [id])
+  journalEntry JournalEntry?       @relation(fields: [journalEntryId], references: [id])
+  estimate     Estimate?           @relation("EstimateInvoice", fields: [estimateId], references: [id])
   lines        InvoiceLine[]
   allocations  PaymentAllocation[]
+  creditNotes  CreditNote[]        @relation("InvoiceCreditNotes")
 
   @@unique([companyId, number])
   @@index([companyId, status])
@@ -920,20 +1007,23 @@ model Invoice {
 }
 
 model InvoiceLine {
-  id             String  @id @default(cuid())
-  invoiceId      String
-  lineNo         Int
-  itemId         String?
-  accountId      String
-  description    String
-  quantityMilli  Int     @default(1000)
-  unitPriceCents Int     @default(0)
-  discountPercentMicro Int @default(0)
-  netCents       Int     @default(0)
-  taxCodeId      String?
-  taxCents       Int     @default(0)
-  totalCents     Int     @default(0)
-  projectId      String?
+  id                   String  @id @default(cuid())
+  invoiceId            String
+  lineNo               Int
+  itemId               String?
+  accountId            String
+  description          String
+  quantityMilli        Int     @default(1000)
+  unitPriceCents       Int     @default(0)
+  /// See EstimateLine.discountMode — same convention (issue 6).
+  discountMode         String  @default("PERCENT")
+  discountPercentMicro Int     @default(0)
+  discountAmountCents  Int     @default(0)
+  netCents             Int     @default(0)
+  taxCodeId            String?
+  taxCents             Int     @default(0)
+  totalCents           Int     @default(0)
+  projectId            String?
 
   invoice Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
   account Account      @relation(fields: [accountId], references: [id])
@@ -945,52 +1035,78 @@ model InvoiceLine {
 
 /// Customer credit notes and vendor credits share one shape (§8, §9).
 model CreditNote {
-  id             String    @id @default(cuid())
-  companyId      String
-  type           String // CUSTOMER | VENDOR
-  customerId     String?
-  vendorId       String?
-  number         String
-  issueDate      DateTime
-  status         String    @default("DRAFT") // DRAFT | OPEN | PARTIALLY_APPLIED | APPLIED | VOID
-  reason         String?
-  memo           String?
-  taxInclusive   Boolean   @default(false)
-  subtotalCents  Int       @default(0)
-  taxCents       Int       @default(0)
-  totalCents     Int       @default(0)
-  appliedCents   Int       @default(0)
-  balanceCents   Int       @default(0)
-  journalEntryId String?   @unique
-  postedAt       DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  id              String    @id @default(cuid())
+  companyId       String
+  type            String // CUSTOMER | VENDOR
+  customerId      String?
+  vendorId        String?
+  number          String
+  issueDate       DateTime
+  status          String    @default("DRAFT") // DRAFT | OPEN | PARTIALLY_APPLIED | APPLIED | VOID
+  reason          String?
+  memo            String?
+  taxInclusive    Boolean   @default(false)
+  subtotalCents   Int       @default(0)
+  taxCents        Int       @default(0)
+  totalCents      Int       @default(0)
+  appliedCents    Int       @default(0)
+  balanceCents    Int       @default(0)
+  /// Document-level "returned from" link (issues 4/10, 15 Sep 2026 review) —
+  /// exactly one of these is set, matching `type`. Kept separate from
+  /// financial credit allocation (PaymentAllocation): referencing a fully
+  /// paid invoice/bill here must never itself apply credit to it.
+  sourceInvoiceId String?
+  sourceBillId    String?
+  /// Snapshot of Company.creditNoteFooter at creation time (issue 2).
+  footerText      String?
+  journalEntryId  String?   @unique
+  postedAt        DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  company      Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  customer     Customer?        @relation(fields: [customerId], references: [id])
-  vendor       Vendor?          @relation(fields: [vendorId], references: [id])
-  journalEntry JournalEntry?    @relation(fields: [journalEntryId], references: [id])
-  lines        CreditNoteLine[]
-  allocations  PaymentAllocation[]
+  company       Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  customer      Customer?           @relation(fields: [customerId], references: [id])
+  vendor        Vendor?             @relation(fields: [vendorId], references: [id])
+  journalEntry  JournalEntry?       @relation(fields: [journalEntryId], references: [id])
+  sourceInvoice Invoice?            @relation("InvoiceCreditNotes", fields: [sourceInvoiceId], references: [id])
+  sourceBill    Bill?               @relation("BillCreditNotes", fields: [sourceBillId], references: [id])
+  lines         CreditNoteLine[]
+  allocations   PaymentAllocation[]
 
   @@unique([companyId, number])
   @@index([companyId, type, status])
+  @@index([companyId, sourceInvoiceId])
+  @@index([companyId, sourceBillId])
 }
 
 model CreditNoteLine {
-  id             String  @id @default(cuid())
-  creditNoteId   String
-  lineNo         Int
-  itemId         String?
-  accountId      String
-  description    String
-  quantityMilli  Int     @default(1000)
-  unitPriceCents Int     @default(0)
-  discountPercentMicro Int @default(0)
-  netCents       Int     @default(0)
-  taxCodeId      String?
-  taxCents       Int     @default(0)
-  totalCents     Int     @default(0)
+  id                   String  @id @default(cuid())
+  creditNoteId         String
+  lineNo               Int
+  itemId               String?
+  accountId            String
+  description          String
+  quantityMilli        Int     @default(1000)
+  unitPriceCents       Int     @default(0)
+  /// See EstimateLine.discountMode — same convention (issue 6). A return
+  /// line reverses whichever mode/value the source document line used.
+  discountMode         String  @default("PERCENT")
+  discountPercentMicro Int     @default(0)
+  discountAmountCents  Int     @default(0)
+  netCents             Int     @default(0)
+  taxCodeId            String?
+  taxCents             Int     @default(0)
+  totalCents           Int     @default(0)
+  /// Line-level lineage (issue 10) — the exact source InvoiceLine/BillLine
+  /// this return line came from, so the same item on two different lines of
+  /// one document is never conflated. Plain scalar FKs (not Prisma relations)
+  /// matching InventoryMovement.sourceId's existing convention.
+  sourceInvoiceLineId  String?
+  sourceBillLineId     String?
+  /// The original cost being reversed for a tracked-item return line — read
+  /// from the source movement at creation time, NOT today's average cost or
+  /// the vendor's credit amount. Null for non-inventory lines.
+  unitCostCents        Int?
 
   creditNote CreditNote   @relation(fields: [creditNoteId], references: [id], onDelete: Cascade)
   account    Account      @relation(fields: [accountId], references: [id])
@@ -1032,12 +1148,13 @@ model Bill {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
-  company      Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  vendor       Vendor        @relation(fields: [vendorId], references: [id])
-  project      Project?      @relation(fields: [projectId], references: [id])
-  journalEntry JournalEntry? @relation(fields: [journalEntryId], references: [id])
+  company      Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  vendor       Vendor              @relation(fields: [vendorId], references: [id])
+  project      Project?            @relation(fields: [projectId], references: [id])
+  journalEntry JournalEntry?       @relation(fields: [journalEntryId], references: [id])
   lines        BillLine[]
   allocations  PaymentAllocation[]
+  creditNotes  CreditNote[]        @relation("BillCreditNotes")
 
   @@unique([companyId, number])
   @@index([companyId, status])
@@ -1046,22 +1163,22 @@ model Bill {
 }
 
 model BillLine {
-  id             String  @id @default(cuid())
-  billId         String
-  lineNo         Int
-  itemId         String?
-  accountId      String
-  description    String
-  quantityMilli  Int     @default(1000)
-  unitPriceCents Int     @default(0)
-  discountPercentMicro Int @default(0)
-  netCents       Int     @default(0)
-  taxCodeId      String?
-  taxCents       Int     @default(0)
-  totalCents     Int     @default(0)
-  isBillable     Boolean @default(false)
-  customerId     String?
-  projectId      String?
+  id                   String  @id @default(cuid())
+  billId               String
+  lineNo               Int
+  itemId               String?
+  accountId            String
+  description          String
+  quantityMilli        Int     @default(1000)
+  unitPriceCents       Int     @default(0)
+  discountPercentMicro Int     @default(0)
+  netCents             Int     @default(0)
+  taxCodeId            String?
+  taxCents             Int     @default(0)
+  totalCents           Int     @default(0)
+  isBillable           Boolean @default(false)
+  customerId           String?
+  projectId            String?
 
   bill    Bill         @relation(fields: [billId], references: [id], onDelete: Cascade)
   account Account      @relation(fields: [accountId], references: [id])
@@ -1076,31 +1193,31 @@ model BillLine {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model Expense {
-  id               String    @id @default(cuid())
-  companyId        String
-  number           String
-  date             DateTime
-  vendorId         String?
-  payeeName        String?
+  id                String    @id @default(cuid())
+  companyId         String
+  number            String
+  date              DateTime
+  vendorId          String?
+  payeeName         String?
   /// GL account money left from: bank, credit card, or cash
-  paymentAccountId String
-  paymentMethod    String    @default("DEBIT") // DEBIT | CREDIT_CARD | CASH | CHEQUE | EFT
-  reference        String?
-  memo             String?
-  status           String    @default("DRAFT") // DRAFT | AWAITING_APPROVAL | POSTED | VOID
-  approvalStatus   String    @default("NOT_REQUIRED")
-  approvedById     String?
-  approvedAt       DateTime?
-  taxInclusive     Boolean   @default(true)
-  subtotalCents    Int       @default(0)
-  taxCents         Int       @default(0)
-  totalCents       Int       @default(0)
-  journalEntryId   String?   @unique
+  paymentAccountId  String
+  paymentMethod     String    @default("DEBIT") // DEBIT | CREDIT_CARD | CASH | CHEQUE | EFT
+  reference         String?
+  memo              String?
+  status            String    @default("DRAFT") // DRAFT | AWAITING_APPROVAL | POSTED | VOID
+  approvalStatus    String    @default("NOT_REQUIRED")
+  approvedById      String?
+  approvedAt        DateTime?
+  taxInclusive      Boolean   @default(true)
+  subtotalCents     Int       @default(0)
+  taxCents          Int       @default(0)
+  totalCents        Int       @default(0)
+  journalEntryId    String?   @unique
   bankTransactionId String?
-  createdById      String?
-  postedAt         DateTime?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  createdById       String?
+  postedAt          DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   company      Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
   vendor       Vendor?       @relation(fields: [vendorId], references: [id])
@@ -1139,27 +1256,27 @@ model ExpenseLine {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model Payment {
-  id             String    @id @default(cuid())
-  companyId      String
-  type           String // RECEIPT (from customer) | PAYMENT (to vendor)
-  number         String
-  date           DateTime
-  customerId     String?
-  vendorId       String?
+  id                String    @id @default(cuid())
+  companyId         String
+  type              String // RECEIPT (from customer) | PAYMENT (to vendor)
+  number            String
+  date              DateTime
+  customerId        String?
+  vendorId          String?
   /// GL account cash moved through
-  bankAccountId  String
-  method         String    @default("EFT")
-  reference      String?
-  memo           String?
-  amountCents    Int
-  appliedCents   Int       @default(0)
-  unappliedCents Int       @default(0)
-  status         String    @default("POSTED") // DRAFT | POSTED | VOID
-  journalEntryId String?   @unique
+  bankAccountId     String
+  method            String    @default("EFT")
+  reference         String?
+  memo              String?
+  amountCents       Int
+  appliedCents      Int       @default(0)
+  unappliedCents    Int       @default(0)
+  status            String    @default("POSTED") // DRAFT | POSTED | VOID
+  journalEntryId    String?   @unique
   bankTransactionId String?
-  createdById    String?
-  postedAt       DateTime?
-  createdAt      DateTime  @default(now())
+  createdById       String?
+  postedAt          DateTime?
+  createdAt         DateTime  @default(now())
 
   company      Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
   customer     Customer?           @relation(fields: [customerId], references: [id])
@@ -1200,39 +1317,39 @@ model PaymentAllocation {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model JournalEntry {
-  id             String    @id @default(cuid())
-  companyId      String
-  entryNo        String
-  date           DateTime
-  memo           String?
+  id               String    @id @default(cuid())
+  companyId        String
+  entryNo          String
+  date             DateTime
+  memo             String?
   /// INVOICE | BILL | EXPENSE | PAYMENT | CREDIT_NOTE | MANUAL | BANK | OPENING | CLOSING | ADJUSTMENT
-  sourceType     String
-  sourceId       String?
-  sourceNumber   String?
-  status         String    @default("POSTED") // DRAFT | POSTED | REVERSED
-  isAdjusting    Boolean   @default(false)
-  reversalOfId   String?   @unique
-  fiscalPeriodId String?
-  totalDebitCents  Int     @default(0)
-  totalCreditCents Int     @default(0)
-  createdById    String?
-  postedAt       DateTime?
-  createdAt      DateTime  @default(now())
+  sourceType       String
+  sourceId         String?
+  sourceNumber     String?
+  status           String    @default("POSTED") // DRAFT | POSTED | REVERSED
+  isAdjusting      Boolean   @default(false)
+  reversalOfId     String?   @unique
+  fiscalPeriodId   String?
+  totalDebitCents  Int       @default(0)
+  totalCreditCents Int       @default(0)
+  createdById      String?
+  postedAt         DateTime?
+  createdAt        DateTime  @default(now())
 
   company      Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
   fiscalPeriod FiscalPeriod? @relation(fields: [fiscalPeriodId], references: [id])
   reversalOf   JournalEntry? @relation("Reversal", fields: [reversalOfId], references: [id])
   reversedBy   JournalEntry? @relation("Reversal")
 
-  lines       JournalLine[]
-  taxEntries  TaxEntry[]
-  invoice     Invoice?
-  bill        Bill?
-  expense     Expense?
-  payment     Payment?
-  creditNote  CreditNote?
-  bankTx      BankTransaction?
-  payRun      PayRun?
+  lines              JournalLine[]
+  taxEntries         TaxEntry[]
+  invoice            Invoice?
+  bill               Bill?
+  expense            Expense?
+  payment            Payment?
+  creditNote         CreditNote?
+  bankTx             BankTransaction?
+  payRun             PayRun?
   inventoryMovements InventoryMovement[]
 
   @@unique([companyId, entryNo])
@@ -1304,34 +1421,34 @@ model BankAccount {
 }
 
 model BankTransaction {
-  id              String   @id @default(cuid())
-  companyId       String
-  bankAccountId   String
-  date            DateTime
-  description     String
-  normalizedDesc  String
-  reference       String?
+  id                  String   @id @default(cuid())
+  companyId           String
+  bankAccountId       String
+  date                DateTime
+  description         String
+  normalizedDesc      String
+  reference           String?
   /// Signed: positive = money in, negative = money out
-  amountCents     Int
+  amountCents         Int
   runningBalanceCents Int?
-  status          String   @default("UNMATCHED") // UNMATCHED | CATEGORIZED | MATCHED | RECONCILED | EXCLUDED | TRANSFER
-  matchedType     String? // INVOICE_PAYMENT | BILL_PAYMENT | EXPENSE | JOURNAL | TRANSFER
-  matchedId       String?
-  categoryAccountId String?
-  journalEntryId  String?  @unique
-  reconciliationId String?
-  importBatchId   String?
+  status              String   @default("UNMATCHED") // UNMATCHED | CATEGORIZED | MATCHED | RECONCILED | EXCLUDED | TRANSFER
+  matchedType         String? // INVOICE_PAYMENT | BILL_PAYMENT | EXPENSE | JOURNAL | TRANSFER
+  matchedId           String?
+  categoryAccountId   String?
+  journalEntryId      String?  @unique
+  reconciliationId    String?
+  importBatchId       String?
   /// Financial-institution transaction id used for duplicate detection
-  fitId           String?
-  isDuplicate     Boolean  @default(false)
-  appliedRuleId   String?
-  createdAt       DateTime @default(now())
+  fitId               String?
+  isDuplicate         Boolean  @default(false)
+  appliedRuleId       String?
+  createdAt           DateTime @default(now())
 
-  company        Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  bankAccount    BankAccount         @relation(fields: [bankAccountId], references: [id], onDelete: Cascade)
-  categoryAccount Account?           @relation("BankTxCategory", fields: [categoryAccountId], references: [id])
-  journalEntry   JournalEntry?       @relation(fields: [journalEntryId], references: [id])
-  reconciliation BankReconciliation? @relation(fields: [reconciliationId], references: [id])
+  company         Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  bankAccount     BankAccount         @relation(fields: [bankAccountId], references: [id], onDelete: Cascade)
+  categoryAccount Account?            @relation("BankTxCategory", fields: [categoryAccountId], references: [id])
+  journalEntry    JournalEntry?       @relation(fields: [journalEntryId], references: [id])
+  reconciliation  BankReconciliation? @relation(fields: [reconciliationId], references: [id])
 
   @@index([companyId, bankAccountId, date])
   @@index([companyId, status])
@@ -1339,24 +1456,24 @@ model BankTransaction {
 }
 
 model BankRule {
-  id            String  @id @default(cuid())
-  companyId     String
-  bankAccountId String?
-  name          String
-  priority      Int     @default(100)
-  direction     String  @default("ANY") // IN | OUT | ANY
-  matchType     String  @default("CONTAINS") // CONTAINS | EQUALS | STARTS_WITH | REGEX
-  matchValue    String
+  id             String   @id @default(cuid())
+  companyId      String
+  bankAccountId  String?
+  name           String
+  priority       Int      @default(100)
+  direction      String   @default("ANY") // IN | OUT | ANY
+  matchType      String   @default("CONTAINS") // CONTAINS | EQUALS | STARTS_WITH | REGEX
+  matchValue     String
   amountMinCents Int?
   amountMaxCents Int?
-  setAccountId  String
-  setTaxCodeId  String?
-  setVendorId   String?
-  setPayeeName  String?
-  autoConfirm   Boolean @default(false)
-  isActive      Boolean @default(true)
-  timesApplied  Int     @default(0)
-  createdAt     DateTime @default(now())
+  setAccountId   String
+  setTaxCodeId   String?
+  setVendorId    String?
+  setPayeeName   String?
+  autoConfirm    Boolean  @default(false)
+  isActive       Boolean  @default(true)
+  timesApplied   Int      @default(0)
+  createdAt      DateTime @default(now())
 
   company     Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
   bankAccount BankAccount? @relation(fields: [bankAccountId], references: [id])
@@ -1368,43 +1485,43 @@ model BankRule {
 }
 
 model BankReconciliation {
-  id                  String    @id @default(cuid())
-  companyId           String
-  bankAccountId       String
+  id                       String    @id @default(cuid())
+  companyId                String
+  bankAccountId            String
   /// The calendar month the statement covers. This is the reconciliation unit:
   /// one per bank account per month. Period dates are always the first and last
   /// day of this month. Backfilled from statementEndDate for pre-existing rows.
-  statementYear       Int
-  statementMonth      Int
-  statementStartDate  DateTime
-  statementEndDate    DateTime
+  statementYear            Int
+  statementMonth           Int
+  statementStartDate       DateTime
+  statementEndDate         DateTime
   /// Actual statement figures. Opening carries forward from the previous
   /// completed reconciliation's closing balance.
-  openingBalanceCents Int
-  closingBalanceCents Int
-  clearedBalanceCents Int       @default(0)
-  differenceCents     Int       @default(0)
+  openingBalanceCents      Int
+  closingBalanceCents      Int
+  clearedBalanceCents      Int       @default(0)
+  differenceCents          Int       @default(0)
   /// Snapshots frozen at completion so a historical month-end report never
   /// re-computes when later activity clears.
   bookBalanceCents         Int?
-  outstandingReceiptsCents Int   @default(0)
-  outstandingPaymentsCents Int   @default(0)
+  outstandingReceiptsCents Int       @default(0)
+  outstandingPaymentsCents Int       @default(0)
   adjustedBankBalanceCents Int?
   /// The frozen month-end report, serialized. Source of truth once COMPLETED.
-  reportJson          String?
+  reportJson               String?
   /// Explanation of any book timing items left outstanding at completion.
-  notes               String?
+  notes                    String?
   /// Optimistic-concurrency guard: completion checks and bumps this atomically.
-  version             Int       @default(0)
-  status              String    @default("IN_PROGRESS") // IN_PROGRESS | COMPLETED
-  startedById         String?
-  completedAt         DateTime?
-  completedById       String?
-  lockedAt            DateTime?
-  createdAt           DateTime  @default(now())
+  version                  Int       @default(0)
+  status                   String    @default("IN_PROGRESS") // IN_PROGRESS | COMPLETED
+  startedById              String?
+  completedAt              DateTime?
+  completedById            String?
+  lockedAt                 DateTime?
+  createdAt                DateTime  @default(now())
 
-  company      Company                  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  bankAccount  BankAccount              @relation(fields: [bankAccountId], references: [id], onDelete: Cascade)
+  company      Company                   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  bankAccount  BankAccount               @relation(fields: [bankAccountId], references: [id], onDelete: Cascade)
   transactions BankTransaction[]
   matches      BankReconciliationMatch[]
 
@@ -1586,7 +1703,7 @@ model Employee {
   city           String?
   province       String?
   postalCode     String?
-  country        String  @default("CA")
+  country        String    @default("CA")
 
   emergencyContactName     String?
   emergencyContactPhone    String?
@@ -1606,14 +1723,14 @@ model Employee {
   managerId            String?
   provinceOfEmployment String
   employeeType         String // FULL_TIME | PART_TIME | CASUAL | SEASONAL | CONTRACT
-  employmentStatus     String   @default("ACTIVE") // ACTIVE | ON_LEAVE | TERMINATED
+  employmentStatus     String    @default("ACTIVE") // ACTIVE | ON_LEAVE | TERMINATED
   hireDate             DateTime
   terminationDate      DateTime?
   terminationReason    String? // TERMINATION_REASON_CATEGORIES
   terminationNote      String?
 
   compensationType     String // SALARY | HOURLY
-  payRateCents         Int    // annual (SALARY) or hourly (HOURLY) rate, integer cents
+  payRateCents         Int // annual (SALARY) or hourly (HOURLY) rate, integer cents
   payFrequency         String // WEEKLY | BIWEEKLY | SEMI_MONTHLY | MONTHLY
   standardHoursPerWeek Float?
 
@@ -1633,9 +1750,9 @@ model Employee {
   manager    Employee?   @relation("EmployeeManager", fields: [managerId], references: [id], onDelete: SetNull)
   reports    Employee[]  @relation("EmployeeManager")
 
-  leaveRequests     LeaveRequest[]
-  leaveAdjustments  LeaveBalanceAdjustment[]
-  payRunLines       PayRunLine[]
+  leaveRequests    LeaveRequest[]
+  leaveAdjustments LeaveBalanceAdjustment[]
+  payRunLines      PayRunLine[]
 
   @@unique([companyId, employeeNumber])
   @@index([companyId, employmentStatus])
@@ -1695,13 +1812,13 @@ model LeaveRequest {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model PayRun {
-  id             String    @id @default(cuid())
+  id             String   @id @default(cuid())
   companyId      String
   number         String
   payPeriodStart DateTime
   payPeriodEnd   DateTime
   payDate        DateTime
-  status         String    @default("DRAFT") // DRAFT | POSTED | VOID
+  status         String   @default("DRAFT") // DRAFT | POSTED | VOID
 
   /// GL account net pay is funded from — bank or credit card. Not a Prisma
   /// relation, matching Expense.paymentAccountId: validated by hand against
@@ -1820,14 +1937,14 @@ model Notification {
 /// what lets an administrator revise a price over several saves without the
 /// half-finished figure ever reaching a visitor.
 model Plan {
-  id String @id @default(cuid())
+  id          String  @id @default(cuid())
   /// Stable internal identifier, never reused, never renamed. Subscriptions and
   /// entitlement checks key off this rather than the display name.
   code        String  @unique
   name        String
   description String?
   /// One line answering "who is this for", shown on the pricing card.
-  forWhom String?
+  forWhom     String?
 
   /// ISO 4217. Prices below are integer minor units of this currency.
   currency String @default("CAD")
@@ -1838,16 +1955,16 @@ model Plan {
 
   support String @default("Email support")
 
-  sortOrder Int     @default(0)
-  isPopular Boolean @default(false)
+  sortOrder   Int     @default(0)
+  isPopular   Boolean @default(false)
   /// Quoted rather than self-serve: the card shows "Contact sales", not a price.
   contactOnly Boolean @default(false)
   /// Whether the plan is offered on the public pricing page at all. A private
   /// plan can still be assigned to a client by a platform administrator.
-  isPublic Boolean @default(true)
+  isPublic    Boolean @default(true)
 
   /// DRAFT | PUBLISHED | ARCHIVED. Only PUBLISHED plans have a live snapshot.
-  status String @default("DRAFT")
+  status          String  @default("DRAFT")
   /// True when the working copy has been edited since the last publish. This is
   /// the flag the admin UI turns into an "unpublished changes" badge.
   hasDraftChanges Boolean @default(false)
@@ -1877,7 +1994,7 @@ model PlanPrice {
   cycle  String // MONTHLY | QUARTERLY | ANNUAL
 
   /// What one invoice for this cycle charges, in integer minor units.
-  cycleAmountCents Int
+  cycleAmountCents       Int
   /// The comparable per-month figure the pricing page leads with. Display only.
   monthlyEquivalentCents Int
 
@@ -1917,9 +2034,9 @@ model PlanModule {
 /// points at the exact version it was sold on (so editing today's price cannot
 /// rewrite a customer's agreed price).
 model PlanVersion {
-  id      String @id @default(cuid())
-  planId  String
-  version Int
+  id       String @id @default(cuid())
+  planId   String
+  version  Int
   /// The full public plan shape, JSON-encoded. Self-contained on purpose: a
   /// snapshot must stay readable after the working copy has moved on.
   snapshot String
@@ -1938,15 +2055,15 @@ model PlanVersion {
 /// platform audit log records the same change for compliance; this exists so the
 /// change is queryable per subscription without parsing audit JSON.
 model SubscriptionEvent {
-  id             String @id @default(cuid())
+  id             String  @id @default(cuid())
   subscriptionId String
   /// CREATED | PLAN_CHANGED | CYCLE_CHANGED | STATUS_CHANGED | TRIAL_EXTENDED |
   /// SEATS_OVERRIDDEN | PERIOD_CHANGED | CANCEL_SCHEDULED | NOTE_ADDED
-  type       String
-  summary    String
-  reason     String?
-  beforeJson String?
-  afterJson  String?
+  type           String
+  summary        String
+  reason         String?
+  beforeJson     String?
+  afterJson      String?
 
   actorUserId String?
   actorEmail  String?
@@ -1987,11 +2104,11 @@ model PlatformAuditLog {
   entityId    String?
   summary     String
   /// Required for suspension, cancellation and entitlement overrides.
-  reason String?
+  reason      String?
   /// Redacted JSON. Never contains password hashes, tokens or secrets — see
   /// `redact()` in src/server/admin/audit.ts.
-  beforeJson String?
-  afterJson  String?
+  beforeJson  String?
+  afterJson   String?
 
   ipAddress String?
   userAgent String?
@@ -2011,11 +2128,11 @@ model PlatformAuditLog {
 /// substrate and the credential-stuffing signal: counting by email catches a
 /// targeted attack, counting by IP catches a spray across many accounts.
 model AuthAttempt {
-  id    String @id @default(cuid())
-  email String
+  id        String   @id @default(cuid())
+  email     String
   /// APP | ADMIN — the portal that was attempted.
-  scope   String  @default("APP")
-  success Boolean @default(false)
+  scope     String   @default("APP")
+  success   Boolean  @default(false)
   /// LOCKED_OUT | BAD_PASSWORD | UNKNOWN_USER | NOT_ADMIN | MFA_FAILED | OK
   outcome   String?
   ipAddress String?
@@ -2030,8 +2147,8 @@ model AuthAttempt {
 /// invitation. Only the SHA-256 hash is stored, so a database read cannot be
 /// replayed as a link, and nothing here is ever rendered in the UI.
 model UserToken {
-  id     String @id @default(cuid())
-  userId String
+  id        String    @id @default(cuid())
+  userId    String
   /// INVITE | PASSWORD_RESET | ADMIN_INVITE
   purpose   String
   tokenHash String    @unique

@@ -8,10 +8,25 @@ import { createInvoiceAction, invoiceFormOptions } from "../actions";
 
 export const metadata = { title: "New invoice" };
 
-export default async function NewInvoicePage() {
+export default async function NewInvoicePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ customerId?: string }>;
+}) {
   const { company } = await requireCapability(CAPABILITIES.INVOICES);
   const options = await invoiceFormOptions();
   const suggestedNumber = await peekNumber(db, company.id, "invoice");
+
+  // "New invoice" from a customer's own page (issue 8, 15 Sep 2026 review) —
+  // re-validated against this company's own customer list (already
+  // tenant-scoped by invoiceFormOptions), not merely trusted from the URL.
+  // An unknown/foreign id is silently ignored rather than erroring, which
+  // leaves the form on its ordinary default behavior instead of blocking
+  // the page.
+  const { customerId } = await searchParams;
+  const preselectPartyId = customerId && options.customers.some((c) => c.id === customerId)
+    ? customerId
+    : undefined;
 
   return (
     <>
@@ -38,11 +53,14 @@ export default async function NewInvoicePage() {
         suggestedNumber={suggestedNumber}
         companyProfile={options.profile}
         companyProvince={options.company.province}
+        companyTaxPolicy={options.taxPolicy}
+        preselectPartyId={preselectPartyId}
         customerCreation={{
           taxCodes: options.salesTaxCodes,
           defaultTermsDays: options.company.defaultPaymentTermsDays,
         }}
         provincesWithSalesTax={options.provincesWithSalesTax}
+        footerText={options.profile.invoiceFooter}
       />
     </>
   );

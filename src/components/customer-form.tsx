@@ -31,6 +31,8 @@ export interface CustomerFormValues {
   shipToProvince: string | null;
   shipToPostalCode: string | null;
   notes: string | null;
+  gstExempt: boolean;
+  pstExempt: boolean;
 }
 
 /** What `createCustomerAction` hands back, and what the invoice editor consumes. */
@@ -38,13 +40,17 @@ export type CreatedCustomer = NonNullable<
   Awaited<ReturnType<typeof createCustomerAction>>["customer"]
 >;
 
+/** Keys of FormState whose value is a string — excludes gstExempt/pstExempt
+ * so AddressBlock's generic field lookup stays string-typed. */
+type StringFormKey = { [K in keyof FormState]: FormState[K] extends string ? K : never }[keyof FormState];
+
 /** The five parts of an address, named once per side of the document. */
 interface AddressFieldNames {
-  line1: keyof FormState;
-  line2: keyof FormState;
-  city: keyof FormState;
-  province: keyof FormState;
-  postalCode: keyof FormState;
+  line1: StringFormKey;
+  line2: StringFormKey;
+  city: StringFormKey;
+  province: StringFormKey;
+  postalCode: StringFormKey;
 }
 
 interface FormState {
@@ -64,6 +70,8 @@ interface FormState {
   shipToProvince: string;
   shipToPostalCode: string;
   notes: string;
+  gstExempt: boolean;
+  pstExempt: boolean;
 }
 
 const EMPTY: FormState = {
@@ -83,6 +91,8 @@ const EMPTY: FormState = {
   shipToProvince: "",
   shipToPostalCode: "",
   notes: "",
+  gstExempt: false,
+  pstExempt: false,
 };
 
 /** Nullable DB columns become the "" the controlled inputs expect. */
@@ -104,6 +114,8 @@ function toFormState(customer: CustomerFormValues): FormState {
     shipToProvince: customer.shipToProvince ?? "",
     shipToPostalCode: customer.shipToPostalCode ?? "",
     notes: customer.notes ?? "",
+    gstExempt: customer.gstExempt,
+    pstExempt: customer.pstExempt,
   };
 }
 
@@ -158,7 +170,7 @@ export function CustomerForm({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  function set(key: keyof FormState, value: string) {
+  function set(key: StringFormKey, value: string) {
     setForm((current) => ({ ...current, [key]: value }));
   }
 
@@ -236,6 +248,37 @@ export function CustomerForm({
         </Field>
       </div>
 
+      <div className="grid gap-2 sm:grid-cols-2">
+        <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-paper-300 p-2.5">
+          <input
+            type="checkbox"
+            checked={form.gstExempt}
+            onChange={(event) => setForm((c) => ({ ...c, gstExempt: event.target.checked }))}
+            className="mt-0.5 h-3.5 w-3.5 accent-[color:var(--color-brand-600)]"
+          />
+          <span className="text-[0.8125rem] leading-5 text-ink-800">
+            GST exempt
+            <span className="mt-0.5 block text-[0.75rem] text-muted-ink">
+              Removes GST only from this customer&apos;s invoices. Does not affect HST.
+            </span>
+          </span>
+        </label>
+        <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-paper-300 p-2.5">
+          <input
+            type="checkbox"
+            checked={form.pstExempt}
+            onChange={(event) => setForm((c) => ({ ...c, pstExempt: event.target.checked }))}
+            className="mt-0.5 h-3.5 w-3.5 accent-[color:var(--color-brand-600)]"
+          />
+          <span className="text-[0.8125rem] leading-5 text-ink-800">
+            PST/RST exempt
+            <span className="mt-0.5 block text-[0.75rem] text-muted-ink">
+              Removes PST/RST only from this customer&apos;s invoices. Does not affect QST.
+            </span>
+          </span>
+        </label>
+      </div>
+
       <SectionDivider label="Billing address" />
       <AddressBlock form={form} set={set} cols={cols} fields={BILLING_FIELDS} />
 
@@ -300,7 +343,7 @@ function AddressBlock({
   fields,
 }: {
   form: FormState;
-  set: (key: keyof FormState, value: string) => void;
+  set: (key: StringFormKey, value: string) => void;
   cols: string;
   fields: AddressFieldNames;
 }) {

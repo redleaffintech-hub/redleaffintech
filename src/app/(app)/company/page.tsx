@@ -5,7 +5,7 @@ import { formatDate } from "@/lib/dates";
 import { DEFAULT_CURRENCY, currencyLabel, currencyOptions } from "@/lib/currency";
 import { PROVINCES } from "@/lib/enums";
 import { Badge, Card, CardHeader, DefinitionList, PageHeader } from "@/components/ui";
-import { CompanyProfileForm, NumberingForm } from "./company-form";
+import { CompanyProfileForm, CustomerCodeForm, NumberingForm } from "./company-form";
 import { CompanyLogoCard } from "./logo-card";
 
 export const metadata = { title: "Company profile" };
@@ -43,6 +43,9 @@ export default async function CompanyPage() {
                 gstNumber: record.gstNumber ?? "",
                 qstNumber: record.qstNumber ?? "",
                 pstNumber: record.pstNumber ?? "",
+                gstHstStatus: record.gstHstStatus === "UNSET" ? "APPLICABLE" : (record.gstHstStatus as "APPLICABLE" | "EXEMPT" | "NOT_APPLICABLE"),
+                qstStatus: record.qstStatus === "UNSET" ? "APPLICABLE" : (record.qstStatus as "APPLICABLE" | "EXEMPT" | "NOT_APPLICABLE"),
+                pstStatus: record.pstStatus === "UNSET" ? "APPLICABLE" : (record.pstStatus as "APPLICABLE" | "EXEMPT" | "NOT_APPLICABLE"),
                 baseCurrency: record.baseCurrency || DEFAULT_CURRENCY,
                 province: record.province,
                 addressLine1: record.addressLine1 ?? "",
@@ -55,6 +58,8 @@ export default async function CompanyPage() {
                 defaultPaymentTermsDays: record.defaultPaymentTermsDays,
                 defaultTaxInclusive: record.defaultTaxInclusive,
                 invoiceFooter: record.invoiceFooter ?? "",
+                quoteFooter: record.quoteFooter ?? "",
+                creditNoteFooter: record.creditNoteFooter ?? "",
               }}
               currencies={currencyOptions(record.baseCurrency)}
               postedEntries={postedEntries}
@@ -68,9 +73,9 @@ export default async function CompanyPage() {
                   { label: "Legal name", value: record.legalName ?? "—" },
                   { label: "Province", value: provinceName },
                   { label: "Business number", value: record.businessNumber ?? "—" },
-                  { label: "GST/HST number", value: record.gstNumber ?? "—" },
-                  { label: "QST number", value: record.qstNumber ?? "—" },
-                  { label: "PST number", value: record.pstNumber ?? "—" },
+                  { label: "GST/HST", value: taxStatusLine(record.gstHstStatus, record.gstNumber) },
+                  { label: "QST", value: taxStatusLine(record.qstStatus, record.qstNumber) },
+                  { label: "PST/RST", value: taxStatusLine(record.pstStatus, record.pstNumber) },
                   { label: "Base currency", value: currencyLabel(record.baseCurrency || DEFAULT_CURRENCY) },
                   { label: "Address", value: [record.addressLine1, record.city, record.postalCode].filter(Boolean).join(", ") || "—" },
                   { label: "Email", value: record.email ?? "—" },
@@ -78,6 +83,14 @@ export default async function CompanyPage() {
                 ]}
               />
             </Card>
+          )}
+
+          {editable && (
+            <CustomerCodeForm
+              prefix={record.customerCodePrefix}
+              padding={record.customerCodePadding}
+              next={record.nextCustomerCodeNumber}
+            />
           )}
 
           {editable && (
@@ -138,6 +151,12 @@ export default async function CompanyPage() {
       </div>
     </>
   );
+}
+
+function taxStatusLine(status: string, number: string | null): string {
+  if (status === "EXEMPT") return "Exempt";
+  if (status === "NOT_APPLICABLE") return "Not applicable";
+  return number ?? "—";
 }
 
 function Row({ label, value }: { label: string; value: string }) {

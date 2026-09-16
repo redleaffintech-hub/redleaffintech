@@ -109,6 +109,9 @@ export default async function InvoiceDetailPage({ params }: PageProps<"/sales/in
     companyProfile.website,
     companyAddress || null,
   ].filter(Boolean) as string[];
+  // The invoice's own snapshot (issue 2); a pre-existing invoice with none
+  // falls back to today's live company footer (documented compatibility path).
+  const invoiceFooterText = invoice.footerText ?? companyProfile.invoiceFooter;
 
   const hasItemColumn = invoice.lines.some((line) => line.item);
 
@@ -240,11 +243,16 @@ export default async function InvoiceDetailPage({ params }: PageProps<"/sales/in
                     {hasItemColumn && <td className="tnum">{line.item?.code ?? ""}</td>}
                     <td>
                       <span className="font-medium">{line.description}</span>
-                      <span className="mt-0.5 block text-[0.6875rem] text-[color:var(--inv-ink)]/60">
-                        {line.account.code} · {line.account.name}
-                        {line.taxCode && ` · ${line.taxCode.code}`}
-                        {line.discountPercentMicro > 0 && ` · ${formatRate(line.discountPercentMicro / 100)} off`}
-                      </span>
+                      {(() => {
+                        const grossCents = Math.round((line.quantityMilli * line.unitPriceCents) / 1000);
+                        const discountCents = grossCents - line.netCents;
+                        if (discountCents <= 0) return null;
+                        return (
+                          <span className="mt-0.5 block text-[0.6875rem] text-[color:var(--inv-ink)]/60">
+                            {line.discountMode === "FIXED" ? `${fmt(discountCents)} off` : `${formatRate(line.discountPercentMicro / 100)} off`}
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td className="inv-num tnum">{formatQty(line.quantityMilli)}</td>
                     <td className="inv-num tnum">{fmt(line.unitPriceCents)}</td>
@@ -309,16 +317,19 @@ export default async function InvoiceDetailPage({ params }: PageProps<"/sales/in
             </div>
           </div>
 
-          {/* Footer — payment instructions and contact details */}
-          {(companyProfile.invoiceFooter || footerContact.length > 0) && (
+          {/* Footer — payment instructions and contact details. The invoice's
+              own snapshotted footerText (issue 2), stable even if the
+              company's default changes later; a pre-existing invoice with no
+              snapshot falls back to today's company footer. */}
+          {(invoiceFooterText || footerContact.length > 0) && (
             <div className="inv-footer">
-              {companyProfile.invoiceFooter && (
+              {invoiceFooterText && (
                 <p className="whitespace-pre-line">
-                  <span className="font-semibold">Payment instructions.</span> {companyProfile.invoiceFooter}
+                  <span className="font-semibold">Payment instructions.</span> {invoiceFooterText}
                 </p>
               )}
               {footerContact.length > 0 && (
-                <p className={companyProfile.invoiceFooter ? "mt-1.5" : ""}>
+                <p className={invoiceFooterText ? "mt-1.5" : ""}>
                   <span className="font-semibold">{companyProfile.legalName ?? companyProfile.name}</span>
                   {" — "}
                   {footerContact.join("  ·  ")}

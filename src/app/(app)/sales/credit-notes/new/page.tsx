@@ -23,10 +23,15 @@ export default async function NewCreditNotePage() {
         description="A credit note reverses revenue and the tax that went with it, rather than editing the original invoice. It posts as soon as you save, then sits against the customer until it is applied."
       />
 
-      <div className="mb-4">
+      <div className="mb-4 space-y-3">
         <Callout tone="caution" title="This posts immediately">
           There is no draft state. Saving writes the journal that reduces revenue, reverses the tax and brings the
           receivable down, and the credit is then available to apply against any open invoice for this customer.
+        </Callout>
+        <Callout tone="info" title="Returning tracked inventory?">
+          A manual credit note here does not restock inventory or reverse the original sale&apos;s cost. To return goods
+          against a specific invoice — restocking at the price they were actually sold at — open that invoice and use
+          its &ldquo;Create return&rdquo; action instead.
         </Callout>
       </div>
 
@@ -42,11 +47,13 @@ export default async function NewCreditNotePage() {
         cancelHref="/sales/credit-notes"
         companyProfile={options.profile}
         companyProvince={options.company.province}
+        companyTaxPolicy={options.taxPolicy}
         customerCreation={{
           taxCodes: options.salesTaxCodes,
           defaultTermsDays: options.company.defaultPaymentTermsDays,
         }}
         provincesWithSalesTax={options.provincesWithSalesTax}
+        footerText={options.profile.creditNoteFooter}
       />
     </>
   );

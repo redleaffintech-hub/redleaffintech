@@ -66,6 +66,9 @@ export function BillActions({
             Pay bill
           </Button>
         )}
+        {isPosted && status !== "VOID" && (
+          <LinkButton href={`/purchases/returns/new?billId=${billId}`}>Create return</LinkButton>
+        )}
         <button
           type="button"
           onClick={() => window.print()}

@@ -47,6 +47,7 @@ export const NAV_GROUPS: NavGroup[] = [
     icon: "truck",
     items: [
       { label: "Bills", href: "/purchases/bills", capability: CAPABILITIES.BILLS, badgeKey: "approvals" },
+      { label: "Purchase returns", href: "/purchases/returns", capability: CAPABILITIES.BILLS },
       { label: "Vendors", href: "/purchases/vendors", capability: CAPABILITIES.BILLS },
       { label: "Payments", href: "/purchases/payments", capability: CAPABILITIES.PAYMENTS },
     ],

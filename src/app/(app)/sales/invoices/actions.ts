@@ -16,7 +16,10 @@ const lineSchema = z.object({
   description: z.string().min(1),
   quantity: z.number().positive(),
   unitPrice: z.string(),
+  discountMode: z.enum(["PERCENT", "FIXED"]).default("PERCENT"),
   discountPercent: z.number().min(0).max(100).default(0),
+  /** Dollar string, e.g. "10.00" — converted to cents below. Issue 6. */
+  discountAmount: z.string().optional(),
   accountId: z.string().min(1),
   taxCodeId: z.string().nullable(),
   itemId: z.string().nullable(),
@@ -90,7 +93,9 @@ export async function createInvoiceAction(payload: string) {
         description: line.description,
         quantityMilli: Math.round(line.quantity * 1000),
         unitPriceCents: toCents(line.unitPrice),
+        discountMode: line.discountMode,
         discountPercentMicro: Math.round(line.discountPercent * 1_000_000),
+        discountAmountCents: line.discountAmount ? toCents(line.discountAmount) : 0,
         taxCodeId: line.taxCodeId,
         itemId: line.itemId,
       })),
@@ -129,7 +134,9 @@ export async function updateInvoiceAction(invoiceId: string, payload: string) {
         description: line.description,
         quantityMilli: Math.round(line.quantity * 1000),
         unitPriceCents: toCents(line.unitPrice),
+        discountMode: line.discountMode,
         discountPercentMicro: Math.round(line.discountPercent * 1_000_000),
+        discountAmountCents: line.discountAmount ? toCents(line.discountAmount) : 0,
         taxCodeId: line.taxCodeId,
         itemId: line.itemId,
       })),
@@ -245,7 +252,7 @@ export async function invoiceFormOptions() {
         id: true, name: true, taxCodeId: true, paymentTermsDays: true, country: true,
         addressLine1: true, addressLine2: true, city: true, province: true, postalCode: true,
         shipToLine1: true, shipToLine2: true, shipToCity: true, shipToProvince: true,
-        shipToPostalCode: true, shipToCountry: true,
+        shipToPostalCode: true, shipToCountry: true, gstExempt: true, pstExempt: true,
       },
     }),
     db.account.findMany({
@@ -275,7 +282,8 @@ export async function invoiceFormOptions() {
       select: {
         name: true, legalName: true, addressLine1: true, addressLine2: true, city: true, province: true,
         postalCode: true, businessNumber: true, gstNumber: true, qstNumber: true, pstNumber: true,
-        email: true, phone: true, website: true, invoiceFooter: true, logoUrl: true,
+        email: true, phone: true, website: true, invoiceFooter: true, quoteFooter: true, creditNoteFooter: true,
+        logoUrl: true, gstHstStatus: true, qstStatus: true, pstStatus: true,
       },
     }),
   ]);
@@ -287,6 +295,8 @@ export async function invoiceFormOptions() {
     name: customer.name,
     taxCodeId: customer.taxCodeId,
     paymentTermsDays: customer.paymentTermsDays,
+    gstExempt: customer.gstExempt,
+    pstExempt: customer.pstExempt,
     billTo: {
       line1: customer.addressLine1,
       line2: customer.addressLine2,
@@ -315,6 +325,14 @@ export async function invoiceFormOptions() {
     items,
     company,
     profile,
+    /** The company's sales-tax collection status (issues 1/5) — passed to
+     * DocumentForm as `companyTaxPolicy` so the client preview suppresses
+     * exactly what posting will. */
+    taxPolicy: {
+      gstHstStatus: profile.gstHstStatus,
+      qstStatus: profile.qstStatus,
+      pstStatus: profile.pstStatus,
+    },
     /** The plain list the new-customer dialog offers as a default code. */
     salesTaxCodes: taxCodes.map((code) => ({ id: code.id, code: code.code, name: code.name })),
     provincesWithSalesTax: PROVINCES_WITH_SALES_TAX,

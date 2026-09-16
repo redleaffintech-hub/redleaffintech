@@ -50,7 +50,10 @@ export default async function EditBillPage({ params }: { params: Promise<{ id: s
       description: line.description,
       quantity: String(line.quantityMilli / 1000),
       unitPrice: (line.unitPriceCents / 100).toFixed(2),
+      // Bills stay percent-only (issue 6 is scoped to invoices/quotes only).
+      discountMode: "PERCENT" as const,
       discount: line.discountPercentMicro ? String(line.discountPercentMicro / 1_000_000) : "",
+      discountAmount: "",
       accountId: line.accountId,
       taxCodeId: line.taxCodeId ?? "",
       itemId: line.itemId,

@@ -24,7 +24,6 @@ export interface PreviewCompany {
   phone?: string | null;
   email?: string | null;
   website?: string | null;
-  invoiceFooter: string | null;
   logoUrl?: string | null;
 }
 
@@ -42,7 +41,15 @@ interface DocumentPreviewProps {
   reference: string;
   referenceLabel: string;
   memo: string;
-  accountName: (accountId: string) => string;
+  /** This document's own footer snapshot (issue 2, 15 Sep 2026 review) — the
+   * matching Invoice/Estimate/CreditNote footer text, not a live company
+   * lookup, and never invoiceFooter borrowed for another document kind. Null
+   * hides the footer entirely (an empty quote/credit-note footer must not
+   * fall back to the invoice's). */
+  footerText: string | null;
+  /** e.g. "Payment instructions" for an invoice, "Terms" for a quote — shown
+   * only next to non-empty footerText. */
+  footerLabel: string;
   computed: Computed;
   /**
    * "invoice" renders the client's blue-grey sales-invoice template; "standard"
@@ -85,7 +92,8 @@ function InvoiceDocument({
   reference,
   referenceLabel,
   memo,
-  accountName,
+  footerText,
+  footerLabel,
   computed,
   itemNumber,
 }: DocumentPreviewProps) {
@@ -140,11 +148,13 @@ function InvoiceDocument({
                   {hasItemColumn && <td className="tnum">{itemCodes[index] ?? ""}</td>}
                   <td>
                     <span className="font-medium">{line.description}</span>
-                    <span className="mt-0.5 block text-[0.6875rem] text-[color:var(--inv-ink)]/60">
-                      {accountName(line.accountId)}
-                      {line.discountPercentMicro > 0 &&
-                        ` · ${formatRate(line.discountPercentMicro / 100)} off`}
-                    </span>
+                    {line.discountCents > 0 && (
+                      <span className="mt-0.5 block text-[0.6875rem] text-[color:var(--inv-ink)]/60">
+                        {line.discountMode === "FIXED"
+                          ? `${money.format(line.discountCents)} off`
+                          : `${formatRate(line.discountPercentMicro / 100)} off`}
+                      </span>
+                    )}
                   </td>
                   <td className="inv-num tnum">{formatQty(line.quantityMilli)}</td>
                   <td className="inv-num tnum">{money.format(line.unitPriceCents)}</td>
@@ -184,7 +194,7 @@ function InvoiceDocument({
         </div>
       </div>
 
-      <InvoiceFooter company={company} />
+      <InvoiceFooter company={company} footerText={footerText} footerLabel={footerLabel} />
     </div>
   );
 }
@@ -287,8 +297,16 @@ function InvoiceTotals({
   );
 }
 
-/** Payment instructions and contact details, hidden entirely when a company has neither. */
-function InvoiceFooter({ company }: { company: PreviewCompany }) {
+/** The document's own footer text and contact details, hidden entirely when a company has neither. */
+function InvoiceFooter({
+  company,
+  footerText,
+  footerLabel,
+}: {
+  company: PreviewCompany;
+  footerText: string | null;
+  footerLabel: string;
+}) {
   const contact = [
     company.email,
     company.phone,
@@ -296,17 +314,17 @@ function InvoiceFooter({ company }: { company: PreviewCompany }) {
     [company.addressLine1, company.city, company.province, company.postalCode].filter(Boolean).join(", ") || null,
   ].filter(Boolean) as string[];
 
-  if (!company.invoiceFooter && contact.length === 0) return null;
+  if (!footerText && contact.length === 0) return null;
 
   return (
     <div className="inv-footer">
-      {company.invoiceFooter && (
+      {footerText && (
         <p className="whitespace-pre-line">
-          <span className="font-semibold">Payment instructions.</span> {company.invoiceFooter}
+          <span className="font-semibold">{footerLabel}.</span> {footerText}
         </p>
       )}
       {contact.length > 0 && (
-        <p className={company.invoiceFooter ? "mt-1.5" : ""}>
+        <p className={footerText ? "mt-1.5" : ""}>
           <span className="font-semibold">{company.legalName ?? company.name}</span>
           {" — "}
           {contact.join("  ·  ")}
@@ -330,7 +348,7 @@ function StandardDocument({
   reference,
   referenceLabel,
   memo,
-  accountName,
+  footerText,
   computed,
   partyHeading,
 }: DocumentPreviewProps) {
@@ -425,7 +443,13 @@ function StandardDocument({
               <Tr key={line.lineNo}>
                 <Td>
                   <span className="font-medium text-ink-900">{line.description}</span>
-                  <span className="block text-[0.75rem] text-muted-ink">{accountName(line.accountId)}</span>
+                  {line.discountCents > 0 && (
+                    <span className="block text-[0.75rem] text-muted-ink">
+                      {line.discountMode === "FIXED"
+                        ? `${money.format(line.discountCents)} off`
+                        : `${formatRate(line.discountPercentMicro / 100)} off`}
+                    </span>
+                  )}
                 </Td>
                 <Td align="right" className="tnum">{formatQty(line.quantityMilli)}</Td>
                 <Td align="right" className="tnum">{money.format(line.unitPriceCents)}</Td>
@@ -457,13 +481,13 @@ function StandardDocument({
         </dl>
       </div>
 
-      {(memo || company.invoiceFooter) && (
+      {(memo || footerText) && (
         <p className="mt-4 border-t border-paper-200 pt-3 text-[0.8125rem] leading-6 text-muted-ink">
           {memo}
-          {company.invoiceFooter && (
+          {footerText && (
             <>
               <br />
-              {company.invoiceFooter}
+              {footerText}
             </>
           )}
         </p>

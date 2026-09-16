@@ -336,7 +336,17 @@ export async function postBillInTx(tx: Tx, billId: string, companyId: string, us
         })).map((i) => i.id),
       )
     : new Set<string>();
-  const trackedLines = doc.lines.filter((l) => l.itemId && trackedItemIds.has(l.itemId));
+  // Zip each computed line back to its persisted BillLine id (by position —
+  // computeDocument preserves order 1:1) before filtering, so a tracked
+  // line's stock movement can carry InventoryMovement.sourceLineId (issue 10
+  // lineage) even after the tracked/regular split below.
+  const linesWithBillLineId = doc.lines.map((line, i) => ({ line, billLineId: bill.lines[i].id }));
+  const trackedLines = linesWithBillLineId
+    .filter((l) => l.line.itemId && trackedItemIds.has(l.line.itemId))
+    .map((l) => l.line);
+  const trackedLineIds = linesWithBillLineId
+    .filter((l) => l.line.itemId && trackedItemIds.has(l.line.itemId))
+    .map((l) => l.billLineId);
   const regularLines = doc.lines.filter((l) => !(l.itemId && trackedItemIds.has(l.itemId)));
 
   const ap = await getSystemAccount(tx, companyId, SYSTEM_ACCOUNTS.ACCOUNTS_PAYABLE);
@@ -389,7 +399,8 @@ export async function postBillInTx(tx: Tx, billId: string, companyId: string, us
     ],
   });
 
-  for (const line of trackedLines) {
+  for (let i = 0; i < trackedLines.length; i++) {
+    const line = trackedLines[i];
     let lineCost = line.netCents;
     for (const c of line.taxComponents) {
       if (c.taxCents !== 0 && !c.isRecoverable) lineCost += c.taxCents;
@@ -402,6 +413,7 @@ export async function postBillInTx(tx: Tx, billId: string, companyId: string, us
       totalCostCents: lineCost,
       sourceType: "BILL",
       sourceId: bill.id,
+      sourceLineId: trackedLineIds[i],
       sourceNumber: bill.number,
       journalEntryId: entry.id,
       userId,

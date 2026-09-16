@@ -53,6 +53,26 @@ export interface ProvisionCompanyInput {
   enabledModules?: string[];
 }
 
+const PST_PROVINCES = new Set(["BC", "SK", "MB"]);
+
+/**
+ * Explicit tax-collection status per registration, from the province's own
+ * regime (issue 1, 15 Sep 2026 review) — new companies always get a concrete
+ * APPLICABLE/NOT_APPLICABLE, never the "UNSET" migration sentinel that only
+ * pre-existing companies carry. A blank registration number does not change
+ * this: entering the number later is a separate step from stating that the
+ * tax applies.
+ */
+function defaultTaxStatuses(province: string) {
+  const pst = PST_PROVINCES.has(province);
+  const qst = province === "QC";
+  return {
+    gstHstStatus: "APPLICABLE" as const,
+    qstStatus: qst ? ("APPLICABLE" as const) : ("NOT_APPLICABLE" as const),
+    pstStatus: pst ? ("APPLICABLE" as const) : ("NOT_APPLICABLE" as const),
+  };
+}
+
 /**
  * The company row plus everything the posting engine needs before a single
  * transaction can be recorded: chart of accounts, effective-dated tax codes,
@@ -73,6 +93,7 @@ async function createCompanyAndSetup(tx: Tx, input: ProvisionCompanyInput) {
       gstNumber: input.gstNumber,
       qstNumber: input.qstNumber,
       pstNumber: input.pstNumber,
+      ...defaultTaxStatuses(input.province),
       // An unrecognised code must not create a company that formats as garbage;
       // fall back to the default rather than storing whatever was passed.
       baseCurrency: normalizeCurrency(input.baseCurrency) ?? DEFAULT_CURRENCY,

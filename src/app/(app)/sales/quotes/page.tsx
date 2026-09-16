@@ -108,7 +108,11 @@ export default async function QuotesPage({ searchParams }: PageProps<"/sales/quo
                 const daysLeft = quote.expiryDate ? daysBetween(today(), quote.expiryDate) : null;
                 return (
                   <Tr key={quote.id}>
-                    <Td className="tnum font-medium text-ink-900">{quote.number}</Td>
+                    <Td className="tnum font-medium text-ink-900">
+                      <Link href={`/sales/quotes/${quote.id}`} className="hover:text-brand-700 hover:underline">
+                        {quote.number}
+                      </Link>
+                    </Td>
                     <Td>
                       <Link
                         href={`/sales/customers/${quote.customer.id}`}

@@ -44,6 +44,18 @@ export function sum(values: number[]): number {
   return values.reduce((a, b) => a + b, 0);
 }
 
+/**
+ * Proportion `cents` by `numerator/denominator` (e.g. a return's quantity
+ * over the source line's original quantity), rounded half-away-from-zero.
+ * Used to reverse a historical line's already-taxed amount without ever
+ * re-running the tax engine against today's rates or settings (issue 10,
+ * 15 Sep 2026 review) — see src/server/documents/credit-notes.ts.
+ */
+export function prorateCents(cents: number, numerator: number, denominator: number): number {
+  if (denominator === 0) return 0;
+  return Number(divRound(BigInt(Math.trunc(cents)) * BigInt(Math.trunc(numerator)), BigInt(Math.trunc(denominator))));
+}
+
 // ── Parsing & formatting ────────────────────────────────────────────────────
 
 /** "1,234.56" | 1234.56 -> 123456 cents. Rejects anything non-numeric. */

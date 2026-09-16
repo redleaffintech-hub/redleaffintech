@@ -12,8 +12,9 @@ import { SYSTEM_ACCOUNTS } from "@/lib/enums";
 import { addDays, toUtcDay } from "@/lib/dates";
 import { getSystemAccount, postJournal, reverseJournal } from "@/server/accounting/ledger";
 import { loadTaxCodes, recordTaxEntries } from "@/server/tax/engine";
+import { resolveSuppressedKinds } from "@/server/tax/policy";
 import { consumeStock, reverseStockMovement } from "@/server/inventory/costing";
-import { computeDocument, netByAccount, type RawLine } from "./lines";
+import { computeDocument, netByAccount, assertValidDiscount, type RawLine } from "./lines";
 import { nextNumber } from "./numbering";
 
 /**
@@ -58,7 +59,7 @@ function blankAddress(address: DocumentAddressInput | null | undefined) {
 }
 
 /** The fields a customer contributes when the document does not carry its own address. */
-interface AddressCustomer {
+export interface AddressCustomer {
   name: string;
   country: string;
   addressLine1: string | null;
@@ -83,7 +84,10 @@ interface AddressCustomer {
  * customer default) means "ship to the billing address". Shared by create and
  * edit so the two can never diverge on the fallback rules.
  */
-function documentAddressColumns(customer: AddressCustomer, input: Pick<InvoiceInput, "billTo" | "shipTo">) {
+export function documentAddressColumns(
+  customer: AddressCustomer,
+  input: { billTo?: DocumentAddressInput | null; shipTo?: DocumentAddressInput | null },
+) {
   const billTo =
     input.billTo && !blankAddress(input.billTo)
       ? input.billTo
@@ -147,7 +151,9 @@ function lineCreateData(doc: ReturnType<typeof computeDocument>) {
     description: l.description,
     quantityMilli: l.quantityMilli,
     unitPriceCents: l.unitPriceCents,
+    discountMode: l.discountMode,
     discountPercentMicro: l.discountPercentMicro,
+    discountAmountCents: l.discountAmountCents,
     netCents: l.netCents,
     taxCodeId: l.taxCodeId ?? null,
     taxCents: l.taxCents,
@@ -170,13 +176,20 @@ export async function createInvoiceInTx(tx: Tx, input: InvoiceInput) {
     where: { id: input.customerId, companyId: input.companyId },
   });
   if (!customer) throw new Error("Customer not found in this company.");
+  const company = await tx.company.findUniqueOrThrow({
+    where: { id: input.companyId },
+    select: { gstHstStatus: true, qstStatus: true, pstStatus: true, invoiceFooter: true },
+  });
+
+  for (const line of input.lines) assertValidDiscount(line);
 
   const dueDate = input.dueDate
     ? toUtcDay(input.dueDate)
     : addDays(issueDate, customer.paymentTermsDays);
 
+  const suppressedKinds = resolveSuppressedKinds(company, customer);
   const taxCodes = await loadTaxCodes(tx, input.companyId, input.lines.map((l) => l.taxCodeId));
-  const doc = computeDocument(input.lines, taxCodes, input.taxInclusive ?? false, issueDate);
+  const doc = computeDocument(input.lines, taxCodes, input.taxInclusive ?? false, issueDate, suppressedKinds);
   const number = input.number ?? (await nextNumber(tx, input.companyId, "invoice"));
 
   return tx.invoice.create({
@@ -192,6 +205,7 @@ export async function createInvoiceInTx(tx: Tx, input: InvoiceInput) {
       poNumber: input.poNumber,
       projectId: input.projectId ?? null,
       taxInclusive: input.taxInclusive ?? false,
+      footerText: company.invoiceFooter ?? null,
       ...documentAddressColumns(customer, input),
       subtotalCents: doc.subtotalCents,
       discountCents: doc.discountCents,
@@ -239,6 +253,12 @@ export async function updateInvoice(input: InvoiceUpdateInput) {
       where: { id: input.customerId, companyId: input.companyId },
     });
     if (!customer) throw new Error("Customer not found in this company.");
+    const company = await tx.company.findUniqueOrThrow({
+      where: { id: input.companyId },
+      select: { gstHstStatus: true, qstStatus: true, pstStatus: true },
+    });
+
+    for (const line of input.lines) assertValidDiscount(line);
 
     const wasPosted = Boolean(existing.journalEntryId);
 
@@ -281,8 +301,9 @@ export async function updateInvoice(input: InvoiceUpdateInput) {
 
     const issueDate = toUtcDay(input.issueDate);
     const dueDate = input.dueDate ? toUtcDay(input.dueDate) : addDays(issueDate, customer.paymentTermsDays);
+    const suppressedKinds = resolveSuppressedKinds(company, customer);
     const taxCodes = await loadTaxCodes(tx, input.companyId, input.lines.map((l) => l.taxCodeId));
-    const doc = computeDocument(input.lines, taxCodes, input.taxInclusive ?? false, issueDate);
+    const doc = computeDocument(input.lines, taxCodes, input.taxInclusive ?? false, issueDate, suppressedKinds);
 
     await tx.invoiceLine.deleteMany({ where: { invoiceId: existing.id } });
 
@@ -352,6 +373,12 @@ export async function postInvoiceInTx(
   if (invoice.status === "VOID") throw new Error(`Invoice ${invoice.number} is void.`);
   if (invoice.lines.length === 0) throw new Error("An invoice needs at least one line.");
 
+  const company = await tx.company.findUniqueOrThrow({
+    where: { id: companyId },
+    select: { gstHstStatus: true, qstStatus: true, pstStatus: true },
+  });
+  const suppressedKinds = resolveSuppressedKinds(company, invoice.customer);
+
   // Recompute from the line inputs so the ledger can never disagree with the
   // document, and so tax is rated as of the invoice date.
   const taxCodes = await loadTaxCodes(tx, companyId, invoice.lines.map((l) => l.taxCodeId));
@@ -361,7 +388,9 @@ export async function postInvoiceInTx(
       description: l.description,
       quantityMilli: l.quantityMilli,
       unitPriceCents: l.unitPriceCents,
+      discountMode: l.discountMode as "PERCENT" | "FIXED",
       discountPercentMicro: l.discountPercentMicro,
+      discountAmountCents: l.discountAmountCents,
       taxCodeId: l.taxCodeId,
       itemId: l.itemId,
       projectId: l.projectId,
@@ -369,7 +398,12 @@ export async function postInvoiceInTx(
     taxCodes,
     invoice.taxInclusive,
     invoice.issueDate,
+    suppressedKinds,
   );
+  // Parallel array — doc.lines[i] is invoice.lines[i]'s computed result, so
+  // the persisted line id (needed for InventoryMovement.sourceLineId lineage,
+  // issue 10) can be looked up by index.
+  const sourceLineIds = invoice.lines.map((l) => l.id);
 
   const ar = await getSystemAccount(tx, companyId, SYSTEM_ACCOUNTS.ACCOUNTS_RECEIVABLE);
 
@@ -391,7 +425,8 @@ export async function postInvoiceInTx(
     const cogsByAccount = new Map<string, number>();
     let totalCogsCents = 0;
 
-    for (const line of doc.lines) {
+    for (let i = 0; i < doc.lines.length; i++) {
+      const line = doc.lines[i];
       const item = line.itemId ? trackedItemById.get(line.itemId) : undefined;
       if (!item) continue;
       const { totalCostCents } = await consumeStock(tx, {
@@ -401,6 +436,7 @@ export async function postInvoiceInTx(
         quantityMilli: line.quantityMilli,
         sourceType: "INVOICE",
         sourceId: invoice.id,
+        sourceLineId: sourceLineIds[i],
         sourceNumber: invoice.number,
         userId,
       });

@@ -41,11 +41,13 @@ export default async function NewQuotePage() {
         suggestedNumber={suggestedNumber}
         companyProfile={options.profile}
         companyProvince={options.company.province}
+        companyTaxPolicy={options.taxPolicy}
         customerCreation={{
           taxCodes: options.salesTaxCodes,
           defaultTermsDays: options.company.defaultPaymentTermsDays,
         }}
         provincesWithSalesTax={options.provincesWithSalesTax}
+        footerText={options.profile.quoteFooter}
       />
     </>
   );

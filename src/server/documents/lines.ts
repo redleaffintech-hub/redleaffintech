@@ -12,7 +12,13 @@ export interface RawLine {
   description: string;
   quantityMilli?: number;
   unitPriceCents: number;
+  /** "PERCENT" (default) or "FIXED" — see discountAmountCents. */
+  discountMode?: "PERCENT" | "FIXED";
   discountPercentMicro?: number;
+  /** Total discount on the extended line when discountMode is "FIXED" — not
+   * multiplied by quantity again (issue 6, 15 Sep 2026 review). Ignored when
+   * discountMode is "PERCENT". */
+  discountAmountCents?: number;
   taxCodeId?: string | null;
   itemId?: string | null;
   customerId?: string | null;
@@ -23,7 +29,9 @@ export interface RawLine {
 export interface ComputedLine extends RawLine {
   lineNo: number;
   quantityMilli: number;
+  discountMode: "PERCENT" | "FIXED";
   discountPercentMicro: number;
+  discountAmountCents: number;
   /** Extended price before discount. */
   grossCents: number;
   discountCents: number;
@@ -50,22 +58,30 @@ export function computeDocument(
   taxCodes: Map<string, TaxCodeSpec>,
   taxInclusive: boolean,
   date: Date,
+  suppressedKinds?: ReadonlySet<string>,
 ): ComputedDocument {
   const lines: ComputedLine[] = rawLines.map((raw, index) => {
     const quantityMilli = raw.quantityMilli ?? 1000;
+    const discountMode = raw.discountMode ?? "PERCENT";
     const discountPercentMicro = raw.discountPercentMicro ?? 0;
+    const discountAmountCents = raw.discountAmountCents ?? 0;
     const grossCents = extendLine(quantityMilli, raw.unitPriceCents);
-    const discountCents = applyDiscount(grossCents, discountPercentMicro);
+    const discountCents =
+      discountMode === "FIXED"
+        ? Math.max(0, Math.min(discountAmountCents, grossCents))
+        : applyDiscount(grossCents, discountPercentMicro);
     const base = grossCents - discountCents;
 
     const code = raw.taxCodeId ? taxCodes.get(raw.taxCodeId) : null;
-    const tax = calculateTax(code, base, taxInclusive, date);
+    const tax = calculateTax(code, base, taxInclusive, date, suppressedKinds);
 
     return {
       ...raw,
       lineNo: index + 1,
       quantityMilli,
+      discountMode,
       discountPercentMicro,
+      discountAmountCents,
       grossCents,
       discountCents,
       netCents: tax.netCents,
@@ -99,6 +115,28 @@ export function computeDocument(
     totalCents: lines.reduce((s, l) => s + l.totalCents, 0),
     taxByComponent: [...merged.values()],
   };
+}
+
+/**
+ * Reject an invalid line discount server-side, before computeDocument ever
+ * runs (issue 6, 15 Sep 2026 review) — computeDocument itself clamps rather
+ * than throws, since it also has to tolerate already-persisted rows.
+ */
+export function assertValidDiscount(raw: RawLine, lineLabel = "Line"): void {
+  const mode = raw.discountMode ?? "PERCENT";
+  if (mode === "FIXED") {
+    const quantityMilli = raw.quantityMilli ?? 1000;
+    const grossCents = extendLine(quantityMilli, raw.unitPriceCents);
+    const amount = raw.discountAmountCents ?? 0;
+    if (amount < 0 || amount > grossCents) {
+      throw new Error(`${lineLabel}: fixed discount must be between $0 and the line's extended amount.`);
+    }
+  } else {
+    const pct = raw.discountPercentMicro ?? 0;
+    if (pct < 0 || pct > 100_000_000) {
+      throw new Error(`${lineLabel}: discount percent must be between 0% and 100%.`);
+    }
+  }
 }
 
 export interface NetByAccountEntry {

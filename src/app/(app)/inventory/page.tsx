@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { db } from "@/lib/db";
 import { requireVisible } from "@/server/auth/context";
 import { CAPABILITIES, can } from "@/lib/permissions";
@@ -128,8 +129,16 @@ export default async function InventoryPage() {
             <tbody>
               {rows.map((item) => (
                 <Tr key={item.id} className={item.isActive ? undefined : "opacity-60"}>
-                  <Td className="tnum font-medium text-ink-900">{item.code}</Td>
-                  <Td>{item.name}</Td>
+                  <Td className="tnum font-medium text-ink-900">
+                    <Link href={`/inventory/${item.id}`} className="hover:text-brand-700 hover:underline">
+                      {item.code}
+                    </Link>
+                  </Td>
+                  <Td>
+                    <Link href={`/inventory/${item.id}`} className="hover:text-brand-700 hover:underline">
+                      {item.name}
+                    </Link>
+                  </Td>
                   <Td align="right" className="tnum">
                     {(item.quantityOnHandMilli / 1000).toLocaleString("en-CA")} {item.unit}
                   </Td>

@@ -14,6 +14,9 @@ import { recordAudit, requireCapability } from "@/server/auth/context";
 
 // ── Profile & preferences ───────────────────────────────────────────────────
 
+const TAX_STATUSES = ["APPLICABLE", "EXEMPT", "NOT_APPLICABLE"] as const;
+const taxStatus = z.enum(TAX_STATUSES);
+
 const profileSchema = z.object({
   name: z.string().trim().min(2).max(120),
   legalName: z.string().trim().max(120).optional(),
@@ -21,6 +24,9 @@ const profileSchema = z.object({
   gstNumber: z.string().trim().max(30).optional(),
   qstNumber: z.string().trim().max(30).optional(),
   pstNumber: z.string().trim().max(30).optional(),
+  gstHstStatus: taxStatus,
+  qstStatus: taxStatus,
+  pstStatus: taxStatus,
   baseCurrency: z.string().trim().min(3).max(3),
   /** Set by the form once the user has acknowledged a currency relabel. */
   confirmCurrencyChange: z.string().optional(),
@@ -35,6 +41,8 @@ const profileSchema = z.object({
   defaultPaymentTermsDays: z.coerce.number().int().min(0).max(365),
   defaultTaxInclusive: z.string().optional(),
   invoiceFooter: z.string().trim().max(500).optional(),
+  quoteFooter: z.string().trim().max(500).optional(),
+  creditNoteFooter: z.string().trim().max(500).optional(),
 });
 
 export async function saveCompanyProfileAction(formData: FormData) {
@@ -50,6 +58,21 @@ export async function saveCompanyProfileAction(formData: FormData) {
   }
   if (input.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(input.email)) {
     return { error: "Enter a valid email address, or leave it blank." };
+  }
+
+  // Issue 1 (15 Sep 2026 review): a status of Applicable is a commitment to
+  // charge that tax, so it requires the registration number that will print
+  // on the invoice. Exempt/Not applicable never require (or clear) a number
+  // — an existing registration is preserved even if collection is toggled
+  // off, since the company may resume collecting it later.
+  if (input.gstHstStatus === "APPLICABLE" && !input.gstNumber) {
+    return { error: "Enter a GST/HST number, or set GST/HST to Exempt or Not applicable." };
+  }
+  if (input.qstStatus === "APPLICABLE" && !input.qstNumber) {
+    return { error: "Enter a QST number, or set QST to Exempt or Not applicable." };
+  }
+  if (input.pstStatus === "APPLICABLE" && !input.pstNumber) {
+    return { error: "Enter a PST number, or set PST/RST to Exempt or Not applicable." };
   }
 
   // Base currency is a LABEL, not a conversion. Amounts are stored as integer
@@ -92,6 +115,9 @@ export async function saveCompanyProfileAction(formData: FormData) {
       gstNumber: input.gstNumber || null,
       qstNumber: input.qstNumber || null,
       pstNumber: input.pstNumber || null,
+      gstHstStatus: input.gstHstStatus,
+      qstStatus: input.qstStatus,
+      pstStatus: input.pstStatus,
       baseCurrency,
       province: input.province.toUpperCase(),
       addressLine1: input.addressLine1 || null,
@@ -103,6 +129,8 @@ export async function saveCompanyProfileAction(formData: FormData) {
       defaultPaymentTermsDays: input.defaultPaymentTermsDays,
       defaultTaxInclusive: input.defaultTaxInclusive === "on",
       invoiceFooter: input.invoiceFooter || null,
+      quoteFooter: input.quoteFooter || null,
+      creditNoteFooter: input.creditNoteFooter || null,
     },
   });
 
@@ -332,6 +360,39 @@ export async function saveNumberingAction(formData: FormData) {
     entityType: "Company",
     entityId: company.id,
     summary: "Document numbering prefixes updated",
+  });
+
+  revalidatePath("/company");
+  return { ok: true };
+}
+
+const customerCodeSchema = z.object({
+  customerCodePrefix: z.string().trim().max(10),
+  customerCodePadding: z.coerce.number().int().min(1).max(10),
+});
+
+/**
+ * The customer display-code prefix/padding (issue 9). Like the document
+ * prefixes above, the counter itself is never editable here — only
+ * nextCustomerCode (src/server/documents/numbering.ts) ever advances it,
+ * atomically, on customer creation. A settings change here affects only
+ * customers created from now on; existing customers keep their code.
+ */
+export async function saveCustomerCodeAction(formData: FormData) {
+  const { company, user } = await requireCapability(CAPABILITIES.COMPANY_SETTINGS);
+  const parsed = customerCodeSchema.safeParse(Object.fromEntries(formData));
+  if (!parsed.success) {
+    return { error: "Check the customer code prefix and padding width." };
+  }
+
+  await db.company.update({ where: { id: company.id }, data: parsed.data });
+  await recordAudit({
+    companyId: company.id,
+    userId: user.id,
+    action: "UPDATE",
+    entityType: "Company",
+    entityId: company.id,
+    summary: "Customer code settings updated",
   });
 
   revalidatePath("/company");

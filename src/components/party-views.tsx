@@ -10,6 +10,8 @@ import { formatDate, formatDateLong } from "@/lib/dates";
 export interface PartyRow {
   id: string;
   name: string;
+  /** Customer-facing display code (issue 9) — absent for vendors. */
+  displayCode?: string | null;
   email: string | null;
   phone: string | null;
   city: string | null;
@@ -77,7 +79,10 @@ export function PartyTable({
                 {row.name}
               </Link>
               {!row.isActive && <span className="ml-1.5 text-[0.6875rem] uppercase text-muted-ink">archived</span>}
-              <span className="block text-[0.75rem] text-muted-ink">Net {row.paymentTermsDays}</span>
+              <span className="block text-[0.75rem] text-muted-ink">
+                {row.displayCode && <span className="tnum">{row.displayCode} · </span>}
+                Net {row.paymentTermsDays}
+              </span>
             </Td>
             <Td className="text-muted-ink">
               {row.email ?? "—"}

@@ -87,7 +87,13 @@ export function PaymentDetailActions({
   );
 }
 
-function ApplyRemainingForm({
+/**
+ * Reused directly by the customer detail page (issue 7, 15 Sep 2026 review)
+ * to apply a specific receipt's unapplied balance without navigating away —
+ * the same allocation UI and validated server action as the receipt's own
+ * detail page, not a second implementation.
+ */
+export function ApplyRemainingForm({
   paymentId,
   partyId,
   unappliedCents,

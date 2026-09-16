@@ -55,6 +55,8 @@ export default async function EditCustomerPage({ params }: { params: Promise<{ i
             shipToProvince: customer.shipToProvince,
             shipToPostalCode: customer.shipToPostalCode,
             notes: customer.notes,
+            gstExempt: customer.gstExempt,
+            pstExempt: customer.pstExempt,
           }}
         />
       </Card>

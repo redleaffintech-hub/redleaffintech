@@ -71,7 +71,9 @@ export default async function EditInvoicePage({ params }: { params: Promise<{ id
       description: line.description,
       quantity: String(line.quantityMilli / 1000),
       unitPrice: (line.unitPriceCents / 100).toFixed(2),
+      discountMode: line.discountMode as "PERCENT" | "FIXED",
       discount: line.discountPercentMicro ? String(line.discountPercentMicro / 1_000_000) : "",
+      discountAmount: line.discountAmountCents ? (line.discountAmountCents / 100).toFixed(2) : "",
       accountId: line.accountId,
       taxCodeId: line.taxCodeId ?? "",
       itemId: line.itemId,
@@ -109,11 +111,15 @@ export default async function EditInvoicePage({ params }: { params: Promise<{ id
         cancelHref={`/sales/invoices/${invoice.id}`}
         companyProfile={options.profile}
         companyProvince={options.company.province}
+        companyTaxPolicy={options.taxPolicy}
         customerCreation={{
           taxCodes: options.salesTaxCodes,
           defaultTermsDays: options.company.defaultPaymentTermsDays,
         }}
         provincesWithSalesTax={options.provincesWithSalesTax}
+        // A document's footer stays stable across edits — show the saved
+        // snapshot, never today's live company footer (issue 2).
+        footerText={invoice.footerText}
       />
     </>
   );

@@ -29,6 +29,7 @@ import { DocumentPreview, type PreviewCompany } from "@/components/document-prev
 import { CustomerForm, type CustomerFormTaxCode } from "@/components/customer-form";
 import { VendorForm, type VendorFormTaxCode } from "@/components/vendor-form";
 import { addProvincialTaxCodesAction } from "@/app/(app)/tax/actions";
+import { resolveSuppressedKinds, type TaxPolicyCompany } from "@/server/tax/policy";
 
 /**
  * The line-based document editor: invoices, sales quotes, customer credit notes
@@ -57,7 +58,9 @@ export interface DocumentFormInitial {
     description: string;
     quantity: string;
     unitPrice: string;
+    discountMode: "PERCENT" | "FIXED";
     discount: string;
+    discountAmount: string;
     accountId: string;
     taxCodeId: string;
     itemId: string | null;
@@ -90,6 +93,12 @@ interface KindConfig {
   postsToLedger: boolean;
   /** Bill-to and ship-to only belong on a document we issue. */
   showAddresses: boolean;
+  /** Label shown beside this kind's footer text in the preview (issue 2). */
+  footerLabel: string;
+  /** Whether a line can be discounted by a fixed dollar amount as well as a
+   * percent (issue 6) — invoices and quotes only, per the review document's
+   * own scope; bills and credit notes keep the existing percent-only field. */
+  supportsFixedDiscount: boolean;
   /**
    * Whether the tax on this document is chosen by a place of supply at all.
    *
@@ -116,6 +125,8 @@ const KINDS: Record<DocumentKind, KindConfig> = {
     postsToLedger: true,
     showAddresses: true,
     usesPlaceOfSupply: true,
+    footerLabel: "Payment instructions",
+    supportsFixedDiscount: true,
   },
   QUOTE: {
     noun: "quote",
@@ -133,6 +144,8 @@ const KINDS: Record<DocumentKind, KindConfig> = {
     postsToLedger: false,
     showAddresses: true,
     usesPlaceOfSupply: true,
+    footerLabel: "Terms",
+    supportsFixedDiscount: true,
   },
   CREDIT_NOTE: {
     noun: "credit note",
@@ -150,6 +163,8 @@ const KINDS: Record<DocumentKind, KindConfig> = {
     postsToLedger: true,
     showAddresses: false,
     usesPlaceOfSupply: true,
+    footerLabel: "Notes",
+    supportsFixedDiscount: false,
   },
   BILL: {
     noun: "bill",
@@ -165,6 +180,8 @@ const KINDS: Record<DocumentKind, KindConfig> = {
     postsToLedger: true,
     showAddresses: false,
     usesPlaceOfSupply: false,
+    footerLabel: "Notes",
+    supportsFixedDiscount: false,
   },
 };
 
@@ -186,6 +203,9 @@ export interface PartyOption {
   billTo?: PartyAddressFields | null;
   /** Null means "ship to the billing address". */
   shipTo?: PartyAddressFields | null;
+  /** Absent for vendors. See src/server/tax/policy.ts. */
+  gstExempt?: boolean;
+  pstExempt?: boolean;
 }
 
 export interface AccountOption {
@@ -222,7 +242,11 @@ interface EditorLine {
   description: string;
   quantity: string;
   unitPrice: string;
+  /** "PERCENT" (use `discount`) or "FIXED" (use `discountAmount`, the total
+   * discount on the extended line — not per unit). */
+  discountMode: "PERCENT" | "FIXED";
   discount: string;
+  discountAmount: string;
   accountId: string;
   taxCodeId: string;
   itemId?: string;
@@ -245,6 +269,9 @@ export function DocumentForm({
   vendorCreation,
   provincesWithSalesTax = [],
   initial,
+  preselectPartyId,
+  companyTaxPolicy,
+  footerText,
 }: {
   kind: DocumentKind;
   parties: PartyOption[];
@@ -269,6 +296,27 @@ export function DocumentForm({
   provincesWithSalesTax?: readonly string[];
   /** When set, the editor opens on this document and saving updates it in place. */
   initial?: DocumentFormInitial;
+  /**
+   * Preselect this party on a brand-new document (issue 8, 15 Sep 2026
+   * review) — e.g. arriving here from a customer's own page via "New
+   * invoice". Ignored when `initial` is set (an edit already has its party).
+   * A lightweight seed, not the full `initial` edit-object: using `initial`
+   * for this would change numbering and posting behavior.
+   */
+  preselectPartyId?: string;
+  /** The active company's sales-tax collection status (issues 1/5) — needed
+   * so the preview suppresses exactly the components posting will. Omitted
+   * for a BILL, which is unaffected by this policy. */
+  companyTaxPolicy?: TaxPolicyCompany;
+  /**
+   * The footer text to preview (issue 2) — the caller decides what this is:
+   * the live company footer of the matching kind for a brand-new document
+   * (it will be snapshotted at save time), or the saved `footerText` off an
+   * existing document when `initial` is set (a document's footer stays
+   * stable across edits, so it must not switch to whatever the company's
+   * default is today).
+   */
+  footerText?: string | null;
 }) {
   const money = useMoney();
   const router = useRouter();
@@ -297,7 +345,15 @@ export function DocumentForm({
   const accountChoices = sideAccounts.length > 0 ? sideAccounts : accounts;
   const defaultAccount = accountChoices[0]?.id ?? "";
 
-  const [partyId, setPartyId] = useState(initial?.partyId ?? partyList[0]?.id ?? "");
+  // A preselected party (issue 8) only applies to a brand-new document — an
+  // edit already has one via `initial`, and an invalid/unknown id is simply
+  // ignored rather than silently falling through to the alphabetically-first
+  // party (the id is also re-validated server-side, in whichever *FormOptions
+  // loader resolved it before handing it to this component).
+  const preselectedParty = !initial && preselectPartyId
+    ? partyList.find((p) => p.id === preselectPartyId)
+    : undefined;
+  const [partyId, setPartyId] = useState(initial?.partyId ?? preselectedParty?.id ?? partyList[0]?.id ?? "");
   const [number, setNumber] = useState(initial?.number ?? suggestedNumber ?? "");
   const [issueDate, setIssueDate] = useState(initial?.issueDate ?? new Date().toISOString().slice(0, 10));
   const [secondDate, setSecondDate] = useState(
@@ -331,7 +387,7 @@ export function DocumentForm({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const firstParty = partyList[0];
+  const firstParty = preselectedParty ?? partyList[0];
   /**
    * The province that rates the first line before anything is edited. An invoice
    * or quote reads it off the customer's address; a credit note off the customer
@@ -401,7 +457,9 @@ export function DocumentForm({
           description: line.description,
           quantity: line.quantity,
           unitPrice: line.unitPrice,
+          discountMode: line.discountMode,
           discount: line.discount,
+          discountAmount: line.discountAmount,
           accountId: line.accountId,
           taxCodeId: line.taxCodeId,
           itemId: line.itemId ?? undefined,
@@ -412,7 +470,9 @@ export function DocumentForm({
             description: "",
             quantity: "1",
             unitPrice: "",
+            discountMode: "PERCENT" as const,
             discount: "",
+            discountAmount: "",
             accountId: defaultAccount,
             // A bill starts on the vendor's own default code if it has one,
             // otherwise (like every sales document) on the province default.
@@ -529,24 +589,40 @@ export function DocumentForm({
   /** Lines that carry an amount, in the shape the shared arithmetic wants. */
   const pricedLines = useMemo(() => lines.filter((line) => line.unitPrice.trim() !== ""), [lines]);
 
+  // Same suppression policy postInvoiceInTx/postEstimateInTx resolve
+  // server-side (src/server/tax/policy.ts) — so the preview can never show a
+  // component that will not actually post (issues 1/5).
+  const suppressedKinds = useMemo(
+    () =>
+      companyTaxPolicy
+        ? resolveSuppressedKinds(
+            companyTaxPolicy,
+            party ? { gstExempt: party.gstExempt ?? false, pstExempt: party.pstExempt ?? false } : null,
+          )
+        : undefined,
+    [companyTaxPolicy, party],
+  );
+
   const preview = useMemo(() => {
     const raw: RawLine[] = pricedLines.map((line) => ({
       accountId: line.accountId,
       description: line.description || "—",
       quantityMilli: Math.round((Number(line.quantity) || 0) * 1000),
       unitPriceCents: safeCents(line.unitPrice),
+      discountMode: line.discountMode,
       discountPercentMicro: Math.round((Number(line.discount) || 0) * 1_000_000),
+      discountAmountCents: safeCents(line.discountAmount),
       taxCodeId: line.taxCodeId || null,
     }));
     if (raw.length === 0) {
       return { lines: [], subtotalCents: 0, discountCents: 0, taxCents: 0, totalCents: 0, taxByComponent: [] };
     }
     try {
-      return computeDocument(raw, taxCodeMap, taxInclusive, new Date(`${issueDate}T00:00:00.000Z`));
+      return computeDocument(raw, taxCodeMap, taxInclusive, new Date(`${issueDate}T00:00:00.000Z`), suppressedKinds);
     } catch {
       return { lines: [], subtotalCents: 0, discountCents: 0, taxCents: 0, totalCents: 0, taxByComponent: [] };
     }
-  }, [pricedLines, taxCodeMap, taxInclusive, issueDate]);
+  }, [pricedLines, taxCodeMap, taxInclusive, issueDate, suppressedKinds]);
 
   function updateLine(key: string, patch: Partial<EditorLine>) {
     setLines((current) => current.map((line) => (line.key === key ? { ...line, ...patch } : line)));
@@ -583,7 +659,9 @@ export function DocumentForm({
       description: item.description?.trim() ? item.description : item.name,
       quantity: "1",
       unitPrice: (item.unitPriceCents / 100).toFixed(2),
+      discountMode: "PERCENT",
       discount: item.discountPercentMicro ? String(item.discountPercentMicro / 1_000_000) : "",
+      discountAmount: "",
       accountId: account,
       // The item's own code only wins if it is valid where the supply lands:
       // place-of-supply rules outrank a catalogue default.
@@ -620,7 +698,9 @@ export function DocumentForm({
           description: line.description,
           quantity: Number(line.quantity) || 1,
           unitPrice: line.unitPrice,
+          discountMode: line.discountMode,
           discountPercent: Number(line.discount) || 0,
+          discountAmount: line.discountAmount,
           accountId: line.accountId,
           taxCodeId: line.taxCodeId || null,
           itemId: line.itemId || null,
@@ -852,14 +932,14 @@ export function DocumentForm({
           </div>
 
           <div className="thin-scroll overflow-x-auto">
-            <table className="w-full min-w-[52rem] text-[0.8125rem]">
+            <table className={clsx("w-full text-[0.8125rem]", config.supportsFixedDiscount ? "min-w-[55rem]" : "min-w-[52rem]")}>
               <thead>
                 <tr className="border-b border-paper-200">
                   {items.length > 0 && <Head w="9rem">Service</Head>}
                   <Head>Description</Head>
                   <Head w="6rem" align="right">Qty</Head>
                   <Head w="7.5rem" align="right">Unit price</Head>
-                  <Head w="5rem" align="right">Disc %</Head>
+                  <Head w={config.supportsFixedDiscount ? "8rem" : "5rem"} align="right">Discount</Head>
                   <Head w="11rem">Account</Head>
                   <Head w="9rem">Tax</Head>
                   <Head w="7.5rem" align="right">Amount</Head>
@@ -915,13 +995,47 @@ export function DocumentForm({
                         />
                       </Cell>
                       <Cell>
-                        <input
-                          value={line.discount}
-                          onChange={(event) => updateLine(line.key, { discount: event.target.value })}
-                          inputMode="decimal"
-                          placeholder="0"
-                          className={clsx(inputClass, "tnum text-right")}
-                        />
+                        {config.supportsFixedDiscount ? (
+                          <div className="flex items-center gap-1">
+                            <select
+                              value={line.discountMode}
+                              onChange={(event) =>
+                                updateLine(line.key, { discountMode: event.target.value as "PERCENT" | "FIXED" })
+                              }
+                              className={clsx(inputClass, "w-12 px-1 pr-4 text-[0.75rem]")}
+                              aria-label="Discount type"
+                            >
+                              <option value="PERCENT">%</option>
+                              <option value="FIXED">$</option>
+                            </select>
+                            {line.discountMode === "FIXED" ? (
+                              <input
+                                value={line.discountAmount}
+                                onChange={(event) => updateLine(line.key, { discountAmount: event.target.value })}
+                                inputMode="decimal"
+                                placeholder="0.00"
+                                title="Total discount on this line — not multiplied by quantity."
+                                className={clsx(inputClass, "tnum text-right")}
+                              />
+                            ) : (
+                              <input
+                                value={line.discount}
+                                onChange={(event) => updateLine(line.key, { discount: event.target.value })}
+                                inputMode="decimal"
+                                placeholder="0"
+                                className={clsx(inputClass, "tnum text-right")}
+                              />
+                            )}
+                          </div>
+                        ) : (
+                          <input
+                            value={line.discount}
+                            onChange={(event) => updateLine(line.key, { discount: event.target.value })}
+                            inputMode="decimal"
+                            placeholder="0"
+                            className={clsx(inputClass, "tnum text-right")}
+                          />
+                        )}
                       </Cell>
                       <Cell>
                         <select
@@ -991,7 +1105,9 @@ export function DocumentForm({
                     description: "",
                     quantity: "1",
                     unitPrice: "",
+                    discountMode: "PERCENT",
                     discount: "",
+                    discountAmount: "",
                     accountId: current[current.length - 1]?.accountId ?? defaultAccount,
                     taxCodeId: current[current.length - 1]?.taxCodeId ?? defaultTax,
                   },
@@ -1208,7 +1324,8 @@ export function DocumentForm({
             reference={reference}
             referenceLabel={config.referenceLabel}
             memo={memo}
-            accountName={accountName}
+            footerText={footerText ?? null}
+            footerLabel={config.footerLabel}
             computed={preview}
           />
         </Modal>

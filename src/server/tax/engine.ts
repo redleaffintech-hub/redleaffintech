@@ -91,12 +91,20 @@ function combinedFactorMicro(components: TaxComponentSpec[]): bigint {
  * Calculate tax for a single line.
  *
  * @param amountCents  tax-exclusive net when `inclusive` is false, gross when true
+ * @param suppressedKinds  TaxComponent kinds (GST/HST/PST/QST/RST) to drop before
+ *   calculating — the company-collection-status × customer-exemption policy from
+ *   issues 1/5 (15 Sep 2026 review), resolved by src/server/tax/policy.ts. This
+ *   never touches the TaxCode/TaxComponent rows themselves (combined codes like
+ *   GST-PST-BC are untouched); it only decides which of a code's components
+ *   this particular calculation applies. Omitted/empty means "suppress
+ *   nothing" — today's behavior, unchanged for every existing call site.
  */
 export function calculateTax(
   taxCode: TaxCodeSpec | null | undefined,
   amountCents: number,
   inclusive: boolean,
   transactionDate: Date,
+  suppressedKinds?: ReadonlySet<string>,
 ): TaxResult {
   const amount = Math.trunc(amountCents);
 
@@ -106,7 +114,13 @@ export function calculateTax(
 
   assertEffective(taxCode, transactionDate);
 
-  const components = [...taxCode.components].sort((a, b) => a.sortOrder - b.sortOrder);
+  const components = taxCode.components
+    .filter((c) => !suppressedKinds?.has(c.kind))
+    .sort((a, b) => a.sortOrder - b.sortOrder);
+
+  if (components.length === 0) {
+    return { netCents: amount, taxCents: 0, totalCents: amount, components: [] };
+  }
 
   // Derive the net base. For inclusive pricing we back the tax out of the gross.
   let netCents: number;

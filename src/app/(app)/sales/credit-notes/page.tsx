@@ -96,13 +96,9 @@ export default async function CreditNotesPage({ searchParams }: PageProps<"/sale
                 return (
                   <Tr key={note.id}>
                     <Td>
-                      {note.journalEntryId ? (
-                        <Link href={`/accounting/journals/${note.journalEntryId}`} className="tnum font-medium text-ink-900 hover:text-brand-700 hover:underline">
-                          {note.number}
-                        </Link>
-                      ) : (
-                        <span className="tnum font-medium">{note.number}</span>
-                      )}
+                      <Link href={`/sales/credit-notes/${note.id}`} className="tnum font-medium text-ink-900 hover:text-brand-700 hover:underline">
+                        {note.number}
+                      </Link>
                     </Td>
                     <Td className="text-muted-ink">{formatDate(note.issueDate)}</Td>
                     <Td>

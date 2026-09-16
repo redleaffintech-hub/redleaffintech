@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import { PROVINCES } from "@/lib/enums";
 import { CAPABILITIES } from "@/lib/permissions";
 import { recordAudit, requireCapability } from "@/server/auth/context";
+import { nextCustomerCode } from "@/server/documents/numbering";
 
 const provinceCodes = PROVINCES.map((p) => p.code);
 
@@ -59,6 +60,11 @@ const customerSchema = z.object({
   shipToPostalCode: optionalText(12),
 
   notes: optionalText(2000),
+
+  /** Scoped narrowly to GST and PST/RST only — see src/server/tax/policy.ts
+   * for why HST/QST are deliberately never touched by these two flags. */
+  gstExempt: z.boolean().optional().default(false),
+  pstExempt: z.boolean().optional().default(false),
 });
 
 /**
@@ -97,26 +103,35 @@ export async function createCustomerAction(payload: string) {
     if (!code) return { error: "That tax code does not exist in this company." };
   }
 
-  const customer = await db.customer.create({
-    data: {
-      companyId: company.id,
-      name: input.name,
-      email: input.email || null,
-      phone: input.phone ?? null,
-      taxCodeId: input.taxCodeId ?? null,
-      paymentTermsDays: input.paymentTermsDays,
-      addressLine1: input.addressLine1 ?? null,
-      addressLine2: input.addressLine2 ?? null,
-      city: input.city ?? null,
-      province: input.province ?? null,
-      postalCode: input.postalCode ?? null,
-      shipToLine1: input.shipToLine1 ?? null,
-      shipToLine2: input.shipToLine2 ?? null,
-      shipToCity: input.shipToCity ?? null,
-      shipToProvince: input.shipToProvince ?? null,
-      shipToPostalCode: input.shipToPostalCode ?? null,
-      notes: input.notes ?? null,
-    },
+  const customer = await db.$transaction(async (tx) => {
+    // Atomic with the create, so two concurrent customer creations (including
+    // one from this dialog and one from the standalone customer page) never
+    // land on the same display code (issue 9).
+    const displayCode = await nextCustomerCode(tx, company.id);
+    return tx.customer.create({
+      data: {
+        companyId: company.id,
+        name: input.name,
+        email: input.email || null,
+        phone: input.phone ?? null,
+        taxCodeId: input.taxCodeId ?? null,
+        paymentTermsDays: input.paymentTermsDays,
+        addressLine1: input.addressLine1 ?? null,
+        addressLine2: input.addressLine2 ?? null,
+        city: input.city ?? null,
+        province: input.province ?? null,
+        postalCode: input.postalCode ?? null,
+        shipToLine1: input.shipToLine1 ?? null,
+        shipToLine2: input.shipToLine2 ?? null,
+        shipToCity: input.shipToCity ?? null,
+        shipToProvince: input.shipToProvince ?? null,
+        shipToPostalCode: input.shipToPostalCode ?? null,
+        notes: input.notes ?? null,
+        gstExempt: input.gstExempt,
+        pstExempt: input.pstExempt,
+        displayCode,
+      },
+    });
   });
 
   await recordAudit({
@@ -198,6 +213,8 @@ export async function updateCustomerAction(customerId: string, payload: string) 
       shipToProvince: input.shipToProvince ?? null,
       shipToPostalCode: input.shipToPostalCode ?? null,
       notes: input.notes ?? null,
+      gstExempt: input.gstExempt,
+      pstExempt: input.pstExempt,
     },
   });
 
@@ -230,6 +247,8 @@ function toPartyOption(customer: CustomerRecord) {
     name: customer.name,
     taxCodeId: customer.taxCodeId,
     paymentTermsDays: customer.paymentTermsDays,
+    gstExempt: customer.gstExempt,
+    pstExempt: customer.pstExempt,
     billTo: {
       line1: customer.addressLine1,
       line2: customer.addressLine2,

@@ -19,7 +19,7 @@ export default async function CustomersPage({ searchParams }: PageProps<"/sales/
     where: {
       companyId: company.id,
       ...(filter === "ACTIVE" ? { isActive: true } : filter === "ARCHIVED" ? { isActive: false } : {}),
-      ...(query ? { OR: [{ name: contains(query) }, { email: contains(query) }] } : {}),
+      ...(query ? { OR: [{ name: contains(query) }, { email: contains(query) }, { displayCode: contains(query) }] } : {}),
     },
     include: {
       taxCode: { select: { code: true } },
@@ -31,6 +31,7 @@ export default async function CustomersPage({ searchParams }: PageProps<"/sales/
   const rows: PartyRow[] = customers.map((customer) => ({
     id: customer.id,
     name: customer.name,
+    displayCode: customer.displayCode,
     email: customer.email,
     phone: customer.phone,
     city: customer.city,

@@ -25,6 +25,10 @@ export interface StockMovementInput {
   quantityMilli: number;
   sourceType: string;
   sourceId?: string | null;
+  /** The originating BillLine/InvoiceLine/CreditNoteLine id (issue 10, 15 Sep
+   * 2026 review) — lets a later return find the exact movement it reverses
+   * even when the same item appears on more than one line of a document. */
+  sourceLineId?: string | null;
   sourceNumber?: string | null;
   journalEntryId?: string | null;
   memo?: string | null;
@@ -47,7 +51,7 @@ async function loadItem(tx: Tx, companyId: string, itemId: string) {
  */
 export async function receiveStock(
   tx: Tx,
-  input: StockMovementInput & { totalCostCents: number },
+  input: StockMovementInput & { totalCostCents: number; type?: "PURCHASE" | "SALE_RETURN" },
 ) {
   if (input.quantityMilli <= 0) throw new Error("Received quantity must be greater than zero.");
   const item = await loadItem(tx, input.companyId, input.itemId);
@@ -68,7 +72,7 @@ export async function receiveStock(
       companyId: input.companyId,
       itemId: input.itemId,
       date: input.date,
-      type: "PURCHASE",
+      type: input.type ?? "PURCHASE",
       quantityMilli: input.quantityMilli,
       unitCostCents,
       totalCostCents: input.totalCostCents,
@@ -76,6 +80,7 @@ export async function receiveStock(
       averageCostAfterCents: newAverageCostCents,
       sourceType: input.sourceType,
       sourceId: input.sourceId,
+      sourceLineId: input.sourceLineId,
       sourceNumber: input.sourceNumber,
       journalEntryId: input.journalEntryId,
       memo: input.memo,
@@ -114,6 +119,7 @@ export async function consumeStock(tx: Tx, input: StockMovementInput) {
       averageCostAfterCents: item.averageCostCents,
       sourceType: input.sourceType,
       sourceId: input.sourceId,
+      sourceLineId: input.sourceLineId,
       sourceNumber: input.sourceNumber,
       journalEntryId: input.journalEntryId,
       memo: input.memo,
@@ -149,7 +155,7 @@ export async function reverseStockMovement(tx: Tx, movementId: string, userId?: 
       companyId: movement.companyId,
       itemId: movement.itemId,
       date: movement.date,
-      type: "ADJUSTMENT",
+      type: "REVERSAL",
       quantityMilli: reverseQuantityMilli,
       unitCostCents: movement.unitCostCents,
       totalCostCents: -movement.totalCostCents,
@@ -157,9 +163,63 @@ export async function reverseStockMovement(tx: Tx, movementId: string, userId?: 
       averageCostAfterCents: item.averageCostCents,
       sourceType: movement.sourceType,
       sourceId: movement.sourceId,
+      sourceLineId: movement.sourceLineId,
       sourceNumber: movement.sourceNumber,
       memo: `Reversal of voided ${movement.sourceType.toLowerCase()}${movement.sourceNumber ? ` ${movement.sourceNumber}` : ""}`,
       createdById: userId,
+    },
+  });
+}
+
+/**
+ * A return TO a vendor (issue 4, 15 Sep 2026 review): reduces quantity and
+ * removes value at the ORIGINAL RECEIPT cost being reversed — not today's
+ * weighted average (that would be consumeStock, which is right for a sale
+ * but wrong here) and not the vendor's credit amount (which can legitimately
+ * differ from the original receipt cost if pricing changed since).
+ *
+ * Any difference between the vendor's actual credit and this reversal amount
+ * is the caller's responsibility to post explicitly (to Cost of Goods Sold —
+ * see src/server/documents/credit-notes.ts) rather than silently absorbing it
+ * into the average, so the journal and inventory value stay reconcilable
+ * after intervening sales or purchases at a different price.
+ */
+export async function returnToVendor(
+  tx: Tx,
+  input: StockMovementInput & { originalUnitCostCents: number },
+) {
+  if (input.quantityMilli <= 0) throw new Error("Returned quantity must be greater than zero.");
+  const item = await loadItem(tx, input.companyId, input.itemId);
+
+  const reversalValueCents = Math.round((input.quantityMilli * input.originalUnitCostCents) / 1000);
+  const oldValueCents = Math.round((item.quantityOnHandMilli * item.averageCostCents) / 1000);
+  const newValueCents = oldValueCents - reversalValueCents;
+  const newQuantityMilli = item.quantityOnHandMilli - input.quantityMilli;
+  const newAverageCostCents = newQuantityMilli > 0 ? Math.round((newValueCents * 1000) / newQuantityMilli) : 0;
+
+  await tx.serviceItem.update({
+    where: { id: item.id },
+    data: { quantityOnHandMilli: newQuantityMilli, averageCostCents: newAverageCostCents },
+  });
+
+  return tx.inventoryMovement.create({
+    data: {
+      companyId: input.companyId,
+      itemId: input.itemId,
+      date: input.date,
+      type: "PURCHASE_RETURN",
+      quantityMilli: -input.quantityMilli,
+      unitCostCents: input.originalUnitCostCents,
+      totalCostCents: -reversalValueCents,
+      quantityOnHandAfterMilli: newQuantityMilli,
+      averageCostAfterCents: newAverageCostCents,
+      sourceType: input.sourceType,
+      sourceId: input.sourceId,
+      sourceLineId: input.sourceLineId,
+      sourceNumber: input.sourceNumber,
+      journalEntryId: input.journalEntryId,
+      memo: input.memo,
+      createdById: input.userId,
     },
   });
 }

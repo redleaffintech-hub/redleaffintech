@@ -63,6 +63,11 @@ export function InvoiceActions({
             Mark as sent
           </Button>
         )}
+        {isPosted && status !== "VOID" && (
+          <LinkButton href={`/sales/credit-notes/new/from-invoice?invoiceId=${invoiceId}`}>
+            Create return
+          </LinkButton>
+        )}
         <button
           type="button"
           onClick={() => window.print()}
