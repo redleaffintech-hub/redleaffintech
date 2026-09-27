@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
 import { requireCapability } from "@/server/auth/context";
+import { getCompanyProfile } from "@/server/companies/profile";
 import { CAPABILITIES } from "@/lib/permissions";
 import { formatDate, formatDateLong } from "@/lib/dates";
 import { formatMoney, formatQty, formatRate } from "@/lib/money";
@@ -14,26 +15,20 @@ export default async function CreditNoteDetailPage({ params }: { params: Promise
   const currency = company.baseCurrency;
   const { id } = await params;
 
-  const credit = await db.creditNote.findFirst({
-    where: { id, companyId: company.id },
-    include: {
-      customer: true,
-      vendor: true,
-      lines: { include: { item: true } },
-      sourceInvoice: { select: { id: true, number: true } },
-      sourceBill: { select: { id: true, number: true } },
-    },
-  });
+  const [credit, companyProfile] = await Promise.all([
+    db.creditNote.findFirst({
+      where: { id, companyId: company.id },
+      include: {
+        customer: true,
+        vendor: true,
+        lines: { include: { item: true } },
+        sourceInvoice: { select: { id: true, number: true } },
+        sourceBill: { select: { id: true, number: true } },
+      },
+    }),
+    getCompanyProfile(company.id),
+  ]);
   if (!credit) notFound();
-
-  const companyProfile = await db.company.findUniqueOrThrow({
-    where: { id: company.id },
-    select: {
-      name: true, legalName: true, addressLine1: true, addressLine2: true, city: true, province: true,
-      postalCode: true, businessNumber: true, gstNumber: true, qstNumber: true, pstNumber: true,
-      email: true, phone: true, website: true, logoUrl: true, creditNoteFooter: true,
-    },
-  });
 
   const party = credit.customer ?? credit.vendor;
   const partyHref = credit.customer ? `/sales/customers/${credit.customer.id}` : `/purchases/vendors/${credit.vendor?.id}`;

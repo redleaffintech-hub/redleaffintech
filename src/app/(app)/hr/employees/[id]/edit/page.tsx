@@ -4,7 +4,7 @@ import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
 import { isoDate } from "@/lib/dates";
 import { Card, PageHeader } from "@/components/ui";
-import { maskSin } from "@/server/hr/employment-standards";
+import { maskBankAccountNumber, maskSin } from "@/server/hr/employment-standards";
 import { EmployeeForm } from "../../employee-form";
 import type { EmployeeFormValues } from "../../employee-form-values";
 
@@ -42,6 +42,9 @@ export default async function EditEmployeePage({ params }: { params: Promise<{ i
     emergencyContactPhone: employee.emergencyContactPhone ?? "",
     emergencyContactRelation: employee.emergencyContactRelation ?? "",
     sinMasked: employee.sinLast3 ? maskSin(employee.sinLast3) : null,
+    sinExpiryDate: employee.sinExpiryDate ? isoDate(employee.sinExpiryDate) : "",
+    immigrationStatus: employee.immigrationStatus ?? "",
+    immigrationStatusExpiryDate: employee.immigrationStatusExpiryDate ? isoDate(employee.immigrationStatusExpiryDate) : "",
     jobTitle: employee.jobTitle,
     departmentId: employee.departmentId ?? "",
     managerId: employee.managerId ?? "",
@@ -52,6 +55,11 @@ export default async function EditEmployeePage({ params }: { params: Promise<{ i
     payRate: (employee.payRateCents / 100).toString(),
     payFrequency: employee.payFrequency,
     standardHoursPerWeek: employee.standardHoursPerWeek?.toString() ?? "",
+    defaultOvertimeRateMultiplier:
+      employee.defaultOvertimeRateMultiplierMicro != null ? (employee.defaultOvertimeRateMultiplierMicro / 1_000_000).toString() : "",
+    bankInstitutionNumber: employee.bankInstitutionNumber ?? "",
+    bankTransitNumber: employee.bankTransitNumber ?? "",
+    bankAccountMasked: employee.bankAccountNumberLast4 ? maskBankAccountNumber(employee.bankAccountNumberLast4) : null,
     notes: employee.notes ?? "",
   };
 

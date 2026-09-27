@@ -8,13 +8,14 @@ import { PROVINCES } from "@/lib/enums";
 import {
   COMPENSATION_TYPES,
   EMPLOYEE_TYPES,
+  IMMIGRATION_STATUSES,
   PAY_FREQUENCIES,
   TERMINATION_REASON_CATEGORIES,
 } from "@/lib/hr-enums";
 import { CAPABILITIES } from "@/lib/permissions";
 import { recordAudit, requireCapability } from "@/server/auth/context";
 import { nextNumber } from "@/server/documents/numbering";
-import { isValidSin, normalizeSin, sinLastThree } from "@/server/hr/employment-standards";
+import { bankAccountLastFour, isValidSin, normalizeBankAccountNumber, normalizeSin, sinLastThree } from "@/server/hr/employment-standards";
 
 /**
  * Employee record mutations.
@@ -71,6 +72,9 @@ const employeeSchema = z.object({
   emergencyContactPhone: optionalText(40),
   emergencyContactRelation: optionalText(60),
   sin: optionalText(20),
+  sinExpiryDate: optionalDate,
+  immigrationStatus: z.union([z.literal(""), z.enum(IMMIGRATION_STATUSES)]).optional(),
+  immigrationStatusExpiryDate: optionalDate,
 
   jobTitle: z.string().trim().min(1, "Job title is required.").max(120),
   departmentId: optionalText(40),
@@ -82,6 +86,10 @@ const employeeSchema = z.object({
   payRate: z.coerce.number().min(0, "Pay rate cannot be negative.").max(100_000_000),
   payFrequency: z.enum(PAY_FREQUENCIES, { message: "Choose a pay frequency." }),
   standardHoursPerWeek: z.union([z.literal(""), z.coerce.number().min(0).max(168)]).optional(),
+  defaultOvertimeRateMultiplier: z.union([z.literal(""), z.coerce.number().min(1).max(10)]).optional(),
+  bankInstitutionNumber: optionalText(6),
+  bankTransitNumber: optionalText(10),
+  bankAccountNumber: optionalText(30),
   notes: optionalText(2000),
 });
 
@@ -90,6 +98,14 @@ function sinFields(rawSin: string | null | undefined): { error: string | null; s
   const digits = normalizeSin(rawSin);
   if (!isValidSin(digits)) return { error: "That SIN does not look valid — check the digits and try again.", sinLast3: null, sinHash: null };
   return { error: null, sinLast3: sinLastThree(digits), sinHash: createHash("sha256").update(digits).digest("hex") };
+}
+
+/** Same masked-only treatment as sinFields above — see Employee's bank field comment in the schema. */
+function bankAccountFields(raw: string | null | undefined): { bankAccountNumberLast4: string | null; bankAccountNumberHash: string | null } {
+  if (!raw) return { bankAccountNumberLast4: null, bankAccountNumberHash: null };
+  const digits = normalizeBankAccountNumber(raw);
+  if (!digits) return { bankAccountNumberLast4: null, bankAccountNumberHash: null };
+  return { bankAccountNumberLast4: bankAccountLastFour(digits), bankAccountNumberHash: createHash("sha256").update(digits).digest("hex") };
 }
 
 async function assertDepartmentAndManager(companyId: string, departmentId: string | null | undefined, managerId: string | null | undefined, selfId?: string) {
@@ -116,9 +132,15 @@ export async function createEmployeeAction(formData: FormData) {
 
   const sin = sinFields(input.sin);
   if (sin.error) return { error: sin.error };
+  const bank = bankAccountFields(input.bankAccountNumber);
 
   const hireDate = new Date(`${input.hireDate}T00:00:00.000Z`);
   if (Number.isNaN(hireDate.getTime())) return { error: "Hire date is not a valid date." };
+
+  const overtimeMultiplierMicro =
+    input.defaultOvertimeRateMultiplier === "" || input.defaultOvertimeRateMultiplier === undefined
+      ? null
+      : Math.round(input.defaultOvertimeRateMultiplier * 1_000_000);
 
   try {
     const employee = await db.$transaction(async (tx) => {
@@ -143,6 +165,13 @@ export async function createEmployeeAction(formData: FormData) {
           emergencyContactRelation: input.emergencyContactRelation ?? null,
           sinLast3: sin.sinLast3,
           sinHash: sin.sinHash,
+          sinExpiryDate: input.sinExpiryDate ?? null,
+          immigrationStatus: input.immigrationStatus || null,
+          immigrationStatusExpiryDate: input.immigrationStatusExpiryDate ?? null,
+          bankInstitutionNumber: input.bankInstitutionNumber ?? null,
+          bankTransitNumber: input.bankTransitNumber ?? null,
+          bankAccountNumberLast4: bank.bankAccountNumberLast4,
+          bankAccountNumberHash: bank.bankAccountNumberHash,
           jobTitle: input.jobTitle,
           departmentId: input.departmentId ?? null,
           managerId: input.managerId ?? null,
@@ -153,6 +182,7 @@ export async function createEmployeeAction(formData: FormData) {
           payRateCents: Math.round(input.payRate * 100),
           payFrequency: input.payFrequency,
           standardHoursPerWeek: input.standardHoursPerWeek === "" || input.standardHoursPerWeek === undefined ? null : input.standardHoursPerWeek,
+          defaultOvertimeRateMultiplierMicro: overtimeMultiplierMicro,
           notes: input.notes ?? null,
           createdById: user.id,
         },
@@ -190,13 +220,21 @@ export async function updateEmployeeAction(formData: FormData) {
   const relationError = await assertDepartmentAndManager(company.id, input.departmentId, input.managerId, id);
   if (relationError) return { error: relationError };
 
-  // Blank means "leave the stored SIN alone" — there is no reversible value to
-  // diff against, so an empty field can never mean "clear it".
+  // Blank means "leave the stored SIN/bank account alone" — there is no
+  // reversible value to diff against, so an empty field can never mean "clear it".
   const sin = input.sin ? sinFields(input.sin) : { error: null, sinLast3: existing.sinLast3, sinHash: existing.sinHash };
   if (sin.error) return { error: sin.error };
+  const bank = input.bankAccountNumber
+    ? bankAccountFields(input.bankAccountNumber)
+    : { bankAccountNumberLast4: existing.bankAccountNumberLast4, bankAccountNumberHash: existing.bankAccountNumberHash };
 
   const hireDate = new Date(`${input.hireDate}T00:00:00.000Z`);
   if (Number.isNaN(hireDate.getTime())) return { error: "Hire date is not a valid date." };
+
+  const overtimeMultiplierMicro =
+    input.defaultOvertimeRateMultiplier === "" || input.defaultOvertimeRateMultiplier === undefined
+      ? null
+      : Math.round(input.defaultOvertimeRateMultiplier * 1_000_000);
 
   const updated = await db.employee.update({
     where: { id },
@@ -217,6 +255,13 @@ export async function updateEmployeeAction(formData: FormData) {
       emergencyContactRelation: input.emergencyContactRelation ?? null,
       sinLast3: sin.sinLast3,
       sinHash: sin.sinHash,
+      sinExpiryDate: input.sinExpiryDate ?? null,
+      immigrationStatus: input.immigrationStatus || null,
+      immigrationStatusExpiryDate: input.immigrationStatusExpiryDate ?? null,
+      bankInstitutionNumber: input.bankInstitutionNumber ?? null,
+      bankTransitNumber: input.bankTransitNumber ?? null,
+      bankAccountNumberLast4: bank.bankAccountNumberLast4,
+      bankAccountNumberHash: bank.bankAccountNumberHash,
       jobTitle: input.jobTitle,
       departmentId: input.departmentId ?? null,
       managerId: input.managerId ?? null,
@@ -227,9 +272,28 @@ export async function updateEmployeeAction(formData: FormData) {
       payRateCents: Math.round(input.payRate * 100),
       payFrequency: input.payFrequency,
       standardHoursPerWeek: input.standardHoursPerWeek === "" || input.standardHoursPerWeek === undefined ? null : input.standardHoursPerWeek,
+      defaultOvertimeRateMultiplierMicro: overtimeMultiplierMicro,
       notes: input.notes ?? null,
     },
   });
+
+  // A salary/hourly-rate or compensation-type change is recorded to the audit
+  // history table so payroll can see when and why pay changed — see
+  // EmployeeCompensationChange's schema comment.
+  const newPayRateCents = Math.round(input.payRate * 100);
+  if (newPayRateCents !== existing.payRateCents || input.compensationType !== existing.compensationType) {
+    await db.employeeCompensationChange.create({
+      data: {
+        companyId: company.id,
+        employeeId: id,
+        effectiveDate: new Date(),
+        previousPayRateCents: existing.payRateCents,
+        newPayRateCents,
+        compensationType: input.compensationType,
+        createdById: user.id,
+      },
+    });
+  }
 
   await recordAudit({
     companyId: company.id,

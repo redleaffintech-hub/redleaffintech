@@ -23,6 +23,9 @@ export interface EmployeeFormValues {
   emergencyContactPhone: string;
   emergencyContactRelation: string;
   sinMasked: string | null;
+  sinExpiryDate: string;
+  immigrationStatus: string;
+  immigrationStatusExpiryDate: string;
   jobTitle: string;
   departmentId: string;
   managerId: string;
@@ -33,6 +36,10 @@ export interface EmployeeFormValues {
   payRate: string;
   payFrequency: string;
   standardHoursPerWeek: string;
+  defaultOvertimeRateMultiplier: string;
+  bankInstitutionNumber: string;
+  bankTransitNumber: string;
+  bankAccountMasked: string | null;
   notes: string;
 }
 
@@ -42,10 +49,11 @@ export function blankEmployee(companyProvince: string): EmployeeFormValues {
     personalEmail: "", personalPhone: "",
     addressLine1: "", addressLine2: "", city: "", province: "", postalCode: "",
     emergencyContactName: "", emergencyContactPhone: "", emergencyContactRelation: "",
-    sinMasked: null,
+    sinMasked: null, sinExpiryDate: "", immigrationStatus: "", immigrationStatusExpiryDate: "",
     jobTitle: "", departmentId: "", managerId: "",
     provinceOfEmployment: companyProvince, employeeType: "FULL_TIME", hireDate: "",
     compensationType: "SALARY", payRate: "", payFrequency: "BIWEEKLY", standardHoursPerWeek: "40",
+    defaultOvertimeRateMultiplier: "", bankInstitutionNumber: "", bankTransitNumber: "", bankAccountMasked: null,
     notes: "",
   };
 }

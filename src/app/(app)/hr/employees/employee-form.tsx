@@ -8,6 +8,8 @@ import {
   COMPENSATION_TYPES,
   EMPLOYEE_TYPE_LABELS,
   EMPLOYEE_TYPES,
+  IMMIGRATION_STATUS_LABELS,
+  IMMIGRATION_STATUSES,
   PAY_FREQUENCIES,
   PAY_FREQUENCY_LABELS,
 } from "@/lib/hr-enums";
@@ -79,6 +81,20 @@ export function EmployeeForm({
             }
           >
             <input name="sin" placeholder={initial.sinMasked ?? "046 454 286"} maxLength={20} className={clsx(inputClass, "tnum")} />
+          </Field>
+          <Field label="SIN expiry date" hint="Only set for a non-permanent status (e.g. a work permit).">
+            <input type="date" name="sinExpiryDate" defaultValue={initial.sinExpiryDate} className={inputClass} />
+          </Field>
+          <Field label="Immigration / residency status">
+            <Select name="immigrationStatus" defaultValue={initial.immigrationStatus}>
+              <option value="">—</option>
+              {IMMIGRATION_STATUSES.map((s) => (
+                <option key={s} value={s}>{IMMIGRATION_STATUS_LABELS[s]}</option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Status expiry date">
+            <input type="date" name="immigrationStatusExpiryDate" defaultValue={initial.immigrationStatusExpiryDate} className={inputClass} />
           </Field>
         </div>
       </section>
@@ -200,6 +216,31 @@ export function EmployeeForm({
           </Field>
           <Field label="Standard hours / week">
             <input name="standardHoursPerWeek" type="text" inputMode="decimal" defaultValue={initial.standardHoursPerWeek} className={clsx(inputClass, "tnum")} />
+          </Field>
+          <Field label="Overtime rate multiplier" hint="e.g. 1.5. Leave blank if this employee is not paid an overtime premium.">
+            <input name="defaultOvertimeRateMultiplier" type="text" inputMode="decimal" defaultValue={initial.defaultOvertimeRateMultiplier} className={clsx(inputClass, "tnum")} />
+          </Field>
+        </div>
+      </section>
+
+      <section>
+        <SectionDivider label="Direct deposit" />
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <Field label="Institution number">
+            <input name="bankInstitutionNumber" defaultValue={initial.bankInstitutionNumber} maxLength={6} className={clsx(inputClass, "tnum")} />
+          </Field>
+          <Field label="Transit number">
+            <input name="bankTransitNumber" defaultValue={initial.bankTransitNumber} maxLength={10} className={clsx(inputClass, "tnum")} />
+          </Field>
+          <Field
+            label="Account number"
+            hint={
+              initial.bankAccountMasked
+                ? `On file: ${initial.bankAccountMasked}. Leave blank to keep it unchanged.`
+                : "Only the last 4 digits and a fingerprint are stored — never a reversible number."
+            }
+          >
+            <input name="bankAccountNumber" placeholder={initial.bankAccountMasked ?? undefined} maxLength={30} className={clsx(inputClass, "tnum")} />
           </Field>
         </div>
       </section>

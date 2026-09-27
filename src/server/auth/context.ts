@@ -70,12 +70,28 @@ export interface CompanyContext {
  * with no CompanyUser record for a company gets no access to it, and an
  * accountant must be explicitly granted each client (§3).
  */
+// The one place CompanyContext.company's field list is spelled out — shared
+// between the membership query below and the type of `company` above so the
+// two can never drift apart.
+const COMPANY_CONTEXT_SELECT = {
+  id: true, name: true, legalName: true, province: true, baseCurrency: true, locale: true,
+  fiscalYearStartMonth: true, gstNumber: true, qstNumber: true, pstNumber: true,
+  businessNumber: true, isReadOnly: true,
+  defaultTaxInclusive: true, defaultPaymentTermsDays: true, logoUrl: true, enabledModules: true,
+} as const;
+
 export const requireCompany = cache(async (companyId?: string): Promise<CompanyContext> => {
   const user = await requireUser();
 
+  // One query, not two (§ perf review, 16 Sep 2026): the membership row's own
+  // join already reaches every company this user belongs to, so selecting
+  // the full field set here — instead of just id/name, with a second
+  // `company.findUniqueOrThrow` afterward for the active one — trades a few
+  // extra columns on what's almost always a handful of rows for dropping a
+  // whole round trip on every single request.
   const memberships = await db.companyUser.findMany({
     where: { userId: user.id, status: "ACTIVE" },
-    include: { company: { select: { id: true, name: true } } },
+    include: { company: { select: COMPANY_CONTEXT_SELECT } },
     orderBy: { company: { name: "asc" } },
   });
   if (memberships.length === 0) redirect("/onboarding");
@@ -84,21 +100,12 @@ export const requireCompany = cache(async (companyId?: string): Promise<CompanyC
   const membership =
     memberships.find((m) => m.companyId === targetId) ?? memberships[0];
 
-  const companyRecord = await db.company.findUniqueOrThrow({
-    where: { id: membership.companyId },
-    select: {
-      id: true, name: true, legalName: true, province: true, baseCurrency: true, locale: true,
-      fiscalYearStartMonth: true, gstNumber: true, qstNumber: true, pstNumber: true,
-      businessNumber: true, isReadOnly: true,
-      defaultTaxInclusive: true, defaultPaymentTermsDays: true, logoUrl: true, enabledModules: true,
-    },
-  });
   // An unset module list is "not configured yet", not "nothing" — a company
   // must never be locked out of its own books by an admin who never visited
   // the modules panel.
   const company = {
-    ...companyRecord,
-    enabledModules: companyRecord.enabledModules.length > 0 ? companyRecord.enabledModules : ["ACCOUNTING"],
+    ...membership.company,
+    enabledModules: membership.company.enabledModules.length > 0 ? membership.company.enabledModules : ["ACCOUNTING"],
   };
 
   return {

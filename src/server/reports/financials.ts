@@ -7,7 +7,9 @@
  * subledgers reconciled to their control accounts.
  */
 
+import { cache } from "react";
 import { db } from "@/lib/db";
+import { getCompanyProfile } from "@/server/companies/profile";
 import { CASH_ASSET_SUBTYPES, INCOME_STATEMENT_SUBTYPES, NORMAL_BALANCE, type AccountType } from "@/lib/enums";
 import { fiscalYearRange, fiscalYearOf, monthsBetween, endOfMonth } from "@/lib/dates";
 
@@ -28,22 +30,46 @@ export interface AccountBalance {
   balanceCents: number;
 }
 
-async function balancesFor(companyId: string, where: object): Promise<AccountBalance[]> {
-  const [grouped, accounts] = await Promise.all([
+type AccountRow = Awaited<ReturnType<typeof fetchAccounts>>;
+
+/**
+ * The chart of accounts, request-deduplicated (§ perf review, 16 Sep 2026).
+ *
+ * A single report — trial balance, balance sheet, cash flow, an income
+ * statement with a comparison period — calls `balancesFor` two or more times,
+ * and the chart of accounts itself does not vary across those calls (only the
+ * journal-line date filter does). `cache()` collapses repeat calls with the
+ * same companyId to one query within a request; outside a request context
+ * (e.g. scripts/verify.ts) it degrades to an uncached call rather than
+ * throwing, so this stays correct there too, just without the dedupe.
+ */
+const fetchAccounts = cache(async (companyId: string) => {
+  return db.account.findMany({
+    where: { companyId },
+    select: { id: true, code: true, name: true, type: true, subtype: true },
+    orderBy: { code: "asc" },
+  });
+});
+
+/**
+ * @param accounts Pass the result of `fetchAccounts` when a caller needs more
+ *   than one balance snapshot (opening/period, current/prior, per-period in
+ *   `incomeStatement`) so the chart of accounts is fetched once and reused,
+ *   not re-queried per snapshot even within the same `cache()` scope's
+ *   argument-matching.
+ */
+async function balancesFor(companyId: string, where: object, accounts?: AccountRow): Promise<AccountBalance[]> {
+  const [grouped, resolvedAccounts] = await Promise.all([
     db.journalLine.groupBy({
       by: ["accountId"],
       where: { companyId, ...where },
       _sum: { debitCents: true, creditCents: true },
     }),
-    db.account.findMany({
-      where: { companyId },
-      select: { id: true, code: true, name: true, type: true, subtype: true },
-      orderBy: { code: "asc" },
-    }),
+    accounts ?? fetchAccounts(companyId),
   ]);
 
   const sums = new Map(grouped.map((g) => [g.accountId, g._sum]));
-  return accounts.map((a) => {
+  return resolvedAccounts.map((a) => {
     const s = sums.get(a.id);
     const debitCents = s?.debitCents ?? 0;
     const creditCents = s?.creditCents ?? 0;
@@ -75,9 +101,10 @@ export interface TrialBalanceRow extends AccountBalance {
 }
 
 export async function trialBalance(companyId: string, range: DateRange) {
+  const accounts = await fetchAccounts(companyId);
   const [opening, period] = await Promise.all([
-    balancesFor(companyId, { date: { lt: range.from } }),
-    balancesFor(companyId, { date: { gte: range.from, lte: range.to } }),
+    balancesFor(companyId, { date: { lt: range.from } }, accounts),
+    balancesFor(companyId, { date: { gte: range.from, lte: range.to } }, accounts),
   ]);
   const openingById = new Map(opening.map((o) => [o.accountId, o]));
 
@@ -211,12 +238,13 @@ export async function incomeStatement(
   periods: ReportPeriod[],
   currency = "CAD",
 ): Promise<IncomeStatement> {
+  const accounts = await fetchAccounts(companyId);
   const perPeriod = await Promise.all(
     periods.map((period) =>
       balancesFor(companyId, {
         date: { gte: period.from, lte: period.to },
         accountType: { in: ["REVENUE", "EXPENSE"] },
-      }),
+      }, accounts),
     ),
   );
 
@@ -398,9 +426,10 @@ const BS_SECTIONS = [
 ] as const;
 
 export async function balanceSheet(companyId: string, asOf: Date, comparisonDate?: Date) {
+  const accounts = await fetchAccounts(companyId);
   const [current, prior] = await Promise.all([
-    balancesFor(companyId, { date: { lte: asOf } }),
-    comparisonDate ? balancesFor(companyId, { date: { lte: comparisonDate } }) : Promise.resolve([] as AccountBalance[]),
+    balancesFor(companyId, { date: { lte: asOf } }, accounts),
+    comparisonDate ? balancesFor(companyId, { date: { lte: comparisonDate } }, accounts) : Promise.resolve([] as AccountBalance[]),
   ]);
   const priorById = new Map(prior.map((p) => [p.accountId, p.balanceCents]));
 
@@ -551,8 +580,12 @@ const CASH_FLOW_CLASS: Record<string, "OPERATING" | "INVESTING" | "FINANCING"> =
  * movement in the bank accounts, so this statement always ties to cash.
  */
 export async function cashFlow(companyId: string, range: DateRange) {
-  const movements = await balancesFor(companyId, { date: { gte: range.from, lte: range.to } });
-  const openingCash = await balancesFor(companyId, { date: { lt: range.from } });
+  const accounts = await fetchAccounts(companyId);
+  // These two were previously sequential awaits despite being independent.
+  const [movements, openingCash] = await Promise.all([
+    balancesFor(companyId, { date: { gte: range.from, lte: range.to } }, accounts),
+    balancesFor(companyId, { date: { lt: range.from } }, accounts),
+  ]);
 
   const sections: Record<"OPERATING" | "INVESTING" | "FINANCING", { name: string; code: string; amountCents: number }[]> = {
     OPERATING: [], INVESTING: [], FINANCING: [],
@@ -603,10 +636,7 @@ export async function cashFlow(companyId: string, range: DateRange) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function currentFiscalRange(companyId: string, asOf = new Date()): Promise<DateRange> {
-  const company = await db.company.findUniqueOrThrow({
-    where: { id: companyId },
-    select: { fiscalYearStartMonth: true },
-  });
+  const company = await getCompanyProfile(companyId);
   const year = fiscalYearOf(asOf, company.fiscalYearStartMonth);
   const { start, end } = fiscalYearRange(year, company.fiscalYearStartMonth);
   return { from: start, to: end < asOf ? end : endOfMonth(asOf) };

@@ -65,6 +65,24 @@ export function sinLastThree(raw: string): string {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Bank account — masking, same treatment as the SIN above
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Strip everything but digits, mirroring normalizeSin. */
+export function normalizeBankAccountNumber(raw: string): string {
+  return raw.replace(/\D/g, "");
+}
+
+/** "1234567" -> "•••4567" — the only form of an account number ever sent to the browser. */
+export function maskBankAccountNumber(lastFour: string): string {
+  return `•••${lastFour}`;
+}
+
+export function bankAccountLastFour(raw: string): string {
+  return normalizeBankAccountNumber(raw).slice(-4);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Years of service
 // ─────────────────────────────────────────────────────────────────────────────
 

@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import { toCents } from "@/lib/money";
 import { CAPABILITIES } from "@/lib/permissions";
 import { requireCapability, requireCompany } from "@/server/auth/context";
+import { getCompanyProfile } from "@/server/companies/profile";
 import { approveBill, createBill, postBill, updateBill, voidBill } from "@/server/documents/bills";
 import { recordPayment } from "@/server/documents/payments";
 
@@ -203,14 +204,7 @@ export async function billFormOptions() {
         taxCodeId: true, purchaseTaxCodeId: true,
       },
     }),
-    db.company.findUniqueOrThrow({
-      where: { id: company.id },
-      select: {
-        name: true, legalName: true, addressLine1: true, addressLine2: true, city: true, province: true,
-        postalCode: true, businessNumber: true, gstNumber: true, qstNumber: true, pstNumber: true,
-        email: true, phone: true, website: true, invoiceFooter: true, logoUrl: true,
-      },
-    }),
+    getCompanyProfile(company.id),
   ]);
   return {
     vendors,

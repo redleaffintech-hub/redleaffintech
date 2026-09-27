@@ -14,13 +14,23 @@ export interface PayRunLineFormValue {
   employeeName: string;
   include: boolean;
   regularHours: string;
-  grossPay: string;
+  overtimeHours: string;
+  /** The simple case: no detail panel opened, this is the entire gross. */
+  regularPay: string;
+  overtimePay: string;
+  vacationPay: string;
+  sickPay: string;
+  bonus: string;
+  retroactivePay: string;
+  statutoryHolidayPay: string;
   cpp: string;
+  cpp2: string;
   ei: string;
   federalTax: string;
   provincialTax: string;
   other: string;
   employerCpp: string;
+  employerCpp2: string;
   employerEi: string;
   notes: string;
 }
@@ -58,13 +68,22 @@ export function defaultLineFor(employee: EmployeeForDefaults): PayRunLineFormVal
     employeeName: `${employee.preferredName || employee.legalFirstName} ${employee.legalLastName}`,
     include: true,
     regularHours: "",
-    grossPay,
+    overtimeHours: "",
+    regularPay: grossPay,
+    overtimePay: "",
+    vacationPay: "",
+    sickPay: "",
+    bonus: "",
+    retroactivePay: "",
+    statutoryHolidayPay: "",
     cpp: "",
+    cpp2: "",
     ei: "",
     federalTax: "",
     provincialTax: "",
     other: "",
     employerCpp: "",
+    employerCpp2: "",
     employerEi: "",
     notes: "",
   };
@@ -85,15 +104,51 @@ interface SavedPayRunLine {
   employeeId: string;
   employee: { legalFirstName: string; legalLastName: string; preferredName: string | null };
   regularHours: number | null;
-  grossPayCents: number;
+  overtimeHours: number | null;
+  regularPayCents: number;
+  overtimePayCents: number;
+  vacationPayCents: number;
+  sickPayCents: number;
+  bonusCents: number;
+  retroactivePayCents: number;
+  statutoryHolidayPayCents: number;
   cppCents: number;
+  cpp2Cents: number;
   eiCents: number;
   federalTaxCents: number;
   provincialTaxCents: number;
   otherDeductionsCents: number;
   employerCppCents: number;
+  employerCpp2Cents: number;
   employerEiCents: number;
   notes: string | null;
+}
+
+function lineFromSaved(line: SavedPayRunLine): PayRunLineFormValue {
+  return {
+    employeeId: line.employeeId,
+    employeeName: `${line.employee.preferredName || line.employee.legalFirstName} ${line.employee.legalLastName}`,
+    include: true,
+    regularHours: line.regularHours?.toString() ?? "",
+    overtimeHours: line.overtimeHours?.toString() ?? "",
+    regularPay: centsToStr(line.regularPayCents),
+    overtimePay: centsToStr(line.overtimePayCents),
+    vacationPay: centsToStr(line.vacationPayCents),
+    sickPay: centsToStr(line.sickPayCents),
+    bonus: centsToStr(line.bonusCents),
+    retroactivePay: centsToStr(line.retroactivePayCents),
+    statutoryHolidayPay: centsToStr(line.statutoryHolidayPayCents),
+    cpp: centsToStr(line.cppCents),
+    cpp2: centsToStr(line.cpp2Cents),
+    ei: centsToStr(line.eiCents),
+    federalTax: centsToStr(line.federalTaxCents),
+    provincialTax: centsToStr(line.provincialTaxCents),
+    other: centsToStr(line.otherDeductionsCents),
+    employerCpp: centsToStr(line.employerCppCents),
+    employerCpp2: centsToStr(line.employerCpp2Cents),
+    employerEi: centsToStr(line.employerEiCents),
+    notes: line.notes ?? "",
+  };
 }
 
 /**
@@ -108,44 +163,13 @@ export function buildEditLines(savedLines: SavedPayRunLine[], activeEmployees: E
 
   const fromActive = activeEmployees.map((employee) => {
     const line = saved.get(employee.id);
-    if (!line) return defaultLineFor(employee);
-    return {
-      employeeId: employee.id,
-      employeeName: `${line.employee.preferredName || line.employee.legalFirstName} ${line.employee.legalLastName}`,
-      include: true,
-      regularHours: line.regularHours?.toString() ?? "",
-      grossPay: centsToStr(line.grossPayCents),
-      cpp: centsToStr(line.cppCents),
-      ei: centsToStr(line.eiCents),
-      federalTax: centsToStr(line.federalTaxCents),
-      provincialTax: centsToStr(line.provincialTaxCents),
-      other: centsToStr(line.otherDeductionsCents),
-      employerCpp: centsToStr(line.employerCppCents),
-      employerEi: centsToStr(line.employerEiCents),
-      notes: line.notes ?? "",
-    };
+    return line ? lineFromSaved(line) : defaultLineFor(employee);
   });
 
   // A line for someone no longer active (terminated since the draft was
   // saved) still needs to appear, pre-filled and included, so editing does
   // not silently drop them.
-  const inactiveSaved = savedLines
-    .filter((l) => !activeIds.has(l.employeeId))
-    .map((line) => ({
-      employeeId: line.employeeId,
-      employeeName: `${line.employee.preferredName || line.employee.legalFirstName} ${line.employee.legalLastName}`,
-      include: true,
-      regularHours: line.regularHours?.toString() ?? "",
-      grossPay: centsToStr(line.grossPayCents),
-      cpp: centsToStr(line.cppCents),
-      ei: centsToStr(line.eiCents),
-      federalTax: centsToStr(line.federalTaxCents),
-      provincialTax: centsToStr(line.provincialTaxCents),
-      other: centsToStr(line.otherDeductionsCents),
-      employerCpp: centsToStr(line.employerCppCents),
-      employerEi: centsToStr(line.employerEiCents),
-      notes: line.notes ?? "",
-    }));
+  const inactiveSaved = savedLines.filter((l) => !activeIds.has(l.employeeId)).map(lineFromSaved);
 
   return [...fromActive, ...inactiveSaved];
 }

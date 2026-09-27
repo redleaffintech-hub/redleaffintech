@@ -10,6 +10,7 @@ import {
   createPayRunInTx,
   deletePayRunInTx,
   postPayRunInTx,
+  previewLineAmounts,
   updatePayRunInTx,
   voidPayRun,
 } from "@/server/payroll/pay-runs";
@@ -18,15 +19,24 @@ const lineSchema = z.object({
   employeeId: z.string().min(1),
   regularHours: z.number().min(0).max(1000).nullable().optional(),
   overtimeHours: z.number().min(0).max(1000).nullable().optional(),
-  grossPayCents: z.number().int().min(0),
-  cppCents: z.number().int().min(0).optional(),
-  eiCents: z.number().int().min(0).optional(),
-  federalTaxCents: z.number().int().min(0).optional(),
-  provincialTaxCents: z.number().int().min(0).optional(),
+  regularPayCents: z.number().int().min(0).optional(),
+  overtimePayCents: z.number().int().min(0).nullable().optional(),
+  vacationPayCents: z.number().int().min(0).optional(),
+  sickPayCents: z.number().int().min(0).optional(),
+  bonusCents: z.number().int().min(0).optional(),
+  retroactivePayCents: z.number().int().min(0).optional(),
+  statutoryHolidayPayCents: z.number().int().min(0).optional(),
+  otRateMultiplierMicro: z.number().int().min(0).nullable().optional(),
+  cppCents: z.number().int().min(0).nullable().optional(),
+  cpp2Cents: z.number().int().min(0).nullable().optional(),
+  eiCents: z.number().int().min(0).nullable().optional(),
+  federalTaxCents: z.number().int().min(0).nullable().optional(),
+  provincialTaxCents: z.number().int().min(0).nullable().optional(),
   otherDeductionsCents: z.number().int().min(0).optional(),
   otherDeductionsNote: z.string().trim().max(200).nullable().optional(),
-  employerCppCents: z.number().int().min(0).optional(),
-  employerEiCents: z.number().int().min(0).optional(),
+  employerCppCents: z.number().int().min(0).nullable().optional(),
+  employerCpp2Cents: z.number().int().min(0).nullable().optional(),
+  employerEiCents: z.number().int().min(0).nullable().optional(),
   notes: z.string().trim().max(500).nullable().optional(),
 });
 
@@ -145,6 +155,74 @@ export async function voidPayRunAction(formData: FormData) {
   } catch (error) {
     if (error instanceof PayRunError) return { error: error.message };
     throw error;
+  }
+}
+
+const previewSchema = z.object({
+  payDate: z.string().trim().min(1),
+  line: lineSchema,
+});
+
+interface PreviewLineResult {
+  error?: string;
+  grossPayCents?: number;
+  overtimePayCents?: number;
+  cppCents?: number;
+  cpp2Cents?: number;
+  eiCents?: number;
+  federalTaxCents?: number;
+  provincialTaxCents?: number;
+  employerCppCents?: number;
+  employerCpp2Cents?: number;
+  employerEiCents?: number;
+  netPayCents?: number;
+}
+
+/**
+ * Backs the pay-run form's "Calculate" button: suggests CPP/CPP2/EI/tax/OT pay
+ * for one line from the statutory rate tables and this employee's
+ * year-to-date figures, without saving anything. The bookkeeper can accept or
+ * override every field the result fills in.
+ */
+export async function previewLineAction(payload: string): Promise<PreviewLineResult> {
+  const { company } = await requireCapability(CAPABILITIES.PAYROLL);
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(payload);
+  } catch {
+    return { error: "Could not read this line's details." };
+  }
+  const parsed = previewSchema.safeParse(raw);
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Check this line's details." };
+
+  const payDate = new Date(parsed.data.payDate);
+  if (Number.isNaN(payDate.getTime())) return { error: "Set the pay date before calculating." };
+
+  try {
+    // Leave every deduction unset so resolveLines suggests all of them, even
+    // if the form already has a value the bookkeeper typed in.
+    const { cppCents, cpp2Cents, eiCents, federalTaxCents, provincialTaxCents, employerCppCents, employerCpp2Cents, employerEiCents, ...line } = parsed.data.line;
+    void cppCents; void cpp2Cents; void eiCents; void federalTaxCents; void provincialTaxCents;
+    void employerCppCents; void employerCpp2Cents; void employerEiCents;
+
+    const resolved = await previewLineAmounts(company.id, payDate, line);
+    return {
+      grossPayCents: resolved.grossPayCents,
+      overtimePayCents: resolved.overtimePayCents,
+      cppCents: resolved.cppCents,
+      cpp2Cents: resolved.cpp2Cents,
+      eiCents: resolved.eiCents,
+      federalTaxCents: resolved.federalTaxCents,
+      provincialTaxCents: resolved.provincialTaxCents,
+      employerCppCents: resolved.employerCppCents,
+      employerCpp2Cents: resolved.employerCpp2Cents,
+      employerEiCents: resolved.employerEiCents,
+      netPayCents: resolved.netPayCents,
+    };
+  } catch (caught) {
+    if (caught instanceof PayRunError) return { error: caught.message };
+    throw caught;
   }
 }
 

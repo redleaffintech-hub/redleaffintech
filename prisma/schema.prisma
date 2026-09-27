@@ -245,6 +245,8 @@ model Company {
 
   payRuns     PayRun[]
   payRunLines PayRunLine[]
+
+  employeeCompensationChanges EmployeeCompensationChange[]
 }
 
 /// Membership + role of a user within one company (§3, §34).
@@ -840,7 +842,12 @@ model InventoryMovement {
   journalEntry JournalEntry? @relation(fields: [journalEntryId], references: [id], onDelete: SetNull)
 
   @@index([companyId, itemId, date])
-  @@index([companyId, sourceType, sourceId])
+  // Extended with sourceLineId (§ perf review, 16 Sep 2026): the lookup a
+  // linked return does to find the exact movement it reverses filters on all
+  // four columns together (credit-notes.ts's buildReturnLine) — the original
+  // three-column index already narrowed well via sourceId, but a covering
+  // index avoids the extra heap fetch entirely.
+  @@index([companyId, sourceType, sourceId, sourceLineId])
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1114,6 +1121,14 @@ model CreditNoteLine {
   taxCode    TaxCode?     @relation(fields: [taxCodeId], references: [id])
 
   @@index([creditNoteId])
+  // § perf review, 16 Sep 2026: remainingReturnableQuantityMilli and the
+  // purchase/sales-return option pickers both filter directly on these two
+  // columns (credit-notes.ts, sales/credit-notes/actions.ts,
+  // purchases/returns/actions.ts) with no other column to narrow on first —
+  // without an index that's a full-table scan of every company's credit
+  // notes as the table grows.
+  @@index([sourceInvoiceLineId])
+  @@index([sourceBillLineId])
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1714,8 +1729,25 @@ model Employee {
   /// carries no plaintext SIN to protect. A future payroll module that must
   /// print a full SIN on a T4 will need a properly encrypted-at-rest field,
   /// which this deliberately is not (see employment-standards.ts).
-  sinLast3 String?
-  sinHash  String?
+  sinLast3     String?
+  sinHash      String?
+  sinExpiryDate DateTime?
+
+  /// e.g. CITIZEN | PERMANENT_RESIDENT | WORK_PERMIT — reference only, not
+  /// validated against IRCC in any way.
+  immigrationStatus           String?
+  immigrationStatusExpiryDate DateTime?
+
+  /// Direct-deposit details, masked exactly like the SIN fields above: only
+  /// the routing numbers (not sensitive alone) plus the last 4 digits and a
+  /// one-way hash of the account number are ever stored. This app records
+  /// payroll for the GL — it does not originate an EFT/direct-deposit file —
+  /// so a recoverable account number is never needed and deliberately never
+  /// kept, the same reasoning as the SIN comment below.
+  bankInstitutionNumber  String?
+  bankTransitNumber      String?
+  bankAccountNumberLast4 String?
+  bankAccountNumberHash  String?
 
   // Employment
   jobTitle             String
@@ -1739,6 +1771,11 @@ model Employee {
   /// `vacationEntitlement()`.
   vacationPercentOverrideMicro Int?
 
+  /// Overtime multiplier, rateMicro convention (1.5x -> 1_500_000). Null means
+  /// this employee is not paid a premium for overtime hours (e.g. exempt
+  /// salaried roles) — see src/server/payroll/tax-engine.ts.
+  defaultOvertimeRateMultiplierMicro Int?
+
   notes String?
 
   createdById String?
@@ -1750,9 +1787,10 @@ model Employee {
   manager    Employee?   @relation("EmployeeManager", fields: [managerId], references: [id], onDelete: SetNull)
   reports    Employee[]  @relation("EmployeeManager")
 
-  leaveRequests    LeaveRequest[]
-  leaveAdjustments LeaveBalanceAdjustment[]
-  payRunLines      PayRunLine[]
+  leaveRequests       LeaveRequest[]
+  leaveAdjustments    LeaveBalanceAdjustment[]
+  payRunLines         PayRunLine[]
+  compensationChanges EmployeeCompensationChange[]
 
   @@unique([companyId, employeeNumber])
   @@index([companyId, employmentStatus])
@@ -1806,9 +1844,13 @@ model LeaveRequest {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Payroll module (pay runs only — no statutory deduction calculation; CPP, EI
-// and federal/provincial tax are entered per line, computed by the bookkeeper
-// outside this app. See src/server/payroll/pay-runs.ts.)
+// Payroll module. CPP/CPP2/EI and federal/provincial tax are auto-suggested
+// per line from the effective-dated PayrollStatutoryRate/PayrollTaxBracket
+// reference tables below (see src/server/payroll/tax-engine.ts), using each
+// employee's year-to-date figures (src/server/payroll/ytd.ts) — but every
+// suggested amount remains a plain editable field, never locked, matching
+// this app's rule of never blindly trusting a computed value (see
+// netPayCents/grossPayCents below). See src/server/payroll/pay-runs.ts.
 // ─────────────────────────────────────────────────────────────────────────────
 
 model PayRun {
@@ -1843,10 +1885,12 @@ model PayRun {
   @@index([companyId, payDate])
 }
 
-/// One employee's pay stub within a PayRun. CPP/EI/federal/provincial tax are
-/// entered by the bookkeeper (from CRA's PDOC tool, a payroll service, or their
-/// accountant) — this app calculates net pay from what is entered, it does not
-/// calculate the statutory deductions themselves.
+/// One employee's pay stub within a PayRun. CPP/CPP2/EI/federal/provincial tax
+/// are auto-suggested from the effective-dated rate tables below and the
+/// employee's year-to-date figures, but remain plain editable fields — the
+/// bookkeeper can always correct an edge case the engine gets wrong (from
+/// CRA's PDOC tool, a payroll service, or their accountant). Net pay is always
+/// recomputed from whatever ends up stored here.
 model PayRunLine {
   id            String @id @default(cuid())
   payRunId      String
@@ -1854,20 +1898,39 @@ model PayRunLine {
   employeeId    String
   regularHours  Float?
   overtimeHours Float?
-  grossPayCents Int
+
+  /// Earnings breakdown — each bucket entered or auto-suggested (see
+  /// src/server/payroll/tax-engine.ts) independently, so the pay stub can show
+  /// them as separate lines. grossPayCents is always the sum of these seven
+  /// fields, recomputed server-side, never trusted from the client — same
+  /// rule as netPayCents below.
+  regularPayCents          Int @default(0)
+  overtimePayCents         Int @default(0)
+  vacationPayCents         Int @default(0)
+  sickPayCents             Int @default(0)
+  bonusCents               Int @default(0)
+  retroactivePayCents      Int @default(0)
+  statutoryHolidayPayCents Int @default(0)
+  grossPayCents            Int
+
+  /// Overrides the employee's defaultOvertimeRateMultiplierMicro for this
+  /// line only. Null defers to the employee's default.
+  otRateMultiplierMicro Int?
 
   cppCents             Int     @default(0)
+  cpp2Cents            Int     @default(0)
   eiCents              Int     @default(0)
   federalTaxCents      Int     @default(0)
   provincialTaxCents   Int     @default(0)
   otherDeductionsCents Int     @default(0)
   otherDeductionsNote  String?
 
-  /// Employer-side CPP/EI contributions — not deducted from the employee, but
-  /// owed to CRA alongside the withheld amounts, so they post to the same
-  /// payroll liability account as an employer expense.
-  employerCppCents Int @default(0)
-  employerEiCents  Int @default(0)
+  /// Employer-side CPP/CPP2/EI contributions — not deducted from the
+  /// employee, but owed to CRA alongside the withheld amounts, so they post
+  /// to the same payroll liability account as an employer expense.
+  employerCppCents  Int @default(0)
+  employerCpp2Cents Int @default(0)
+  employerEiCents   Int @default(0)
 
   /// grossPayCents minus every *Cents deduction above. Always recomputed
   /// server-side on save — never trusted from the client.
@@ -1880,6 +1943,103 @@ model PayRunLine {
 
   @@unique([payRunId, employeeId])
   @@index([companyId, employeeId])
+}
+
+/// Audit trail for an employee's pay-rate changes. Employee.payRateCents and
+/// Employee.compensationType remain the CURRENT values every existing query
+/// reads directly — this table is additive history only, the same role
+/// FiscalCalendarChange plays for the fiscal year start month: it records what
+/// changed, when it took effect, and why, without becoming a second source of
+/// truth for "what is this employee paid right now."
+model EmployeeCompensationChange {
+  id                   String   @id @default(cuid())
+  companyId            String
+  employeeId           String
+  effectiveDate        DateTime
+  previousPayRateCents Int
+  newPayRateCents      Int
+  compensationType     String // SALARY | HOURLY — snapshot at the time of this change
+  reason               String?
+  createdById          String?
+  createdAt            DateTime @default(now())
+
+  company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, employeeId, effectiveDate])
+}
+
+/// Federal CPP/CPP2/EI parameters for one year, effective-dated exactly like
+/// RegionalTaxRate (see that model's comment for the shared reasoning): a
+/// platform-wide REFERENCE row, managed only from /admin/payroll-rates, that a
+/// pay run's calculation reads at the moment it is calculated. Publishing a
+/// new row here changes what the NEXT calculation uses; it can never rewrite a
+/// PayRunLine's already-stored, already-posted amounts.
+model PayrollStatutoryRate {
+  id String @id @default(cuid())
+
+  /// rateMicro convention throughout (5.95% -> 5_950_000... i.e. rate * 1_000_000).
+  cppRateMicro Int // employee & employer pay the same rate
+
+  /// Annual basic exemption before CPP applies, e.g. $3,500 -> 350000.
+  cppBasicExemptionCents         Int
+  /// YMPE — Year's Maximum Pensionable Earnings.
+  cppMaxPensionableEarningsCents Int
+
+  cpp2RateMicro Int
+  /// YAMPE — Year's Additional Maximum Pensionable Earnings. CPP2 applies
+  /// between cppMaxPensionableEarningsCents and this figure.
+  cpp2MaxPensionableEarningsCents Int
+
+  eiRateMicro Int // employee rate
+  /// Employer EI = employee EI * this, rateMicro convention (1.4x -> 1_400_000).
+  eiEmployerMultiplierMicro   Int
+  eiMaxInsurableEarningsCents Int
+
+  effectiveFrom DateTime
+  effectiveTo   DateTime?
+  isActive      Boolean   @default(true)
+
+  /// Informational only, no FK — same reasoning as RegionalTaxRate.createdById.
+  createdById String?
+  reason      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  @@index([effectiveFrom])
+}
+
+/// One marginal income-tax bracket for a jurisdiction ("FEDERAL", or a
+/// province code from PROVINCES) and year, effective-dated like
+/// PayrollStatutoryRate above. basicPersonalAmountCents is repeated on every
+/// bracket row of the same (jurisdiction, effectiveFrom) group so a single
+/// query returns everything src/server/payroll/tax-engine.ts needs to compute
+/// tax for that jurisdiction/date. This is an approximation of Canadian
+/// payroll tax (annualize, subtract the basic personal amount, apply marginal
+/// brackets) — it does not model claim codes or other non-refundable credits.
+/// Platform-wide, managed only from /admin/payroll-rates.
+model PayrollTaxBracket {
+  id String @id @default(cuid())
+
+  jurisdiction String // FEDERAL | AB | BC | MB | NB | NL | NS | NT | NU | ON | PE | QC | SK | YT
+  minCents     Int
+  maxCents     Int? // null = the top/uncapped bracket
+  rateMicro    Int
+
+  basicPersonalAmountCents Int
+
+  effectiveFrom DateTime
+  effectiveTo   DateTime?
+  isActive      Boolean   @default(true)
+
+  createdById String?
+  reason      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  @@index([jurisdiction, effectiveFrom])
 }
 
 /// A signed entry in an employee's leave ledger: a positive grant/carryover or a

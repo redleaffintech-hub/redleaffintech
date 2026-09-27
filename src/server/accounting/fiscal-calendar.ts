@@ -1,4 +1,5 @@
 import { db, type Tx } from "@/lib/db";
+import { getCompanyProfile } from "@/server/companies/profile";
 import { addDays, addMonths, fiscalYearOf, fiscalYearRange, utcDate } from "@/lib/dates";
 
 /**
@@ -64,10 +65,7 @@ export async function planFiscalYearChange(
   newStartMonth: number,
   effectiveYear?: number,
 ): Promise<FiscalChangePlan> {
-  const company = await db.company.findUniqueOrThrow({
-    where: { id: companyId },
-    select: { fiscalYearStartMonth: true },
-  });
+  const company = await getCompanyProfile(companyId);
   const currentStartMonth = company.fiscalYearStartMonth;
 
   const [postedEntries, existingPeriods, closedOrLockedPeriods, covered] = await Promise.all([

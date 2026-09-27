@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
 import { requireCapability } from "@/server/auth/context";
+import { getCompanyProfile } from "@/server/companies/profile";
 import { CAPABILITIES, can } from "@/lib/permissions";
 import { formatDate, formatDateLong, formatDateTime, daysBetween, today } from "@/lib/dates";
 import { formatMoney, formatQty, formatRate } from "@/lib/money";
@@ -50,10 +51,7 @@ export default async function InvoiceDetailPage({ params }: PageProps<"/sales/in
       include: { user: { select: { name: true } } },
       take: 10,
     }),
-    db.company.findUniqueOrThrow({
-      where: { id: company.id },
-      select: { name: true, legalName: true, addressLine1: true, addressLine2: true, city: true, province: true, postalCode: true, businessNumber: true, gstNumber: true, qstNumber: true, pstNumber: true, email: true, phone: true, website: true, invoiceFooter: true, logoUrl: true },
-    }),
+    getCompanyProfile(company.id),
   ]);
 
   const overdueDays = daysBetween(invoice.dueDate, today());

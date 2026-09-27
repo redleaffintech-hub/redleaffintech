@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
 import { requireCapability } from "@/server/auth/context";
+import { getCompanyProfile } from "@/server/companies/profile";
 import { CAPABILITIES, can } from "@/lib/permissions";
 import { formatDate, formatDateLong } from "@/lib/dates";
 import { formatMoney, formatQty, formatRate } from "@/lib/money";
@@ -14,23 +15,17 @@ export default async function QuoteDetailPage({ params }: { params: Promise<{ id
   const currency = company.baseCurrency;
   const { id } = await params;
 
-  const quote = await db.estimate.findFirst({
-    where: { id, companyId: company.id },
-    include: {
-      customer: true,
-      lines: { orderBy: { lineNo: "asc" }, include: { item: true } },
-    },
-  });
+  const [quote, companyProfile] = await Promise.all([
+    db.estimate.findFirst({
+      where: { id, companyId: company.id },
+      include: {
+        customer: true,
+        lines: { orderBy: { lineNo: "asc" }, include: { item: true } },
+      },
+    }),
+    getCompanyProfile(company.id),
+  ]);
   if (!quote) notFound();
-
-  const companyProfile = await db.company.findUniqueOrThrow({
-    where: { id: company.id },
-    select: {
-      name: true, legalName: true, addressLine1: true, addressLine2: true, city: true, province: true,
-      postalCode: true, businessNumber: true, gstNumber: true, qstNumber: true, pstNumber: true,
-      email: true, phone: true, website: true, logoUrl: true,
-    },
-  });
 
   const canEdit = can(role, CAPABILITIES.INVOICES) && quote.status !== "CONVERTED";
   const fmt = (cents: number) => formatMoney(cents, { currency });

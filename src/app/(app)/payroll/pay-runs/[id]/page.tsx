@@ -36,15 +36,17 @@ export default async function PayRunDetailPage({ params }: { params: Promise<{ i
     (sum, line) => ({
       gross: sum.gross + line.grossPayCents,
       cpp: sum.cpp + line.cppCents,
+      cpp2: sum.cpp2 + line.cpp2Cents,
       ei: sum.ei + line.eiCents,
       federalTax: sum.federalTax + line.federalTaxCents,
       provincialTax: sum.provincialTax + line.provincialTaxCents,
       other: sum.other + line.otherDeductionsCents,
       employerCpp: sum.employerCpp + line.employerCppCents,
+      employerCpp2: sum.employerCpp2 + line.employerCpp2Cents,
       employerEi: sum.employerEi + line.employerEiCents,
       net: sum.net + line.netPayCents,
     }),
-    { gross: 0, cpp: 0, ei: 0, federalTax: 0, provincialTax: 0, other: 0, employerCpp: 0, employerEi: 0, net: 0 },
+    { gross: 0, cpp: 0, cpp2: 0, ei: 0, federalTax: 0, provincialTax: 0, other: 0, employerCpp: 0, employerCpp2: 0, employerEi: 0, net: 0 },
   );
 
   const canEdit = can(role, CAPABILITIES.PAYROLL);
@@ -78,7 +80,7 @@ export default async function PayRunDetailPage({ params }: { params: Promise<{ i
 
       <div className="mb-4 grid gap-4 sm:grid-cols-3">
         <Stat label="Total gross pay" cents={totals.gross} currency={currency} />
-        <Stat label="Total withheld" cents={totals.cpp + totals.ei + totals.federalTax + totals.provincialTax + totals.other} currency={currency} />
+        <Stat label="Total withheld" cents={totals.cpp + totals.cpp2 + totals.ei + totals.federalTax + totals.provincialTax + totals.other} currency={currency} />
         <Stat label="Total net pay" cents={totals.net} currency={currency} emphasis />
       </div>
 
@@ -103,13 +105,16 @@ export default async function PayRunDetailPage({ params }: { params: Promise<{ i
               <Th>Employee</Th>
               <Th align="right">Gross</Th>
               <Th align="right">CPP</Th>
+              <Th align="right">CPP2</Th>
               <Th align="right">EI</Th>
               <Th align="right">Fed tax</Th>
               <Th align="right">Prov tax</Th>
               <Th align="right">Other</Th>
               <Th align="right">Empr CPP</Th>
+              <Th align="right">Empr CPP2</Th>
               <Th align="right">Empr EI</Th>
               <Th align="right">Net pay</Th>
+              {payRun.status === "POSTED" && <Th>{""}</Th>}
             </tr>
           </thead>
           <tbody>
@@ -122,13 +127,22 @@ export default async function PayRunDetailPage({ params }: { params: Promise<{ i
                 </Td>
                 <Td align="right"><Money cents={line.grossPayCents} currency={currency} /></Td>
                 <Td align="right"><Money cents={line.cppCents} currency={currency} /></Td>
+                <Td align="right"><Money cents={line.cpp2Cents} currency={currency} /></Td>
                 <Td align="right"><Money cents={line.eiCents} currency={currency} /></Td>
                 <Td align="right"><Money cents={line.federalTaxCents} currency={currency} /></Td>
                 <Td align="right"><Money cents={line.provincialTaxCents} currency={currency} /></Td>
                 <Td align="right"><Money cents={line.otherDeductionsCents} currency={currency} /></Td>
                 <Td align="right" className="text-muted-ink"><Money cents={line.employerCppCents} currency={currency} /></Td>
+                <Td align="right" className="text-muted-ink"><Money cents={line.employerCpp2Cents} currency={currency} /></Td>
                 <Td align="right" className="text-muted-ink"><Money cents={line.employerEiCents} currency={currency} /></Td>
                 <Td align="right" className="font-semibold text-ink-950"><Money cents={line.netPayCents} currency={currency} /></Td>
+                {payRun.status === "POSTED" && (
+                  <Td align="right">
+                    <Link href={`/payroll/pay-runs/${payRun.id}/stubs/${line.employee.id}`} className="text-[0.75rem] text-brand-700 hover:underline">
+                      Pay stub →
+                    </Link>
+                  </Td>
+                )}
               </Tr>
             ))}
           </tbody>

@@ -17,6 +17,7 @@ import {
 import {
   EMPLOYEE_TYPE_LABELS,
   EMPLOYMENT_STATUS_LABELS,
+  IMMIGRATION_STATUS_LABELS,
   PAY_FREQUENCY_LABELS,
   PAY_FREQUENCY_PERIODS_PER_YEAR,
   TERMINATION_REASON_LABELS,
@@ -25,6 +26,7 @@ import {
   MINIMUM_WAGE_AS_OF,
   MINIMUM_WAGE_CENTS,
   completedYears,
+  maskBankAccountNumber,
   minimumTerminationNoticeWeeks,
   statutoryHolidays,
   vacationEntitlement,
@@ -141,6 +143,12 @@ export default async function EmployeeDetailPage({ params }: { params: Promise<{
                     ? [{ label: "Per pay period (gross, before deductions)", value: <Money cents={perPeriodCents} currency={company.baseCurrency} /> }]
                     : []),
                   { label: "Standard hours / week", value: employee.standardHoursPerWeek ? String(employee.standardHoursPerWeek) : "—" },
+                  {
+                    label: "Overtime rate",
+                    value: employee.defaultOvertimeRateMultiplierMicro
+                      ? `${(employee.defaultOvertimeRateMultiplierMicro / 1_000_000).toString()}x`
+                      : "Not paid a premium",
+                  },
                 ]}
               />
             </div>
@@ -160,7 +168,34 @@ export default async function EmployeeDetailPage({ params }: { params: Promise<{
                       ? `${employee.addressLine1}${employee.addressLine2 ? `, ${employee.addressLine2}` : ""}, ${employee.city ?? ""} ${employee.province ?? ""} ${employee.postalCode ?? ""}`
                       : "—",
                   },
-                  { label: "SIN on file", value: employee.sinLast3 ? `••• ••• ${employee.sinLast3}` : "Not on file" },
+                  {
+                    label: "SIN on file",
+                    value: employee.sinLast3
+                      ? `••• ••• ${employee.sinLast3}${employee.sinExpiryDate ? ` (expires ${formatDate(employee.sinExpiryDate)})` : ""}`
+                      : "Not on file",
+                  },
+                  {
+                    label: "Immigration / residency status",
+                    value: employee.immigrationStatus
+                      ? `${IMMIGRATION_STATUS_LABELS[employee.immigrationStatus as keyof typeof IMMIGRATION_STATUS_LABELS] ?? employee.immigrationStatus}${employee.immigrationStatusExpiryDate ? ` (expires ${formatDate(employee.immigrationStatusExpiryDate)})` : ""}`
+                      : "—",
+                  },
+                ]}
+              />
+            </div>
+          </Card>
+
+          <Card>
+            <CardHeader title="Direct deposit" />
+            <div className="mt-3">
+              <DefinitionList
+                items={[
+                  { label: "Institution number", value: employee.bankInstitutionNumber ?? "—" },
+                  { label: "Transit number", value: employee.bankTransitNumber ?? "—" },
+                  {
+                    label: "Account number",
+                    value: employee.bankAccountNumberLast4 ? maskBankAccountNumber(employee.bankAccountNumberLast4) : "Not on file",
+                  },
                 ]}
               />
             </div>

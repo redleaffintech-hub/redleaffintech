@@ -38,6 +38,16 @@ export const ADMIN_NAV: AdminNavItem[] = [
     href: "/admin/regional-tax-rates",
     description: "The central GST/HST/PST/QST/RST reference every company's tax setup draws from",
   },
+  {
+    label: "Payroll statutory rates",
+    href: "/admin/payroll-rates/statutory",
+    description: "Federal CPP/CPP2/EI parameters every company's pay-run calculation reads from",
+  },
+  {
+    label: "Payroll tax brackets",
+    href: "/admin/payroll-rates/tax-brackets",
+    description: "Federal and provincial marginal income-tax brackets used to suggest pay-run tax deductions",
+  },
   { label: "Platform admins", href: "/admin/administrators", description: "Who can reach this console" },
   { label: "Admin audit log", href: "/admin/audit", description: "Every platform action, recorded" },
   { label: "Settings", href: "/admin/settings", description: "Your own account and security" },

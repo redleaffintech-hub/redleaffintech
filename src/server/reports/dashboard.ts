@@ -7,6 +7,7 @@
  */
 
 import { db } from "@/lib/db";
+import { getCompanyProfile } from "@/server/companies/profile";
 import { CASH_ASSET_SUBTYPES } from "@/lib/enums";
 import { addDays, addMonths, endOfMonth, monthsBetween, startOfMonth, today, utcDate, fiscalYearOf, fiscalYearRange } from "@/lib/dates";
 import { arAging, apAging, DEFAULT_BUCKETS, bucketLabels } from "./aging";
@@ -15,10 +16,7 @@ import { taxSummary } from "./tax";
 
 export async function dashboardData(companyId: string) {
   const asOf = today();
-  const company = await db.company.findUniqueOrThrow({
-    where: { id: companyId },
-    select: { fiscalYearStartMonth: true, province: true },
-  });
+  const company = await getCompanyProfile(companyId);
 
   const fiscalYear = fiscalYearOf(asOf, company.fiscalYearStartMonth);
   const { start: fyStart } = fiscalYearRange(fiscalYear, company.fiscalYearStartMonth);
@@ -59,13 +57,21 @@ export async function dashboardData(companyId: string) {
       db.recurringTemplate.count({ where: { companyId, isActive: true } }),
     ]);
 
-  // Cash: closing balance per month across every bank & cash account.
+  // Cash: closing balance per month across every bank & cash account. These
+  // two are independent of each other — previously sequential awaits.
   const cashSubtypes = CASH_ASSET_SUBTYPES as readonly string[];
-  const cashLines = await db.journalLine.findMany({
-    where: { companyId, accountId: { in: cashAccounts.filter((a) => cashSubtypes.includes(a.subtype)).map((a) => a.id) } },
-    select: { date: true, debitCents: true, creditCents: true },
-    orderBy: { date: "asc" },
-  });
+  const [cashLines, cardBalances] = await Promise.all([
+    db.journalLine.findMany({
+      where: { companyId, accountId: { in: cashAccounts.filter((a) => cashSubtypes.includes(a.subtype)).map((a) => a.id) } },
+      select: { date: true, debitCents: true, creditCents: true },
+      orderBy: { date: "asc" },
+    }),
+    db.journalLine.groupBy({
+      by: ["accountId"],
+      where: { companyId, accountId: { in: cashAccounts.filter((a) => a.subtype === "CREDIT_CARD").map((a) => a.id) } },
+      _sum: { debitCents: true, creditCents: true },
+    }),
+  ]);
 
   const months = monthsBetween(chartRange.from, asOf);
   let running = 0;
@@ -80,11 +86,6 @@ export async function dashboardData(companyId: string) {
   });
   const cashOnHandCents = cashLines.reduce((s, l) => s + l.debitCents - l.creditCents, 0);
 
-  const cardBalances = await db.journalLine.groupBy({
-    by: ["accountId"],
-    where: { companyId, accountId: { in: cashAccounts.filter((a) => a.subtype === "CREDIT_CARD").map((a) => a.id) } },
-    _sum: { debitCents: true, creditCents: true },
-  });
   const creditCardOwingCents = cardBalances.reduce(
     (s, c) => s + ((c._sum.creditCents ?? 0) - (c._sum.debitCents ?? 0)),
     0,

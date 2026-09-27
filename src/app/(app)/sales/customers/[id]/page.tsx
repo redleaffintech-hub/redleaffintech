@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
 import { requireCapability } from "@/server/auth/context";
+import { getCompanyProfile } from "@/server/companies/profile";
 import { CAPABILITIES } from "@/lib/permissions";
 import { partyStatement } from "@/server/reports/aging";
 import { fiscalYearOf, fiscalYearRange, isoDate, toUtcDay, today, formatDate } from "@/lib/dates";
@@ -41,13 +42,7 @@ export default async function CustomerDetailPage({ params, searchParams }: PageP
       orderBy: { date: "desc" },
       take: 10,
     }),
-    db.company.findUniqueOrThrow({
-      where: { id: company.id },
-      select: {
-        name: true, legalName: true, addressLine1: true, addressLine2: true,
-        city: true, province: true, postalCode: true, phone: true, email: true, website: true,
-      },
-    }),
+    getCompanyProfile(company.id),
     db.invoice.findFirst({
       where: {
         companyId: company.id,

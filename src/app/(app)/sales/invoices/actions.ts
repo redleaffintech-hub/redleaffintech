@@ -7,6 +7,7 @@ import { toCents } from "@/lib/money";
 import { CAPABILITIES } from "@/lib/permissions";
 import { PROVINCES_WITH_SALES_TAX } from "@/server/setup/templates";
 import { requireCapability, requireCompany, recordAudit } from "@/server/auth/context";
+import { getCompanyProfile } from "@/server/companies/profile";
 import { createInvoice, postInvoice, updateInvoice, voidInvoice } from "@/server/documents/invoices";
 import { peekNumber } from "@/server/documents/numbering";
 import { recordPayment } from "@/server/documents/payments";
@@ -277,15 +278,7 @@ export async function invoiceFormOptions() {
         taxCodeId: true, purchaseTaxCodeId: true,
       },
     }),
-    db.company.findUniqueOrThrow({
-      where: { id: company.id },
-      select: {
-        name: true, legalName: true, addressLine1: true, addressLine2: true, city: true, province: true,
-        postalCode: true, businessNumber: true, gstNumber: true, qstNumber: true, pstNumber: true,
-        email: true, phone: true, website: true, invoiceFooter: true, quoteFooter: true, creditNoteFooter: true,
-        logoUrl: true, gstHstStatus: true, qstStatus: true, pstStatus: true,
-      },
-    }),
+    getCompanyProfile(company.id),
   ]);
 
   // Flattened into the shape the editor party list wants, so the component never

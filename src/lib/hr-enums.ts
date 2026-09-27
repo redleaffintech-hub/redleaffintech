@@ -45,6 +45,17 @@ export const PAY_FREQUENCY_PERIODS_PER_YEAR: Record<PayFrequency, number> = {
   MONTHLY: 12,
 };
 
+export const IMMIGRATION_STATUSES = ["CITIZEN", "PERMANENT_RESIDENT", "WORK_PERMIT", "STUDY_PERMIT", "OTHER"] as const;
+export type ImmigrationStatus = (typeof IMMIGRATION_STATUSES)[number];
+
+export const IMMIGRATION_STATUS_LABELS: Record<ImmigrationStatus, string> = {
+  CITIZEN: "Canadian citizen",
+  PERMANENT_RESIDENT: "Permanent resident",
+  WORK_PERMIT: "Work permit",
+  STUDY_PERMIT: "Study permit",
+  OTHER: "Other",
+};
+
 export const LEAVE_CATEGORIES = ["VACATION", "SICK", "PERSONAL", "STATUTORY", "UNPAID", "OTHER"] as const;
 export type LeaveCategory = (typeof LEAVE_CATEGORIES)[number];
 
