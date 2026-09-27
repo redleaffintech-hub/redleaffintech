@@ -413,7 +413,7 @@ export async function postInvoiceInTx(
   const trackedItems = itemIds.length
     ? await tx.serviceItem.findMany({
         where: { id: { in: itemIds }, companyId, trackInventory: true },
-        select: { id: true, expenseAccountId: true },
+        select: { id: true },
       })
     : [];
   const trackedItemById = new Map(trackedItems.map((i) => [i.id, i]));
@@ -440,7 +440,13 @@ export async function postInvoiceInTx(
         sourceNumber: invoice.number,
         userId,
       });
-      const cogsAccountId = item.expenseAccountId ?? systemCogs.id;
+      // Always the system COGS account — an item's Purchase/expense account
+      // (catalogue-client.tsx: "Used on bills. Never used on a sales
+      // document.") must never silently become the cost-of-sale account: if
+      // that field happened to point at Inventory Asset itself, the debit
+      // here and the credit below would hit the same account and net to
+      // nothing instead of moving cost out of inventory.
+      const cogsAccountId = systemCogs.id;
       cogsByAccount.set(cogsAccountId, (cogsByAccount.get(cogsAccountId) ?? 0) + totalCostCents);
       totalCogsCents += totalCostCents;
     }

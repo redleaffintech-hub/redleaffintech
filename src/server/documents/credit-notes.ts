@@ -361,15 +361,17 @@ async function buildReturnLine(
   const taxComponents = scaleComponentsToTarget(fullCalc?.components ?? [], taxCents);
 
   let unitCostCents: number | null = null;
-  let cogsAccountId: string | null = null;
+  // Always resolved to the system COGS account below (never the item's own
+  // Purchase/expense account, which catalogue-client.tsx documents as never
+  // used on a sales document — see the matching comment in invoices.ts).
+  const cogsAccountId: string | null = null;
   const trackedItem = sourceLine.itemId
     ? await tx.serviceItem.findFirst({
         where: { id: sourceLine.itemId, companyId, trackInventory: true },
-        select: { id: true, expenseAccountId: true },
+        select: { id: true },
       })
     : null;
   if (trackedItem) {
-    cogsAccountId = trackedItem.expenseAccountId;
     const movement = await tx.inventoryMovement.findFirst({
       where: {
         companyId,
