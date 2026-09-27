@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import clsx from "clsx";
 import { formatMoney } from "@/lib/money";
+import { BUTTON_BASE, BUTTON_STYLES, type ButtonVariant } from "./button-styles";
 
 // ── Surfaces ────────────────────────────────────────────────────────────────
 
@@ -88,31 +89,11 @@ export function PageHeader({
 }
 
 // ── Buttons ─────────────────────────────────────────────────────────────────
-
-type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
-const BUTTON_STYLES: Record<ButtonVariant, string> = {
-  primary: "bg-brand-600 text-white hover:bg-brand-700 shadow-[0_1px_2px_rgba(30,70,100,0.3)]",
-  secondary: "bg-white text-ink-800 border border-paper-400 hover:bg-paper-100 hover:border-ink-300",
-  ghost: "text-ink-700 hover:bg-paper-200",
-  danger: "bg-white text-negative border border-[color:var(--color-negative)]/30 hover:bg-negative-soft",
-};
-
-const BUTTON_BASE =
-  "inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-[0.8125rem] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50";
-
-export function Button({
-  children,
-  variant = "secondary",
-  className,
-  type = "button",
-  ...props
-}: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: ButtonVariant }) {
-  return (
-    <button type={type} className={clsx(BUTTON_BASE, BUTTON_STYLES[variant], className)} {...props}>
-      {children}
-    </button>
-  );
-}
+//
+// Button itself lives in action-button.tsx (a "use client" file, for its
+// freeze-on-click behavior) and is re-exported here so every existing
+// `import { Button } from "@/components/ui"` keeps working unchanged.
+export { Button } from "./action-button";
 
 export function LinkButton({
   children,
