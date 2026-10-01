@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { PROVINCES } from "@/lib/enums";
+import { parseRateMicro } from "@/lib/money";
 import { recordPlatformAudit } from "@/server/admin/audit";
 import { cents, date, optionalStr, runAdminAction, str } from "@/server/admin/run-action";
 import { findOverlappingBracket } from "@/server/payroll/tax-engine";
@@ -27,20 +28,12 @@ interface BracketInput {
   effectiveTo: Date | null;
 }
 
-function percentToRateMicro(raw: string): number | null {
-  const trimmed = raw.trim();
-  if (trimmed === "") return null;
-  const value = Number(trimmed);
-  if (!Number.isFinite(value)) return null;
-  return Math.round(value * 10_000);
-}
-
 function readInput(formData: FormData): { input: BracketInput | null; error: string | null } {
   const jurisdiction = str(formData, "jurisdiction").toUpperCase();
   const minCents = cents(formData, "min") ?? 0;
   const maxRaw = str(formData, "max");
   const maxCents = maxRaw ? cents(formData, "max") : null;
-  const rateMicro = percentToRateMicro(str(formData, "rate"));
+  const rateMicro = parseRateMicro(str(formData, "rate"));
   const basicPersonalAmountCents = cents(formData, "basicPersonalAmount");
   const effectiveFrom = date(formData, "effectiveFrom");
   const effectiveTo = date(formData, "effectiveTo");

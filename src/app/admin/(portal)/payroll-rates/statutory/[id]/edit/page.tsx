@@ -43,8 +43,12 @@ export default async function EditStatutoryRatePage({ params }: { params: AdminP
     cpp2Rate: String(rate.cpp2RateMicro / 10_000),
     cpp2MaxPensionableEarnings: String(rate.cpp2MaxPensionableEarningsCents / 100),
     eiRate: String(rate.eiRateMicro / 10_000),
+    eiRateQuebec: String(rate.eiRateMicroQuebec / 10_000),
     eiEmployerMultiplier: String(rate.eiEmployerMultiplierMicro / 1_000_000),
     eiMaxInsurableEarnings: String(rate.eiMaxInsurableEarningsCents / 100),
+    qpipRate: String(rate.qpipRateMicro / 10_000),
+    qpipEmployerRate: String(rate.qpipEmployerRateMicro / 10_000),
+    qpipMaxInsurableEarnings: String(rate.qpipMaxInsurableEarningsCents / 100),
     effectiveFrom: isoDate(rate.effectiveFrom),
     effectiveTo: rate.effectiveTo ? isoDate(rate.effectiveTo) : "",
   };

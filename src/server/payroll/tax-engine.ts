@@ -37,8 +37,14 @@ export interface PayrollStatutoryRateRow {
   cpp2RateMicro: number;
   cpp2MaxPensionableEarningsCents: number;
   eiRateMicro: number;
+  /** Quebec's own, lower EI rate (offset by QPIP) — see the schema comment on PayrollStatutoryRate. */
+  eiRateMicroQuebec: number;
   eiEmployerMultiplierMicro: number;
   eiMaxInsurableEarningsCents: number;
+  /** QPIP — Quebec only, on top of CPP/EI. See the schema comment on PayrollStatutoryRate. */
+  qpipRateMicro: number;
+  qpipEmployerRateMicro: number;
+  qpipMaxInsurableEarningsCents: number;
   effectiveFrom: Date;
   effectiveTo: Date | null;
 }
@@ -82,7 +88,11 @@ export interface CppEiInput {
   ytdCpp2Cents: number;
   ytdInsurableEarningsCents: number;
   ytdEiCents: number;
+  /** QPIP withheld so far this year — 0 for every non-Quebec employee, who never accrues any. */
+  ytdQpipCents: number;
   rates: PayrollStatutoryRateRow;
+  /** The employee's province of employment — decides which EI rate applies, and whether QPIP applies at all (Quebec only). */
+  province: string;
 }
 
 export interface CppEiResult {
@@ -92,6 +102,8 @@ export interface CppEiResult {
   employerCpp2Cents: number;
   eiCents: number;
   employerEiCents: number;
+  qpipCents: number;
+  employerQpipCents: number;
 }
 
 /** rateMicro convention throughout this app: value * 1_000_000. */
@@ -133,14 +145,33 @@ export function computeCppAndEi(input: CppEiInput): CppEiResult {
   const rawCpp2 = applyRateMicro(Math.max(0, cpp2Band), rates.cpp2RateMicro);
   const cpp2Cents = Math.max(0, Math.min(rawCpp2, maxAnnualCpp2 - input.ytdCpp2Cents));
 
-  // EI: capped at the annual maximum insurable earnings.
+  // EI: capped at the annual maximum insurable earnings. Quebec runs its own
+  // parental insurance plan (QPIP) alongside EI, so its employees pay EI at a
+  // lower rate than the rest of Canada — same maximum insurable earnings,
+  // same employer multiplier, different rate only.
+  const eiRateMicro = input.province === "QC" ? rates.eiRateMicroQuebec : rates.eiRateMicro;
   const insurableEarnings = Math.max(
     0,
     Math.min(input.grossPayCents, rates.eiMaxInsurableEarningsCents - input.ytdInsurableEarningsCents),
   );
-  const maxAnnualEi = applyRateMicro(rates.eiMaxInsurableEarningsCents, rates.eiRateMicro);
-  const rawEi = applyRateMicro(insurableEarnings, rates.eiRateMicro);
+  const maxAnnualEi = applyRateMicro(rates.eiMaxInsurableEarningsCents, eiRateMicro);
+  const rawEi = applyRateMicro(insurableEarnings, eiRateMicro);
   const eiCents = Math.max(0, Math.min(rawEi, maxAnnualEi - input.ytdEiCents));
+
+  // QPIP: Quebec only, on top of CPP and EI, with its own (higher) insurable-
+  // earnings maximum — not the same cap as EI's. Everyone else gets 0.
+  let qpipCents = 0;
+  let employerQpipCents = 0;
+  if (input.province === "QC") {
+    const qpipInsurableEarnings = Math.max(
+      0,
+      Math.min(input.grossPayCents, rates.qpipMaxInsurableEarningsCents - input.ytdInsurableEarningsCents),
+    );
+    const maxAnnualQpip = applyRateMicro(rates.qpipMaxInsurableEarningsCents, rates.qpipRateMicro);
+    const rawQpip = applyRateMicro(qpipInsurableEarnings, rates.qpipRateMicro);
+    qpipCents = Math.max(0, Math.min(rawQpip, maxAnnualQpip - input.ytdQpipCents));
+    employerQpipCents = applyRateMicro(qpipInsurableEarnings, rates.qpipEmployerRateMicro);
+  }
 
   return {
     cppCents,
@@ -149,6 +180,8 @@ export function computeCppAndEi(input: CppEiInput): CppEiResult {
     employerCpp2Cents: cpp2Cents,
     eiCents,
     employerEiCents: applyRateMicro(eiCents, rates.eiEmployerMultiplierMicro),
+    qpipCents,
+    employerQpipCents,
   };
 }
 
@@ -194,6 +227,12 @@ export async function findOverlappingBracket(
   for (const existing of candidates) {
     const existingStart = existing.effectiveFrom.getTime();
     const existingEnd = existing.effectiveTo ? existing.effectiveTo.getTime() : Infinity;
+    // A candidate sharing this exact [effectiveFrom, effectiveTo) range is a
+    // SIBLING bracket row of the same jurisdiction/year set, not a conflict —
+    // several rows are expected to share one set's dates (see this file's
+    // header comment and PayrollTaxBracket's schema comment). Only a candidate
+    // with a genuinely different, intersecting range is a real overlap.
+    if (existingStart === newStart && existingEnd === newEnd) continue;
     if (newStart < existingEnd && existingStart < newEnd) return existing;
   }
   return null;

@@ -31,7 +31,16 @@ function grossPayCents(line: PayRunLineFormValue): number {
 }
 
 function netPayCents(line: PayRunLineFormValue): number {
-  return grossPayCents(line) - money(line.cpp) - money(line.cpp2) - money(line.ei) - money(line.federalTax) - money(line.provincialTax) - money(line.other);
+  return (
+    grossPayCents(line) -
+    money(line.cpp) -
+    money(line.cpp2) -
+    money(line.ei) -
+    money(line.qpip) -
+    money(line.federalTax) -
+    money(line.provincialTax) -
+    money(line.other)
+  );
 }
 
 export function PayRunForm({
@@ -100,11 +109,13 @@ export function PayRunForm({
       cpp: fromCents(result.cppCents ?? 0),
       cpp2: fromCents(result.cpp2Cents ?? 0),
       ei: fromCents(result.eiCents ?? 0),
+      qpip: fromCents(result.qpipCents ?? 0),
       federalTax: fromCents(result.federalTaxCents ?? 0),
       provincialTax: fromCents(result.provincialTaxCents ?? 0),
       employerCpp: fromCents(result.employerCppCents ?? 0),
       employerCpp2: fromCents(result.employerCpp2Cents ?? 0),
       employerEi: fromCents(result.employerEiCents ?? 0),
+      employerQpip: fromCents(result.employerQpipCents ?? 0),
     });
   }
 
@@ -138,12 +149,14 @@ export function PayRunForm({
         cppCents: line.cpp ? money(line.cpp) : null,
         cpp2Cents: line.cpp2 ? money(line.cpp2) : null,
         eiCents: line.ei ? money(line.ei) : null,
+        qpipCents: line.qpip ? money(line.qpip) : null,
         federalTaxCents: line.federalTax ? money(line.federalTax) : null,
         provincialTaxCents: line.provincialTax ? money(line.provincialTax) : null,
         otherDeductionsCents: money(line.other),
         employerCppCents: line.employerCpp ? money(line.employerCpp) : null,
         employerCpp2Cents: line.employerCpp2 ? money(line.employerCpp2) : null,
         employerEiCents: line.employerEi ? money(line.employerEi) : null,
+        employerQpipCents: line.employerQpip ? money(line.employerQpip) : null,
         notes: line.notes || null,
       })),
     });
@@ -187,7 +200,7 @@ export function PayRunForm({
             Employees <span className="tnum text-muted-ink">({includedCount} included)</span>
           </h2>
           <p className="text-[0.75rem] text-muted-ink">
-            CPP, CPP2, EI and tax are suggested from the payroll rate tables once you set a pay date — click Calculate, then correct anything the engine gets wrong.
+            CPP, CPP2, EI, QPIP (Quebec employees) and tax are suggested from the payroll rate tables once you set a pay date — click Calculate, then correct anything the engine gets wrong.
           </p>
         </div>
 
@@ -262,6 +275,8 @@ export function PayRunForm({
                             <LabeledCell label="Empr CPP" value={line.employerCpp} onChange={(v) => setLine(index, { employerCpp: v })} disabled={!line.include} />
                             <LabeledCell label="Empr CPP2" value={line.employerCpp2} onChange={(v) => setLine(index, { employerCpp2: v })} disabled={!line.include} />
                             <LabeledCell label="Empr EI" value={line.employerEi} onChange={(v) => setLine(index, { employerEi: v })} disabled={!line.include} />
+                            <LabeledCell label="QPIP (QC only)" value={line.qpip} onChange={(v) => setLine(index, { qpip: v })} disabled={!line.include} />
+                            <LabeledCell label="Empr QPIP" value={line.employerQpip} onChange={(v) => setLine(index, { employerQpip: v })} disabled={!line.include} />
                             <div>
                               <span className="mb-1 block text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-muted-ink">Gross</span>
                               <p className="tnum py-1 text-[0.8125rem] font-medium text-ink-900">

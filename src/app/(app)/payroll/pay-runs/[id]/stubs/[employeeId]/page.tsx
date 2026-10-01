@@ -54,6 +54,9 @@ export default async function PayStubPage({ params }: { params: Promise<{ id: st
     { label: "CPP", current: line.cppCents, ytd: ytd.cppCents },
     { label: "CPP2", current: line.cpp2Cents, ytd: ytd.cpp2Cents },
     { label: "EI", current: line.eiCents, ytd: ytd.eiCents },
+    // QPIP only applies to Quebec employees — omitted entirely rather than
+    // shown as a permanent $0.00 row for everyone else.
+    ...(line.qpipCents !== 0 || ytd.qpipCents !== 0 ? [{ label: "QPIP", current: line.qpipCents, ytd: ytd.qpipCents }] : []),
     { label: "Federal tax", current: line.federalTaxCents, ytd: ytd.federalTaxCents },
     { label: "Provincial tax", current: line.provincialTaxCents, ytd: ytd.provincialTaxCents },
     // Not separately accumulated year-to-date (payrollYtd only totals the
@@ -178,13 +181,14 @@ export default async function PayStubPage({ params }: { params: Promise<{ id: st
 
         <div className="mt-5 grid gap-4 sm:grid-cols-2">
           <div className="inv-keep">
-            {(line.employerCppCents > 0 || line.employerCpp2Cents > 0 || line.employerEiCents > 0) && (
+            {(line.employerCppCents > 0 || line.employerCpp2Cents > 0 || line.employerEiCents > 0 || line.employerQpipCents > 0) && (
               <>
                 <div className="inv-band">Employer contributions (informational)</div>
                 <div className="inv-box text-[0.8125rem] leading-6">
                   <p>Employer CPP: {fmt(line.employerCppCents)}</p>
                   <p>Employer CPP2: {fmt(line.employerCpp2Cents)}</p>
                   <p>Employer EI: {fmt(line.employerEiCents)}</p>
+                  {line.employerQpipCents > 0 && <p>Employer QPIP: {fmt(line.employerQpipCents)}</p>}
                 </div>
               </>
             )}

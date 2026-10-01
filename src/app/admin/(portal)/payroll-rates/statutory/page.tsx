@@ -50,6 +50,7 @@ export default async function PayrollStatutoryRatesPage() {
               <Th>CPP</Th>
               <Th>CPP2</Th>
               <Th>EI</Th>
+              <Th>QPIP</Th>
               <Th width="7rem">Effective</Th>
               <Th width="7rem">Expiry</Th>
               <Th width="5rem">Status</Th>
@@ -59,7 +60,7 @@ export default async function PayrollStatutoryRatesPage() {
           </thead>
           <tbody>
             {rates.length === 0 ? (
-              <EmptyRow colSpan={8}>No payroll statutory rates configured yet.</EmptyRow>
+              <EmptyRow colSpan={9}>No payroll statutory rates configured yet.</EmptyRow>
             ) : (
               rates.map((rate) => {
                 const isFuture = rate.effectiveFrom > now;
@@ -69,7 +70,12 @@ export default async function PayrollStatutoryRatesPage() {
                   <Tr key={rate.id}>
                     <Td className="tnum">{pct(rate.cppRateMicro)} <span className="text-muted-ink">up to {dollars(rate.cppMaxPensionableEarningsCents)}</span></Td>
                     <Td className="tnum">{pct(rate.cpp2RateMicro)} <span className="text-muted-ink">up to {dollars(rate.cpp2MaxPensionableEarningsCents)}</span></Td>
-                    <Td className="tnum">{pct(rate.eiRateMicro)} <span className="text-muted-ink">up to {dollars(rate.eiMaxInsurableEarningsCents)}</span></Td>
+                    <Td className="tnum">
+                      {pct(rate.eiRateMicro)} <span className="text-muted-ink">up to {dollars(rate.eiMaxInsurableEarningsCents)}</span>
+                      <br />
+                      <span className="text-muted-ink">QC {pct(rate.eiRateMicroQuebec)}</span>
+                    </Td>
+                    <Td className="tnum">{pct(rate.qpipRateMicro)} <span className="text-muted-ink">up to {dollars(rate.qpipMaxInsurableEarningsCents)}</span></Td>
                     <Td className="text-[0.8125rem] text-muted-ink">{formatDate(rate.effectiveFrom)}</Td>
                     <Td className="text-[0.8125rem] text-muted-ink">{rate.effectiveTo ? formatDate(rate.effectiveTo) : "Ongoing"}</Td>
                     <Td>

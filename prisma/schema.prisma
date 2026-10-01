@@ -1920,17 +1920,21 @@ model PayRunLine {
   cppCents             Int     @default(0)
   cpp2Cents            Int     @default(0)
   eiCents              Int     @default(0)
+  /// QPIP — Quebec employees only; 0 for every other province (see
+  /// PayrollStatutoryRate's schema comment).
+  qpipCents            Int     @default(0)
   federalTaxCents      Int     @default(0)
   provincialTaxCents   Int     @default(0)
   otherDeductionsCents Int     @default(0)
   otherDeductionsNote  String?
 
-  /// Employer-side CPP/CPP2/EI contributions — not deducted from the
-  /// employee, but owed to CRA alongside the withheld amounts, so they post
-  /// to the same payroll liability account as an employer expense.
+  /// Employer-side CPP/CPP2/EI/QPIP contributions — not deducted from the
+  /// employee, but owed to Revenu Québec/CRA alongside the withheld amounts,
+  /// so they post to the same payroll liability account as an employer expense.
   employerCppCents  Int @default(0)
   employerCpp2Cents Int @default(0)
   employerEiCents   Int @default(0)
+  employerQpipCents Int @default(0)
 
   /// grossPayCents minus every *Cents deduction above. Always recomputed
   /// server-side on save — never trusted from the client.
@@ -1991,10 +1995,28 @@ model PayrollStatutoryRate {
   /// between cppMaxPensionableEarningsCents and this figure.
   cpp2MaxPensionableEarningsCents Int
 
-  eiRateMicro Int // employee rate
+  eiRateMicro Int // employee rate, every province except Quebec
+  /// Quebec's own, lower EI premium rate — offset by QPIP, which Quebec runs
+  /// instead of EI's maternity/parental benefits. Everything else about EI
+  /// (the employer multiplier below, the insurable-earnings maximum) is the
+  /// same figure for Quebec as for the rest of Canada; only this rate differs.
+  /// Which rate a pay run uses is decided by the employee's province, not the
+  /// company's (src/server/payroll/tax-engine.ts), matching how EI has always
+  /// worked federally.
+  eiRateMicroQuebec Int @default(0)
   /// Employer EI = employee EI * this, rateMicro convention (1.4x -> 1_400_000).
+  /// Same multiplier for Quebec and the rest of Canada.
   eiEmployerMultiplierMicro   Int
   eiMaxInsurableEarningsCents Int
+
+  /// QPIP — the Québec Parental Insurance Plan, a separate premium ON TOP OF
+  /// (not instead of) CPP and EI, paid only by employees working in Quebec.
+  /// Unlike EI, QPIP has its own insurable-earnings maximum (higher than EI's)
+  /// and its own employee/employer rates — there is no "rest of Canada"
+  /// equivalent, so every non-Quebec pay run simply computes 0.
+  qpipRateMicro                 Int @default(0)
+  qpipEmployerRateMicro         Int @default(0)
+  qpipMaxInsurableEarningsCents Int @default(0)
 
   effectiveFrom DateTime
   effectiveTo   DateTime?

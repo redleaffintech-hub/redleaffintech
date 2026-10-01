@@ -40,12 +40,20 @@ export default async function PayrollTaxBracketsPage() {
         description="Federal and provincial marginal income-tax brackets, one row per bracket. Several rows sharing a jurisdiction and effective date form one year's bracket set. Publishing a change never rewrites an already-posted pay run."
         breadcrumb={[{ label: "Payroll rates" }, { label: "Tax brackets" }]}
         actions={
-          <Link
-            href="/admin/payroll-rates/tax-brackets/new"
-            className="inline-flex h-9 items-center rounded-lg bg-brand-600 px-3.5 text-[0.8125rem] font-medium text-white hover:bg-brand-700"
-          >
-            Add a bracket
-          </Link>
+          <>
+            <Link
+              href="/admin/payroll-rates/tax-brackets/import"
+              className="inline-flex h-9 items-center rounded-lg border border-paper-400 bg-white px-3.5 text-[0.8125rem] font-medium text-ink-800 hover:bg-paper-100"
+            >
+              Import CSV
+            </Link>
+            <Link
+              href="/admin/payroll-rates/tax-brackets/new"
+              className="inline-flex h-9 items-center rounded-lg bg-brand-600 px-3.5 text-[0.8125rem] font-medium text-white hover:bg-brand-700"
+            >
+              Add a bracket
+            </Link>
+          </>
         }
       />
 

@@ -12,8 +12,12 @@ export interface StatutoryRateFormValues {
   cpp2Rate: string;
   cpp2MaxPensionableEarnings: string;
   eiRate: string;
+  eiRateQuebec: string;
   eiEmployerMultiplier: string;
   eiMaxInsurableEarnings: string;
+  qpipRate: string;
+  qpipEmployerRate: string;
+  qpipMaxInsurableEarnings: string;
   effectiveFrom: string;
   effectiveTo: string;
 }
@@ -21,7 +25,8 @@ export interface StatutoryRateFormValues {
 const BLANK: StatutoryRateFormValues = {
   cppRate: "", cppBasicExemption: "3500", cppMaxPensionableEarnings: "",
   cpp2Rate: "4", cpp2MaxPensionableEarnings: "",
-  eiRate: "", eiEmployerMultiplier: "1.4", eiMaxInsurableEarnings: "",
+  eiRate: "", eiRateQuebec: "", eiEmployerMultiplier: "1.4", eiMaxInsurableEarnings: "",
+  qpipRate: "", qpipEmployerRate: "", qpipMaxInsurableEarnings: "",
   effectiveFrom: "", effectiveTo: "",
 };
 
@@ -59,14 +64,28 @@ export function StatutoryRateForm({ csrfToken, initial = BLANK }: { csrfToken: s
           <input name="cpp2MaxPensionableEarnings" type="text" inputMode="decimal" defaultValue={initial.cpp2MaxPensionableEarnings} required className={`${adminInputClass} tnum`} />
         </AdminField>
 
-        <AdminField label="EI rate (%)" required hint="Employee rate.">
+        <AdminField label="EI rate (%)" required hint="Employee rate, every province except Quebec.">
           <input name="eiRate" type="text" inputMode="decimal" defaultValue={initial.eiRate} required className={`${adminInputClass} tnum`} />
         </AdminField>
-        <AdminField label="EI employer multiplier" required hint="e.g. 1.4 — the standard, non-reduced rate.">
+        <AdminField label="EI rate — Quebec (%)" required hint="Quebec's own, lower rate (offset by QPIP). Same maximum insurable earnings and employer multiplier as the rest of Canada.">
+          <input name="eiRateQuebec" type="text" inputMode="decimal" defaultValue={initial.eiRateQuebec} required className={`${adminInputClass} tnum`} />
+        </AdminField>
+        <AdminField label="EI employer multiplier" required hint="e.g. 1.4 — the same multiplier for Quebec and the rest of Canada.">
           <input name="eiEmployerMultiplier" type="text" inputMode="decimal" defaultValue={initial.eiEmployerMultiplier} required className={`${adminInputClass} tnum`} />
         </AdminField>
         <AdminField label="EI maximum insurable earnings ($/year)" required>
           <input name="eiMaxInsurableEarnings" type="text" inputMode="decimal" defaultValue={initial.eiMaxInsurableEarnings} required className={`${adminInputClass} tnum`} />
+        </AdminField>
+        <div />
+
+        <AdminField label="QPIP rate — employee (%)" required hint="Quebec only — a separate premium on top of CPP and EI. Everyone else computes 0.">
+          <input name="qpipRate" type="text" inputMode="decimal" defaultValue={initial.qpipRate} required className={`${adminInputClass} tnum`} />
+        </AdminField>
+        <AdminField label="QPIP rate — employer (%)" required>
+          <input name="qpipEmployerRate" type="text" inputMode="decimal" defaultValue={initial.qpipEmployerRate} required className={`${adminInputClass} tnum`} />
+        </AdminField>
+        <AdminField label="QPIP maximum insurable earnings ($/year)" required hint="QPIP's own maximum — not the same figure as EI's.">
+          <input name="qpipMaxInsurableEarnings" type="text" inputMode="decimal" defaultValue={initial.qpipMaxInsurableEarnings} required className={`${adminInputClass} tnum`} />
         </AdminField>
         <div />
 

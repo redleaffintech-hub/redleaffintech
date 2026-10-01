@@ -39,8 +39,12 @@ interface StatutoryRateInput {
   cpp2RateMicro: number;
   cpp2MaxPensionableEarningsCents: number;
   eiRateMicro: number;
+  eiRateMicroQuebec: number;
   eiEmployerMultiplierMicro: number;
   eiMaxInsurableEarningsCents: number;
+  qpipRateMicro: number;
+  qpipEmployerRateMicro: number;
+  qpipMaxInsurableEarningsCents: number;
   effectiveFrom: Date;
   effectiveTo: Date | null;
 }
@@ -52,8 +56,12 @@ function readInput(formData: FormData): { input: StatutoryRateInput | null; erro
   const cpp2RateMicro = percentToRateMicro(str(formData, "cpp2Rate"));
   const cpp2MaxPensionableEarningsCents = cents(formData, "cpp2MaxPensionableEarnings");
   const eiRateMicro = percentToRateMicro(str(formData, "eiRate"));
+  const eiRateMicroQuebec = percentToRateMicro(str(formData, "eiRateQuebec"));
   const eiEmployerMultiplierMicro = multiplierToMicro(str(formData, "eiEmployerMultiplier"));
   const eiMaxInsurableEarningsCents = cents(formData, "eiMaxInsurableEarnings");
+  const qpipRateMicro = percentToRateMicro(str(formData, "qpipRate"));
+  const qpipEmployerRateMicro = percentToRateMicro(str(formData, "qpipEmployerRate"));
+  const qpipMaxInsurableEarningsCents = cents(formData, "qpipMaxInsurableEarnings");
   const effectiveFrom = date(formData, "effectiveFrom");
   const effectiveTo = date(formData, "effectiveTo");
 
@@ -63,8 +71,12 @@ function readInput(formData: FormData): { input: StatutoryRateInput | null; erro
   if (cpp2RateMicro === null) return { input: null, error: "Enter the CPP2 rate as a percentage." };
   if (cpp2MaxPensionableEarningsCents === null) return { input: null, error: "Enter the CPP2 maximum pensionable earnings (YAMPE)." };
   if (eiRateMicro === null) return { input: null, error: "Enter the EI rate as a percentage." };
+  if (eiRateMicroQuebec === null) return { input: null, error: "Enter Quebec's EI rate as a percentage." };
   if (eiEmployerMultiplierMicro === null) return { input: null, error: "Enter the EI employer multiplier (e.g. 1.4)." };
   if (eiMaxInsurableEarningsCents === null) return { input: null, error: "Enter the EI maximum insurable earnings." };
+  if (qpipRateMicro === null) return { input: null, error: "Enter the QPIP employee rate as a percentage." };
+  if (qpipEmployerRateMicro === null) return { input: null, error: "Enter the QPIP employer rate as a percentage." };
+  if (qpipMaxInsurableEarningsCents === null) return { input: null, error: "Enter QPIP's maximum insurable earnings." };
   if (!effectiveFrom) return { input: null, error: "Effective date is required." };
   if (cpp2MaxPensionableEarningsCents <= cppMaxPensionableEarningsCents) {
     return { input: null, error: "CPP2's maximum (YAMPE) must be greater than CPP's maximum (YMPE)." };
@@ -75,7 +87,8 @@ function readInput(formData: FormData): { input: StatutoryRateInput | null; erro
     input: {
       cppRateMicro, cppBasicExemptionCents, cppMaxPensionableEarningsCents,
       cpp2RateMicro, cpp2MaxPensionableEarningsCents,
-      eiRateMicro, eiEmployerMultiplierMicro, eiMaxInsurableEarningsCents,
+      eiRateMicro, eiRateMicroQuebec, eiEmployerMultiplierMicro, eiMaxInsurableEarningsCents,
+      qpipRateMicro, qpipEmployerRateMicro, qpipMaxInsurableEarningsCents,
       effectiveFrom, effectiveTo,
     },
     error: null,
@@ -83,7 +96,7 @@ function readInput(formData: FormData): { input: StatutoryRateInput | null; erro
 }
 
 function summarise(input: StatutoryRateInput): string {
-  return `CPP ${(input.cppRateMicro / 10_000).toString()}%, CPP2 ${(input.cpp2RateMicro / 10_000).toString()}%, EI ${(input.eiRateMicro / 10_000).toString()}%`;
+  return `CPP ${(input.cppRateMicro / 10_000).toString()}%, CPP2 ${(input.cpp2RateMicro / 10_000).toString()}%, EI ${(input.eiRateMicro / 10_000).toString()}% (QC ${(input.eiRateMicroQuebec / 10_000).toString()}%), QPIP ${(input.qpipRateMicro / 10_000).toString()}%`;
 }
 
 export async function createStatutoryRateAction(formData: FormData) {

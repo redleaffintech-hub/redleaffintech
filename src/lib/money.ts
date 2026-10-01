@@ -150,6 +150,14 @@ export function formatCompact(cents: number, opts: { currency?: string } = {}): 
   return `${sign}${symbol}${Math.round(abs / 100).toLocaleString("en-CA")}`;
 }
 
+/** "20.5" | 20.5 -> 205000 (rateMicro). Rejects anything non-numeric. */
+export function parseRateMicro(input: string | number | null | undefined): number | null {
+  if (input === null || input === undefined || input === "") return null;
+  const raw = typeof input === "number" ? input : Number(input.trim());
+  if (!Number.isFinite(raw)) return null;
+  return Math.round(raw * 10_000);
+}
+
 export function formatRate(rateMicro: number): string {
   const pct = rateMicro / 10_000;
   return `${Number.isInteger(pct) ? pct : pct.toFixed(3).replace(/0+$/, "")}%`;

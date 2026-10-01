@@ -26,12 +26,15 @@ export interface PayRunLineFormValue {
   cpp: string;
   cpp2: string;
   ei: string;
+  /** Quebec employees only — blank/0 elsewhere. */
+  qpip: string;
   federalTax: string;
   provincialTax: string;
   other: string;
   employerCpp: string;
   employerCpp2: string;
   employerEi: string;
+  employerQpip: string;
   notes: string;
 }
 
@@ -79,12 +82,14 @@ export function defaultLineFor(employee: EmployeeForDefaults): PayRunLineFormVal
     cpp: "",
     cpp2: "",
     ei: "",
+    qpip: "",
     federalTax: "",
     provincialTax: "",
     other: "",
     employerCpp: "",
     employerCpp2: "",
     employerEi: "",
+    employerQpip: "",
     notes: "",
   };
 }
@@ -115,12 +120,14 @@ interface SavedPayRunLine {
   cppCents: number;
   cpp2Cents: number;
   eiCents: number;
+  qpipCents: number;
   federalTaxCents: number;
   provincialTaxCents: number;
   otherDeductionsCents: number;
   employerCppCents: number;
   employerCpp2Cents: number;
   employerEiCents: number;
+  employerQpipCents: number;
   notes: string | null;
 }
 
@@ -141,12 +148,14 @@ function lineFromSaved(line: SavedPayRunLine): PayRunLineFormValue {
     cpp: centsToStr(line.cppCents),
     cpp2: centsToStr(line.cpp2Cents),
     ei: centsToStr(line.eiCents),
+    qpip: centsToStr(line.qpipCents),
     federalTax: centsToStr(line.federalTaxCents),
     provincialTax: centsToStr(line.provincialTaxCents),
     other: centsToStr(line.otherDeductionsCents),
     employerCpp: centsToStr(line.employerCppCents),
     employerCpp2: centsToStr(line.employerCpp2Cents),
     employerEi: centsToStr(line.employerEiCents),
+    employerQpip: centsToStr(line.employerQpipCents),
     notes: line.notes ?? "",
   };
 }

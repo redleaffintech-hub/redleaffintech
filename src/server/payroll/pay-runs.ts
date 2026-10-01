@@ -1,7 +1,7 @@
 /**
  * Pay runs — the payroll module's only document type.
  *
- * CPP, CPP2, EI and federal/provincial tax are auto-suggested per line from
+ * CPP, CPP2, EI, QPIP (Quebec only) and federal/provincial tax are auto-suggested per line from
  * the effective-dated PayrollStatutoryRate/PayrollTaxBracket reference tables
  * (see src/server/payroll/tax-engine.ts) and the employee's year-to-date
  * figures (src/server/payroll/ytd.ts) whenever the caller doesn't supply an
@@ -13,16 +13,16 @@
  *
  * Posting rule, one journal entry per pay run, amounts summed across every line:
  *   Dr  Salaries & Wages (or equivalent PAYROLL_EXPENSE account)
- *         gross pay + employer CPP + employer CPP2 + employer EI, for every employee
+ *         gross pay + employer CPP + employer CPP2 + employer EI + employer QPIP, for every employee
  *   Cr  Payroll Liabilities (or equivalent PAYROLL_LIABILITY account)
- *         every withheld amount (CPP, CPP2, EI, federal tax, provincial tax, other)
- *         plus the employer CPP/CPP2/EI match — all of it owed to CRA until remitted
+ *         every withheld amount (CPP, CPP2, EI, QPIP, federal tax, provincial tax, other)
+ *         plus the employer CPP/CPP2/EI/QPIP match — all of it owed to Revenu Québec/CRA until remitted
  *   Cr  Bank account
  *         net pay, paid out now
  *
  * Debits and credits balance because netPayCents is always gross minus the
- * employee-side deductions: Dr(gross + employerCpp + employerCpp2 + employerEi)
- * equals Cr(employee deductions + employerCpp + employerCpp2 + employerEi) + Cr(netPay).
+ * employee-side deductions: Dr(gross + employerCpp + employerCpp2 + employerEi + employerQpip)
+ * equals Cr(employee deductions + employerCpp + employerCpp2 + employerEi + employerQpip) + Cr(netPay).
  */
 
 import type { Tx } from "@/lib/db";
@@ -50,10 +50,12 @@ export interface PayRunLineInput {
   /** Overrides the employee's defaultOvertimeRateMultiplierMicro for this line's overtime suggestion. */
   otRateMultiplierMicro?: number | null;
 
-  /** Omit any of these five to have it auto-suggested from the statutory rate/bracket tables and this employee's year-to-date figures. */
+  /** Omit any of these six to have it auto-suggested from the statutory rate/bracket tables and this employee's year-to-date figures. */
   cppCents?: number | null;
   cpp2Cents?: number | null;
   eiCents?: number | null;
+  /** Quebec employees only — auto-suggests to 0 for every other province. */
+  qpipCents?: number | null;
   federalTaxCents?: number | null;
   provincialTaxCents?: number | null;
   otherDeductionsCents?: number;
@@ -61,6 +63,7 @@ export interface PayRunLineInput {
   employerCppCents?: number | null;
   employerCpp2Cents?: number | null;
   employerEiCents?: number | null;
+  employerQpipCents?: number | null;
   notes?: string | null;
 }
 
@@ -103,6 +106,7 @@ interface ResolvedLine {
   cppCents: number;
   cpp2Cents: number;
   eiCents: number;
+  qpipCents: number;
   federalTaxCents: number;
   provincialTaxCents: number;
   otherDeductionsCents: number;
@@ -110,6 +114,7 @@ interface ResolvedLine {
   employerCppCents: number;
   employerCpp2Cents: number;
   employerEiCents: number;
+  employerQpipCents: number;
   netPayCents: number;
   notes: string | null;
 }
@@ -122,7 +127,7 @@ function sumEarnings(line: Pick<ResolvedLine, (typeof EARNINGS_FIELDS)[number]>)
 export function computeNetPayCents(
   line: Pick<
     ResolvedLine,
-    (typeof EARNINGS_FIELDS)[number] | "cppCents" | "cpp2Cents" | "eiCents" | "federalTaxCents" | "provincialTaxCents" | "otherDeductionsCents"
+    (typeof EARNINGS_FIELDS)[number] | "cppCents" | "cpp2Cents" | "eiCents" | "qpipCents" | "federalTaxCents" | "provincialTaxCents" | "otherDeductionsCents"
   >,
 ): number {
   return (
@@ -130,6 +135,7 @@ export function computeNetPayCents(
     line.cppCents -
     line.cpp2Cents -
     line.eiCents -
+    line.qpipCents -
     line.federalTaxCents -
     line.provincialTaxCents -
     line.otherDeductionsCents
@@ -169,10 +175,10 @@ async function resolveLines(tx: Tx, companyId: string, payDate: Date, lines: Pay
       [EARNINGS_FIELDS[6], line.statutoryHolidayPayCents],
     );
     nonNegativeFields.push(
-      ["CPP", line.cppCents], ["CPP2", line.cpp2Cents], ["EI", line.eiCents],
+      ["CPP", line.cppCents], ["CPP2", line.cpp2Cents], ["EI", line.eiCents], ["QPIP", line.qpipCents],
       ["federal tax", line.federalTaxCents], ["provincial tax", line.provincialTaxCents],
       ["other deductions", line.otherDeductionsCents], ["employer CPP", line.employerCppCents],
-      ["employer CPP2", line.employerCpp2Cents], ["employer EI", line.employerEiCents],
+      ["employer CPP2", line.employerCpp2Cents], ["employer EI", line.employerEiCents], ["employer QPIP", line.employerQpipCents],
     );
   }
   for (const [label, value] of nonNegativeFields) {
@@ -209,11 +215,13 @@ async function resolveLines(tx: Tx, companyId: string, payDate: Date, lines: Pay
     let cppCents = line.cppCents ?? undefined;
     let cpp2Cents = line.cpp2Cents ?? undefined;
     let eiCents = line.eiCents ?? undefined;
+    let qpipCents = line.qpipCents ?? undefined;
     let employerCppCents = line.employerCppCents ?? undefined;
     let employerCpp2Cents = line.employerCpp2Cents ?? undefined;
     let employerEiCents = line.employerEiCents ?? undefined;
+    let employerQpipCents = line.employerQpipCents ?? undefined;
 
-    if (rates && (cppCents === undefined || cpp2Cents === undefined || eiCents === undefined)) {
+    if (rates && (cppCents === undefined || cpp2Cents === undefined || eiCents === undefined || qpipCents === undefined)) {
       const ytd = await payrollYtd(companyId, employee.id, year, payDate);
       const computed = computeCppAndEi({
         grossPayCents,
@@ -223,14 +231,18 @@ async function resolveLines(tx: Tx, companyId: string, payDate: Date, lines: Pay
         ytdCpp2Cents: ytd.cpp2Cents,
         ytdInsurableEarningsCents: ytd.insurableEarningsCents,
         ytdEiCents: ytd.eiCents,
+        ytdQpipCents: ytd.qpipCents,
         rates,
+        province: employee.provinceOfEmployment,
       });
       cppCents ??= computed.cppCents;
       cpp2Cents ??= computed.cpp2Cents;
       eiCents ??= computed.eiCents;
+      qpipCents ??= computed.qpipCents;
       employerCppCents ??= computed.employerCppCents;
       employerCpp2Cents ??= computed.employerCpp2Cents;
       employerEiCents ??= computed.employerEiCents;
+      employerQpipCents ??= computed.employerQpipCents;
     }
 
     let federalTaxCents = line.federalTaxCents ?? undefined;
@@ -254,6 +266,7 @@ async function resolveLines(tx: Tx, companyId: string, payDate: Date, lines: Pay
       cppCents: cppCents ?? 0,
       cpp2Cents: cpp2Cents ?? 0,
       eiCents: eiCents ?? 0,
+      qpipCents: qpipCents ?? 0,
       federalTaxCents: federalTaxCents ?? 0,
       provincialTaxCents: provincialTaxCents ?? 0,
       otherDeductionsCents: line.otherDeductionsCents ?? 0,
@@ -261,6 +274,7 @@ async function resolveLines(tx: Tx, companyId: string, payDate: Date, lines: Pay
       employerCppCents: employerCppCents ?? 0,
       employerCpp2Cents: employerCpp2Cents ?? 0,
       employerEiCents: employerEiCents ?? 0,
+      employerQpipCents: employerQpipCents ?? 0,
       netPayCents: 0,
       notes: line.notes ?? null,
     };
@@ -303,6 +317,7 @@ function lineCreateData(companyId: string, line: ResolvedLine) {
     cppCents: line.cppCents,
     cpp2Cents: line.cpp2Cents,
     eiCents: line.eiCents,
+    qpipCents: line.qpipCents,
     federalTaxCents: line.federalTaxCents,
     provincialTaxCents: line.provincialTaxCents,
     otherDeductionsCents: line.otherDeductionsCents,
@@ -310,6 +325,7 @@ function lineCreateData(companyId: string, line: ResolvedLine) {
     employerCppCents: line.employerCppCents,
     employerCpp2Cents: line.employerCpp2Cents,
     employerEiCents: line.employerEiCents,
+    employerQpipCents: line.employerQpipCents,
     netPayCents: line.netPayCents,
     notes: line.notes,
   };
@@ -418,6 +434,7 @@ export async function postPayRunInTx(tx: Tx, payRunId: string, companyId: string
   let employerCppTotal = 0;
   let employerCpp2Total = 0;
   let employerEiTotal = 0;
+  let employerQpipTotal = 0;
   let liabilityTotal = 0;
   let netPayTotal = 0;
 
@@ -433,13 +450,14 @@ export async function postPayRunInTx(tx: Tx, payRunId: string, companyId: string
     employerCppTotal += line.employerCppCents;
     employerCpp2Total += line.employerCpp2Cents;
     employerEiTotal += line.employerEiCents;
+    employerQpipTotal += line.employerQpipCents;
     liabilityTotal +=
-      line.cppCents + line.cpp2Cents + line.eiCents + line.federalTaxCents + line.provincialTaxCents +
-      line.otherDeductionsCents + line.employerCppCents + line.employerCpp2Cents + line.employerEiCents;
+      line.cppCents + line.cpp2Cents + line.eiCents + line.qpipCents + line.federalTaxCents + line.provincialTaxCents +
+      line.otherDeductionsCents + line.employerCppCents + line.employerCpp2Cents + line.employerEiCents + line.employerQpipCents;
     netPayTotal += netPay;
   }
 
-  const debitTotal = grossTotal + employerCppTotal + employerCpp2Total + employerEiTotal;
+  const debitTotal = grossTotal + employerCppTotal + employerCpp2Total + employerEiTotal + employerQpipTotal;
   if (debitTotal !== liabilityTotal + netPayTotal) {
     // Should be arithmetically impossible given the per-line invariant above,
     // but this is what stands between a silent rounding bug and an unbalanced
