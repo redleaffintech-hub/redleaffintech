@@ -76,7 +76,7 @@ export default async function PayStubPage({ params }: { params: Promise<{ id: st
           { label: line.payRun.number, href: `/payroll/pay-runs/${line.payRun.id}` },
           { label: "Pay stub" },
         ]}
-        actions={<PayStubActions />}
+        actions={<PayStubActions pdfHref={`/payroll/pay-runs/${line.payRun.id}/stubs/${employee.id}/pdf`} />}
       />
 
       <Card className="invoice-paper print-full">

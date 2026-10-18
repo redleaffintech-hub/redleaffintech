@@ -180,7 +180,7 @@ export async function billFormOptions() {
     db.vendor.findMany({
       where: { companyId: company.id, isActive: true },
       orderBy: { name: "asc" },
-      select: { id: true, name: true, taxCodeId: true, paymentTermsDays: true },
+      select: { id: true, name: true, taxCodeId: true, paymentTermsDays: true, province: true },
     }),
     db.account.findMany({
       where: { companyId: company.id, isActive: true, type: { in: ["EXPENSE", "ASSET", "LIABILITY"] } },

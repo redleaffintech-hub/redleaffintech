@@ -204,5 +204,6 @@ function toPartyOption(vendor: VendorRecord) {
     name: vendor.name,
     taxCodeId: vendor.taxCodeId,
     paymentTermsDays: vendor.paymentTermsDays,
+    province: vendor.province,
   };
 }

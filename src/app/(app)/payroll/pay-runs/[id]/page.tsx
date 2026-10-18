@@ -147,6 +147,13 @@ export default async function PayRunDetailPage({ params }: { params: Promise<{ i
                     <Link href={`/payroll/pay-runs/${payRun.id}/stubs/${line.employee.id}`} className="text-[0.75rem] text-brand-700 hover:underline">
                       Pay stub →
                     </Link>
+                    <a
+                      href={`/payroll/pay-runs/${payRun.id}/stubs/${line.employee.id}/pdf`}
+                      download
+                      className="ml-3 text-[0.75rem] text-brand-700 hover:underline"
+                    >
+                      PDF
+                    </a>
                   </Td>
                 )}
               </Tr>

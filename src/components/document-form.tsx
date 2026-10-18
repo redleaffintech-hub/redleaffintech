@@ -199,6 +199,8 @@ export interface PartyOption {
   name: string;
   taxCodeId: string | null;
   paymentTermsDays: number;
+  /** Vendors only: the province whose tax rate a bill from them defaults to. */
+  province?: string | null;
   /** Absent for vendors, whose documents carry no addresses of ours. */
   billTo?: PartyAddressFields | null;
   /** Null means "ship to the billing address". */
@@ -442,7 +444,8 @@ export function DocumentForm({
    * purchase code stays on offer (`offeredCodes` is not filtered when there is
    * no place of supply), but a local supplier will have charged this rate.
    */
-  const taxDefaultProvince = config.usesPlaceOfSupply ? placeOfSupply : companyProvince || null;
+  const billVendorProvince = config.accountSide === "EXPENSE" ? (party?.province ?? null) : null;
+  const taxDefaultProvince = config.usesPlaceOfSupply ? placeOfSupply : billVendorProvince || companyProvince || null;
 
   const offeredCodes = useMemo(
     () => codesForPlaceOfSupply(taxCodes, placeOfSupply),
@@ -477,6 +480,9 @@ export function DocumentForm({
             // A bill starts on the vendor's own default code if it has one,
             // otherwise (like every sales document) on the province default.
             taxCodeId:
+              (config.accountSide === "EXPENSE" && firstParty?.province
+                ? defaultCodeForPlaceOfSupply(taxCodesProp, firstParty.province)?.id
+                : null) ??
               (config.accountSide === "EXPENSE" ? firstParty?.taxCodeId : null) ??
               defaultCodeForPlaceOfSupply(taxCodesProp, initialPlaceOfSupply)?.id ??
               "",
@@ -542,10 +548,15 @@ export function DocumentForm({
       const province = (next.shipTo?.province ?? next.billTo?.province) || companyProvince || null;
       repointLines(province);
     } else {
-      // A bill: the vendor's own default code wins if it has set one, otherwise
-      // the lines fall to the company's province default.
-      const code = next.taxCodeId ?? defaultTax;
-      if (code) setLines((current) => current.map((line) => ({ ...line, taxCodeId: code })));
+      // A bill: the vendor's province decides the rate (AB → GST 5%, not the
+      // company's own HST). Zero-rated/exempt lines are kept. Without a vendor
+      // province, the vendor's default code, then the company's province.
+      if (next.province) {
+        repointLines(next.province);
+      } else {
+        const code = next.taxCodeId ?? defaultTax;
+        if (code) setLines((current) => current.map((line) => ({ ...line, taxCodeId: code })));
+      }
     }
 
     if (config.secondDateFromPartyTerms) {
@@ -666,9 +677,11 @@ export function DocumentForm({
       // The item's own code only wins if it is valid where the supply lands:
       // place-of-supply rules outrank a catalogue default.
       taxCodeId:
-        preferredTax && offeredCodes.some((code) => code.id === preferredTax)
-          ? preferredTax
-          : defaultTax,
+        isPurchase && billVendorProvince && preferredTax
+          ? resolveLineCode(taxCodes, billVendorProvince, preferredTax)
+          : preferredTax && offeredCodes.some((code) => code.id === preferredTax)
+            ? preferredTax
+            : defaultTax,
     });
   }
 
@@ -1272,7 +1285,9 @@ export function DocumentForm({
               setVendorDialogOpen(false);
               setPartyId(vendor.id);
               // Vendors carry a default code rather than a place of supply — see selectParty.
-              if (vendor.taxCodeId) {
+              if (vendor.province) {
+                repointLines(vendor.province);
+              } else if (vendor.taxCodeId) {
                 setLines((current) => current.map((line) => ({ ...line, taxCodeId: vendor.taxCodeId! })));
               }
               if (config.secondDateFromPartyTerms) {
