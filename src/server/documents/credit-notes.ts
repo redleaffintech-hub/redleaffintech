@@ -13,7 +13,7 @@ import { toUtcDay } from "@/lib/dates";
 import { prorateCents } from "@/lib/money";
 import { getSystemAccount, postJournal, reverseJournal } from "@/server/accounting/ledger";
 import { loadTaxCodes, recordTaxEntries, calculateTax, type ComponentTax, type TaxCodeSpec } from "@/server/tax/engine";
-import { receiveStock, returnToVendor, reverseStockMovement } from "@/server/inventory/costing";
+import { receiveStock, returnToVendor, reverseStockMovement, inventoryAccountsForItems } from "@/server/inventory/costing";
 import { computeDocument, netByAccount, splitPurchaseDebits, type RawLine } from "./lines";
 import { nextNumber } from "./numbering";
 import { refreshInvoiceStatus } from "./invoices";
@@ -529,18 +529,23 @@ export async function createCustomerCreditNoteFromInvoice(input: CreditNoteFromI
     // against the Inventory Asset control account.
     const cogsByAccount = new Map<string, number>();
     let totalRestockCents = 0;
+    const restockInv = await inventoryAccountsForItems(
+      tx,
+      input.companyId,
+      returnLines.filter((l) => l.unitCostCents !== null && l.itemId).map((l) => l.itemId!),
+    );
+    const restockByAccount = new Map<string, number>();
     for (const l of returnLines) {
       if (l.unitCostCents === null) continue;
       const restockCents = Math.round((l.quantityMilli * l.unitCostCents) / 1000);
       totalRestockCents += restockCents;
+      const invId = l.itemId ? restockInv.accountOf(l.itemId) : restockInv.fallbackId;
+      restockByAccount.set(invId, (restockByAccount.get(invId) ?? 0) + restockCents);
       const key = l.cogsAccountId; // resolved to the system COGS account below if null
       cogsByAccount.set(key ?? "__system_cogs__", (cogsByAccount.get(key ?? "__system_cogs__") ?? 0) + restockCents);
     }
 
     const ar = await getSystemAccount(tx, input.companyId, SYSTEM_ACCOUNTS.ACCOUNTS_RECEIVABLE);
-    const inventoryAsset = totalRestockCents > 0
-      ? await getSystemAccount(tx, input.companyId, SYSTEM_ACCOUNTS.INVENTORY_ASSET)
-      : null;
     const systemCogs = totalRestockCents > 0
       ? await getSystemAccount(tx, input.companyId, SYSTEM_ACCOUNTS.COST_OF_GOODS_SOLD)
       : null;
@@ -561,9 +566,9 @@ export async function createCustomerCreditNoteFromInvoice(input: CreditNoteFromI
           description: `${c.name} reversal on ${number}`,
           customerId: invoice.customerId,
         })),
-      ...(inventoryAsset && totalRestockCents !== 0
-        ? [{ accountId: inventoryAsset.id, debitCents: totalRestockCents, description: `Stock returned — ${number}`, customerId: invoice.customerId }]
-        : []),
+      ...[...restockByAccount.entries()]
+        .filter(([, cents]) => cents !== 0)
+        .map(([accountId, cents]) => ({ accountId, debitCents: cents, description: `Stock returned — ${number}`, customerId: invoice.customerId })),
       ...[...cogsByAccount.entries()]
         .filter(([, cents]) => cents !== 0)
         .map(([key, cents]) => ({
@@ -700,6 +705,12 @@ export async function createPurchaseReturnFromBill(input: PurchaseReturnFromBill
     // gap is posted explicitly to COGS instead of distorting the average.
     let inventoryReversalCents = 0;
     let cogsVarianceCents = 0;
+    const reversalInv = await inventoryAccountsForItems(
+      tx,
+      input.companyId,
+      returnLines.filter((l) => l.unitCostCents !== null && l.itemId).map((l) => l.itemId!),
+    );
+    const inventoryReversalByAccount = new Map<string, number>();
     const regularExpenseByAccount = new Map<string, number>();
     const recoverableByAccount = new Map<string, number>();
     for (const l of returnLines) {
@@ -718,6 +729,8 @@ export async function createPurchaseReturnFromBill(input: PurchaseReturnFromBill
       if (l.unitCostCents !== null) {
         const reversalCents = Math.round((l.quantityMilli * l.unitCostCents) / 1000);
         inventoryReversalCents += reversalCents;
+        const invId = l.itemId ? reversalInv.accountOf(l.itemId) : reversalInv.fallbackId;
+        inventoryReversalByAccount.set(invId, (inventoryReversalByAccount.get(invId) ?? 0) + reversalCents);
         cogsVarianceCents += l.netCents + nonRecoverableTax - reversalCents;
       } else {
         regularExpenseByAccount.set(
@@ -769,10 +782,6 @@ export async function createPurchaseReturnFromBill(input: PurchaseReturnFromBill
     });
 
     const ap = await getSystemAccount(tx, input.companyId, SYSTEM_ACCOUNTS.ACCOUNTS_PAYABLE);
-    const inventoryAsset =
-      inventoryReversalCents !== 0
-        ? await getSystemAccount(tx, input.companyId, SYSTEM_ACCOUNTS.INVENTORY_ASSET)
-        : null;
     const cogs =
       cogsVarianceCents !== 0
         ? await getSystemAccount(tx, input.companyId, SYSTEM_ACCOUNTS.COST_OF_GOODS_SOLD)
@@ -786,9 +795,9 @@ export async function createPurchaseReturnFromBill(input: PurchaseReturnFromBill
         description: `Purchase return ${number}`,
         vendorId: bill.vendorId,
       })),
-      ...(inventoryAsset && inventoryReversalCents !== 0
-        ? [{ accountId: inventoryAsset.id, creditCents: inventoryReversalCents, description: `Stock returned — ${number}`, vendorId: bill.vendorId }]
-        : []),
+      ...[...inventoryReversalByAccount.entries()]
+        .filter(([, cents]) => cents !== 0)
+        .map(([accountId, cents]) => ({ accountId, creditCents: cents, description: `Stock returned — ${number}`, vendorId: bill.vendorId })),
       ...(cogs && cogsVarianceCents !== 0
         ? cogsVarianceCents > 0
           ? [{ accountId: cogs.id, creditCents: cogsVarianceCents, description: `Return cost variance — ${number}`, vendorId: bill.vendorId }]

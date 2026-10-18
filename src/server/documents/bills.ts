@@ -12,7 +12,7 @@ import { SYSTEM_ACCOUNTS } from "@/lib/enums";
 import { addDays, toUtcDay } from "@/lib/dates";
 import { getSystemAccount, postJournal, reverseJournal } from "@/server/accounting/ledger";
 import { loadTaxCodes, recordTaxEntries } from "@/server/tax/engine";
-import { receiveStock, reverseStockMovement } from "@/server/inventory/costing";
+import { receiveStock, reverseStockMovement, inventoryAccountsForItems } from "@/server/inventory/costing";
 import { computeDocument, splitPurchaseDebits, type RawLine } from "./lines";
 import { nextNumber } from "./numbering";
 
@@ -187,11 +187,16 @@ export async function updateBill(input: BillUpdateInput) {
     const wasPosted = Boolean(existing.journalEntryId);
 
     if (wasPosted) {
-      await reverseJournal(tx, existing.journalEntryId!, {
-        companyId: input.companyId,
-        memo: `Edit bill ${existing.number}`,
-        userId: input.userId,
-      });
+      // Already reversed by hand from the Journals page (old behaviour): the
+      // ledger side is done, so only the document side below needs unwinding.
+      const posted = await tx.journalEntry.findUnique({ where: { id: existing.journalEntryId! }, select: { status: true } });
+      if (posted?.status !== "REVERSED") {
+        await reverseJournal(tx, existing.journalEntryId!, {
+          companyId: input.companyId,
+          memo: `Edit bill ${existing.number}`,
+          userId: input.userId,
+        });
+      }
       const taxRows = await tx.taxEntry.findMany({
         where: { companyId: input.companyId, sourceType: "BILL", sourceId: existing.id },
       });
@@ -356,9 +361,18 @@ export async function postBillInTx(tx: Tx, billId: string, companyId: string, us
   for (const [accountId, cents] of trackedSplit.recoverableByAccount) {
     recoverableByAccount.set(accountId, (recoverableByAccount.get(accountId) ?? 0) + cents);
   }
-  const inventoryAsset = inventoryCostCents > 0
-    ? await getSystemAccount(tx, companyId, SYSTEM_ACCOUNTS.INVENTORY_ASSET)
+  // Each tracked line's cost goes to ITS item's inventory account (e.g. 1451),
+  // not blindly to the default Inventory Asset (1450).
+  const inventoryAccounts = inventoryCostCents > 0
+    ? await inventoryAccountsForItems(tx, companyId, trackedLines.map((l) => l.itemId!))
     : null;
+  const inventoryDebits = new Map<string, number>();
+  for (const line of trackedLines) {
+    let lineCost = line.netCents;
+    for (const c of line.taxComponents) if (c.taxCents !== 0 && !c.isRecoverable) lineCost += c.taxCents;
+    const accountId = inventoryAccounts!.accountOf(line.itemId!);
+    inventoryDebits.set(accountId, (inventoryDebits.get(accountId) ?? 0) + lineCost);
+  }
 
   const entry = await postJournal(tx, {
     companyId,
@@ -376,14 +390,12 @@ export async function postBillInTx(tx: Tx, billId: string, companyId: string, us
         vendorId: bill.vendorId,
         projectId: bill.projectId,
       })),
-      ...(inventoryAsset
-        ? [{
-            accountId: inventoryAsset.id,
-            debitCents: inventoryCostCents,
-            description: `Stock received — ${bill.number}`,
-            vendorId: bill.vendorId,
-          }]
-        : []),
+      ...[...inventoryDebits.entries()].map(([accountId, cents]) => ({
+        accountId,
+        debitCents: cents,
+        description: `Stock received — ${bill.number}`,
+        vendorId: bill.vendorId,
+      })),
       ...[...recoverableByAccount.entries()].map(([accountId, cents]) => ({
         accountId,
         debitCents: cents,
@@ -461,9 +473,12 @@ export async function voidBill(billId: string, companyId: string, userId?: strin
       throw new Error("Unapply the payments on this bill before voiding it.");
     }
     if (bill.journalEntryId) {
-      await reverseJournal(tx, bill.journalEntryId, {
-        companyId, memo: `Void bill ${bill.number}`, userId,
-      });
+      const posted = await tx.journalEntry.findUnique({ where: { id: bill.journalEntryId }, select: { status: true } });
+      if (posted?.status !== "REVERSED") {
+        await reverseJournal(tx, bill.journalEntryId, {
+          companyId, memo: `Void bill ${bill.number}`, userId,
+        });
+      }
       const original = await tx.taxEntry.findMany({
         where: { companyId, sourceType: "BILL", sourceId: bill.id },
       });

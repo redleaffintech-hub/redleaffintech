@@ -13,7 +13,7 @@ import { addDays, toUtcDay } from "@/lib/dates";
 import { getSystemAccount, postJournal, reverseJournal } from "@/server/accounting/ledger";
 import { loadTaxCodes, recordTaxEntries } from "@/server/tax/engine";
 import { resolveSuppressedKinds } from "@/server/tax/policy";
-import { consumeStock, reverseStockMovement } from "@/server/inventory/costing";
+import { consumeStock, reverseStockMovement, inventoryAccountsForItems } from "@/server/inventory/costing";
 import { computeDocument, netByAccount, assertValidDiscount, type RawLine } from "./lines";
 import { nextNumber } from "./numbering";
 
@@ -420,7 +420,8 @@ export async function postInvoiceInTx(
 
   let cogsLines: { accountId: string; debitCents?: number; creditCents?: number; description: string; customerId: string }[] = [];
   if (trackedItemById.size > 0) {
-    const inventoryAsset = await getSystemAccount(tx, companyId, SYSTEM_ACCOUNTS.INVENTORY_ASSET);
+    const inventoryAccounts = await inventoryAccountsForItems(tx, companyId, [...trackedItemById.keys()]);
+    const inventoryCredits = new Map<string, number>();
     const systemCogs = await getSystemAccount(tx, companyId, SYSTEM_ACCOUNTS.COST_OF_GOODS_SOLD);
     const cogsByAccount = new Map<string, number>();
     let totalCogsCents = 0;
@@ -449,6 +450,8 @@ export async function postInvoiceInTx(
       const cogsAccountId = systemCogs.id;
       cogsByAccount.set(cogsAccountId, (cogsByAccount.get(cogsAccountId) ?? 0) + totalCostCents);
       totalCogsCents += totalCostCents;
+      const invAccountId = inventoryAccounts.accountOf(item.id);
+      inventoryCredits.set(invAccountId, (inventoryCredits.get(invAccountId) ?? 0) + totalCostCents);
     }
 
     // An item with no recorded cost yet (never received into inventory at a
@@ -465,9 +468,9 @@ export async function postInvoiceInTx(
           description: `Cost of goods sold — ${invoice.number}`,
           customerId: invoice.customerId,
         })),
-      ...(totalCogsCents !== 0
-        ? [{ accountId: inventoryAsset.id, creditCents: totalCogsCents, description: `Stock sold — ${invoice.number}`, customerId: invoice.customerId }]
-        : []),
+      ...[...inventoryCredits.entries()]
+        .filter(([, cents]) => cents !== 0)
+        .map(([accountId, cents]) => ({ accountId, creditCents: cents, description: `Stock sold — ${invoice.number}`, customerId: invoice.customerId })),
     ];
   }
 

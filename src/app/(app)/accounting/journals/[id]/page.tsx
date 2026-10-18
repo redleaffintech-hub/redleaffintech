@@ -65,6 +65,7 @@ export default async function JournalDetailPage({ params }: PageProps<"/accounti
         }
         actions={
           entry.status === "POSTED" &&
+          entry.sourceType === "JOURNAL" &&
           can(role, CAPABILITIES.JOURNALS) && <ReverseButton entryId={entry.id} entryNo={entry.entryNo} />
         }
       />

@@ -59,9 +59,22 @@ export async function postJournalAction(payload: string) {
 export async function reverseJournalAction(entryId: string, reason: string) {
   const { company, user } = await requireCapability(CAPABILITIES.JOURNALS);
   try {
-    const reversal = await db.$transaction((tx) =>
-      reverseJournal(tx, entryId, { companyId: company.id, memo: reason || undefined, userId: user.id }),
-    );
+    const reversal = await db.$transaction(async (tx) => {
+      // An entry created by a bill, invoice, payment, etc. is tied to that
+      // document (balance, stock, tax). Reversing only the entry leaves the
+      // document claiming a balance the ledger no longer has — fix it by
+      // editing or voiding the document, which reverses everything together.
+      const entry = await tx.journalEntry.findFirst({
+        where: { id: entryId, companyId: company.id },
+        select: { sourceType: true, sourceNumber: true },
+      });
+      if (entry && entry.sourceType !== "JOURNAL") {
+        throw new Error(
+          `This entry was created by ${entry.sourceType.toLowerCase().replace("_", " ")}${entry.sourceNumber ? ` ${entry.sourceNumber}` : ""}. Edit or void that document instead — reversing just the journal entry would leave the document and the ledger out of step.`,
+        );
+      }
+      return reverseJournal(tx, entryId, { companyId: company.id, memo: reason || undefined, userId: user.id });
+    });
     revalidatePath(`/accounting/journals/${entryId}`);
     revalidatePath("/accounting/journals");
     return { redirectTo: `/accounting/journals/${reversal.id}` };

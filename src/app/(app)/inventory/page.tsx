@@ -51,9 +51,21 @@ export default async function InventoryPage() {
   const totalValueCents = rows.reduce((s, r) => s + r.valueCents, 0);
 
   let glBalanceCents = 0;
-  if (inventoryAsset) {
+  const inventoryAccountIds = new Set<string>(inventoryAsset ? [inventoryAsset.id] : []);
+  if (items.length > 0) {
+    const assetAccounts = await db.account.findMany({
+      where: {
+        companyId: company.id,
+        type: "ASSET",
+        id: { in: items.map((i) => i.expenseAccountId).filter((id): id is string => Boolean(id)) },
+      },
+      select: { id: true },
+    });
+    for (const a of assetAccounts) inventoryAccountIds.add(a.id);
+  }
+  if (inventoryAccountIds.size > 0) {
     const movement = await db.journalLine.aggregate({
-      where: { companyId: company.id, accountId: inventoryAsset.id, date: { lte: today() } },
+      where: { companyId: company.id, accountId: { in: [...inventoryAccountIds] }, date: { lte: today() } },
       _sum: { debitCents: true, creditCents: true },
     });
     glBalanceCents = (movement._sum.debitCents ?? 0) - (movement._sum.creditCents ?? 0);

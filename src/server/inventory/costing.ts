@@ -48,6 +48,29 @@ async function loadItem(tx: Tx, companyId: string, itemId: string) {
 }
 
 /**
+ * The GL account each item's stock lives in: the item's own Purchase/inventory
+ * account when that is an ASSET account (e.g. 1451), otherwise the company's
+ * default Inventory Asset (1450). One rule, used by bills, sales, returns and
+ * adjustments alike, so stock received into an account is always taken out of
+ * the same account.
+ */
+export async function inventoryAccountsForItems(tx: Tx, companyId: string, itemIds: string[]) {
+  const fallback = await getSystemAccount(tx, companyId, SYSTEM_ACCOUNTS.INVENTORY_ASSET);
+  const ids = [...new Set(itemIds)];
+  const items = ids.length
+    ? await tx.serviceItem.findMany({
+        where: { id: { in: ids }, companyId },
+        select: { id: true, expenseAccount: { select: { id: true, type: true } } },
+      })
+    : [];
+  const map = new Map<string, string>();
+  for (const item of items) {
+    map.set(item.id, item.expenseAccount?.type === "ASSET" ? item.expenseAccount.id : fallback.id);
+  }
+  return { fallbackId: fallback.id, accountOf: (itemId: string) => map.get(itemId) ?? fallback.id };
+}
+
+/**
  * A purchase: quantity in at a known total cost. The weighted average is
  * recomputed by the replay — `newAvg = (oldQty*oldAvg + totalCostCents*1000) / newQty`,
  * in milli-units throughout so it matches `quantityMilli`'s own scale.
@@ -226,7 +249,7 @@ export async function adjustStock(
 
   const date = toUtcDay(input.date);
   const item = await loadItem(tx, input.companyId, input.itemId);
-  const inventoryAsset = await getSystemAccount(tx, input.companyId, SYSTEM_ACCOUNTS.INVENTORY_ASSET);
+  const inventoryAsset = { id: (await inventoryAccountsForItems(tx, input.companyId, [input.itemId])).accountOf(input.itemId) };
 
   const increasing = input.quantityMilli > 0;
   const totalCostCents = increasing
@@ -372,7 +395,7 @@ export async function replayItem(
   await tx.serviceItem.update({ where: { id: itemId }, data: { quantityOnHandMilli: qty, averageCostCents: avg } });
 
   if (corrections.length > 0) {
-    const inventoryAsset = await getSystemAccount(tx, companyId, SYSTEM_ACCOUNTS.INVENTORY_ASSET);
+    const inventoryAsset = { id: (await inventoryAccountsForItems(tx, companyId, [itemId])).accountOf(itemId) };
     const cogs = await getSystemAccount(tx, companyId, SYSTEM_ACCOUNTS.COST_OF_GOODS_SOLD);
     for (const c of corrections) {
       const amount = Math.abs(c.deltaCents);
