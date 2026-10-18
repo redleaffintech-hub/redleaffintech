@@ -77,8 +77,8 @@ export async function expenseFormOptions() {
     db.vendor.findMany({
       where: { companyId: company.id, isActive: true },
       orderBy: { name: "asc" },
-      select: { id: true, name: true, taxCodeId: true },
+      select: { id: true, name: true, taxCodeId: true, province: true },
     }),
   ]);
-  return { paymentAccounts, expenseAccounts, taxCodes, vendors };
+  return { paymentAccounts, expenseAccounts, taxCodes, vendors, companyProvince: company.province ?? null };
 }

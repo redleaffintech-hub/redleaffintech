@@ -6,6 +6,8 @@ import clsx from "clsx";
 import { Button, Card, CardHeader, Field, inputClass } from "@/components/ui";
 import { toCents } from "@/lib/money";
 import { useMoney } from "@/components/currency-context";
+import { PROVINCES } from "@/lib/enums";
+import { resolveLineCode, defaultCodeForPlaceOfSupply } from "@/lib/place-of-supply";
 import { calculateTax, type TaxCodeSpec } from "@/server/tax/engine";
 import { createExpenseAction } from "../actions";
 
@@ -18,16 +20,37 @@ export function ExpenseForm({
   expenseAccounts,
   taxCodes,
   vendors,
+  companyProvince,
 }: {
   paymentAccounts: { id: string; code: string; name: string; subtype: string }[];
   expenseAccounts: { id: string; code: string; name: string; type: string }[];
   taxCodes: TaxCodeSpec[];
-  vendors: { id: string; name: string; taxCodeId: string | null }[];
+  vendors: { id: string; name: string; taxCodeId: string | null; province: string | null }[];
+  companyProvince: string | null;
 }) {
   const money = useMoney();
   const router = useRouter();
   const [amount, setAmount] = useState("");
-  const [taxCodeId, setTaxCodeId] = useState(taxCodes.find((c) => c.components.length > 0)?.id ?? taxCodes[0]?.id ?? "");
+  const [province, setProvince] = useState(companyProvince ?? "");
+  const [vendorId, setVendorId] = useState("");
+  const [taxCodeId, setTaxCodeId] = useState(
+    (companyProvince ? defaultCodeForPlaceOfSupply(taxCodes, companyProvince)?.id : null) ??
+      taxCodes.find((c) => c.components.length > 0)?.id ??
+      taxCodes[0]?.id ??
+      "",
+  );
+
+  /** Province drives the rate: re-rate to that province's standard code (zero-rated/exempt are kept). */
+  function changeProvince(next: string) {
+    setProvince(next);
+    if (next) setTaxCodeId((current) => resolveLineCode(taxCodes, next, current));
+  }
+
+  function changeVendor(id: string) {
+    setVendorId(id);
+    const vendor = vendors.find((v) => v.id === id);
+    if (vendor?.province) changeProvince(vendor.province);
+  }
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -110,7 +133,12 @@ export function ExpenseForm({
 
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Vendor" hint="Optional — links the expense to a vendor record.">
-              <select name="vendorId" className={clsx(inputClass, "pr-8")} defaultValue="">
+              <select
+                name="vendorId"
+                className={clsx(inputClass, "pr-8")}
+                value={vendorId}
+                onChange={(event) => changeVendor(event.target.value)}
+              >
                 <option value="">No vendor record</option>
                 {vendors.map((vendor) => (
                   <option key={vendor.id} value={vendor.id}>{vendor.name}</option>
@@ -129,6 +157,19 @@ export function ExpenseForm({
                   <option key={account.id} value={account.id}>
                     {account.code} · {account.name}
                   </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Province" required hint="Where the purchase was made — sets the tax rate.">
+              <select
+                name="province"
+                value={province}
+                onChange={(event) => changeProvince(event.target.value)}
+                className={clsx(inputClass, "pr-8")}
+              >
+                <option value="">Select province…</option>
+                {PROVINCES.map((p) => (
+                  <option key={p.code} value={p.code}>{p.code} — {p.name}</option>
                 ))}
               </select>
             </Field>

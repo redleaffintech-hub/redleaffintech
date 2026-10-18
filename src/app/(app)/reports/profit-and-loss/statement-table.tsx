@@ -20,7 +20,7 @@ import type { IncomeStatement, StatementSection, StatementSubtotal } from "@/ser
  * monochrome print and to a screen reader — the colour is decoration, not
  * information.
  *
- * A category holding more than one account can be expanded to its general
+ * Every category with activity can be expanded to its general
  * ledger accounts. Collapsed is the default, which is what keeps the summary
  * as clean as the printed statement it is modelled on.
  */
@@ -74,32 +74,16 @@ function Category({
   section,
   currency,
   glLink,
+  open,
+  onToggle,
 }: {
   section: StatementSection;
   currency: string;
   glLink: (accountId: string) => string;
+  open: boolean;
+  onToggle: () => void;
 }) {
-  const [open, setOpen] = useState(false);
   if (section.rows.length === 0) return null;
-
-  // One account needs no expansion — the category label simply drills through.
-  if (section.rows.length === 1) {
-    const only = section.rows[0];
-    return (
-      <tr className="hover:bg-paper-100">
-        <th scope="row" className="py-1.5 pl-3 pr-4 text-left text-[0.8125rem] font-normal text-ink-800">
-          <Link href={glLink(only.accountId)} className="hover:text-brand-700 hover:underline">
-            {section.label}
-          </Link>
-        </th>
-        {section.totals.map((cents, i) => (
-          <td key={i} className="py-1.5 pl-4 pr-3 text-right">
-            <Amount cents={cents} currency={currency} />
-          </td>
-        ))}
-      </tr>
-    );
-  }
 
   return (
     <>
@@ -107,13 +91,15 @@ function Category({
         <th scope="row" className="py-1.5 pl-3 pr-4 text-left text-[0.8125rem] font-normal text-ink-800">
           <button
             type="button"
-            onClick={() => setOpen((v) => !v)}
+            onClick={onToggle}
             aria-expanded={open}
             className="inline-flex items-center gap-1.5 text-left hover:text-brand-700"
           >
             <span className={clsx("text-[0.5625rem] text-ink-400 transition-transform", open && "rotate-90")}>▶</span>
             {section.label}
-            <span className="text-[0.6875rem] text-muted-ink">({section.rows.length})</span>
+            <span className="text-[0.6875rem] text-muted-ink">
+              ({section.rows.length} {section.rows.length === 1 ? "account" : "accounts"})
+            </span>
           </button>
         </th>
         {section.totals.map((cents, i) => (
@@ -162,14 +148,39 @@ export function IncomeStatementTable({
   const glLink = (accountId: string) =>
     `/accounting/general-ledger?account=${accountId}&from=${ledgerFrom}&to=${ledgerTo}`;
   const find = (key: string) => sections.find((s) => s.key === key)!;
+  const [openKeys, setOpenKeys] = useState<Set<string>>(new Set());
+  const expandable = sections.filter((section) => section.rows.length > 0).map((section) => section.key);
+  const allOpen = expandable.length > 0 && expandable.every((key) => openKeys.has(key));
+  const toggle = (key: string) =>
+    setOpenKeys((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   const category = (key: string) => (
-    <Category section={find(key)} currency={currency} glLink={glLink} />
+    <Category
+      section={find(key)}
+      currency={currency}
+      glLink={glLink}
+      open={openKeys.has(key)}
+      onToggle={() => toggle(key)}
+    />
   );
 
   return (
     // Horizontal scroll on small screens. The printed sheet is wide enough for
     // four columns, so it never scrolls there.
     <div className="thin-scroll -mx-6 overflow-x-auto px-6 print:mx-0 print:overflow-visible print:px-0">
+      <div className="no-print mb-2 flex justify-end">
+        <button
+          type="button"
+          onClick={() => setOpenKeys(allOpen ? new Set() : new Set(expandable))}
+          className="text-[0.75rem] font-medium text-brand-700 hover:underline"
+        >
+          {allOpen ? "Collapse all" : "Expand all"}
+        </button>
+      </div>
       <table className="w-full min-w-[34rem] border-collapse">
         <caption className="sr-only">
           Income statement by period. Amounts in {currency}; negative amounts are shown in parentheses.
