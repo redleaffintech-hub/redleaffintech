@@ -3,18 +3,25 @@ import { db } from "@/lib/db";
 import { requireCompany } from "@/server/auth/context";
 import { formatMoney } from "@/lib/money";
 import { contains } from "@/lib/search";
+import { CAPABILITIES, canView } from "@/lib/permissions";
+import { SOURCE_LABELS } from "@/lib/enums";
+import { formatDate } from "@/lib/dates";
 
 /**
  * ⌘K search. Scoped to the caller's active company on the server — a company id
  * is never accepted from the client (§3, §27).
  */
 export async function GET(request: Request) {
-  const { company } = await requireCompany();
+  const { company, role } = await requireCompany();
+  // Each record type is only searched when the caller's role may see that screen.
+  const mayInvoices = canView(role, CAPABILITIES.INVOICES);
+  const mayBills = canView(role, CAPABILITIES.BILLS);
+  const mayJournals = canView(role, CAPABILITIES.JOURNALS);
   const currency = company.baseCurrency;
   const query = new URL(request.url).searchParams.get("q")?.trim() ?? "";
   if (query.length < 2) return NextResponse.json([]);
 
-  const [customers, vendors, invoices, bills, accounts] = await Promise.all([
+  const [customers, vendors, invoices, bills, accounts, journals] = await Promise.all([
     db.customer.findMany({
       where: { companyId: company.id, name: contains(query) },
       take: 4,
@@ -25,7 +32,7 @@ export async function GET(request: Request) {
       take: 3,
       select: { id: true, name: true },
     }),
-    db.invoice.findMany({
+    !mayInvoices ? Promise.resolve([]) : db.invoice.findMany({
       where: {
         companyId: company.id,
         OR: [{ number: contains(query) }, { customer: { name: contains(query) } }],
@@ -34,23 +41,48 @@ export async function GET(request: Request) {
       orderBy: { issueDate: "desc" },
       select: { id: true, number: true, totalCents: true, status: true, customer: { select: { name: true } } },
     }),
-    db.bill.findMany({
+    !mayBills ? Promise.resolve([]) : db.bill.findMany({
       where: {
         companyId: company.id,
-        OR: [{ number: contains(query) }, { vendor: { name: contains(query) } }],
+        OR: [
+          { number: contains(query) },
+          { vendorInvoiceNo: contains(query) },
+          { vendor: { name: contains(query) } },
+        ],
       },
-      take: 4,
+      take: 5,
       orderBy: { issueDate: "desc" },
-      select: { id: true, number: true, totalCents: true, status: true, vendor: { select: { name: true } } },
+      select: { id: true, number: true, vendorInvoiceNo: true, totalCents: true, status: true, vendor: { select: { name: true } } },
     }),
     db.account.findMany({
       where: { companyId: company.id, OR: [{ name: contains(query) }, { code: contains(query) }] },
       take: 4,
       select: { id: true, code: true, name: true, type: true },
     }),
+    !mayJournals ? Promise.resolve([]) : db.journalEntry.findMany({
+      where: {
+        companyId: company.id,
+        OR: [{ entryNo: contains(query) }, { sourceNumber: contains(query) }],
+      },
+      take: 5,
+      orderBy: { date: "desc" },
+      select: { id: true, entryNo: true, memo: true, date: true, sourceType: true, sourceNumber: true, status: true, totalDebitCents: true },
+    }),
   ]);
 
+  // An exact JE / bill number goes to the top of its group.
+  const q = query.toLowerCase();
+  const exactFirst = <T,>(rows: T[], key: (row: T) => string) =>
+    [...rows].sort((a, b) => Number(key(b).toLowerCase() === q) - Number(key(a).toLowerCase() === q));
+
   return NextResponse.json([
+    ...exactFirst(journals, (j) => j.entryNo).map((j) => ({
+      type: "Journal entry",
+      label: `${j.entryNo}${j.memo ? ` — ${j.memo}` : ""}`,
+      sublabel: `${formatDate(j.date)} · ${SOURCE_LABELS[j.sourceType] ?? j.sourceType}${j.sourceNumber ? ` ${j.sourceNumber}` : ""} · ${j.status.toLowerCase()}`,
+      href: `/accounting/journals/${j.id}`,
+      amount: formatMoney(j.totalDebitCents, { currency }),
+    })),
     ...invoices.map((i) => ({
       type: "Invoice",
       label: `${i.number} — ${i.customer.name}`,
@@ -58,10 +90,10 @@ export async function GET(request: Request) {
       href: `/sales/invoices/${i.id}`,
       amount: formatMoney(i.totalCents, { currency }),
     })),
-    ...bills.map((b) => ({
+    ...exactFirst(bills, (b) => b.number).map((b) => ({
       type: "Bill",
       label: `${b.number} — ${b.vendor.name}`,
-      sublabel: b.status.replace(/_/g, " ").toLowerCase(),
+      sublabel: `${b.status.replace(/_/g, " ").toLowerCase()}${b.vendorInvoiceNo ? ` · vendor inv. ${b.vendorInvoiceNo}` : ""}`,
       href: `/purchases/bills/${b.id}`,
       amount: formatMoney(b.totalCents, { currency }),
     })),

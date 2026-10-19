@@ -66,9 +66,13 @@ export async function reverseJournalAction(entryId: string, reason: string) {
       // editing or voiding the document, which reverses everything together.
       const entry = await tx.journalEntry.findFirst({
         where: { id: entryId, companyId: company.id },
-        select: { sourceType: true, sourceNumber: true },
+        select: { sourceType: true, sourceNumber: true, _count: { select: { inventoryMovements: true } } },
       });
-      if (entry && entry.sourceType !== "JOURNAL") {
+      // MANUAL and standalone ADJUSTING journals are the user's own entries;
+      // an inventory adjustment shares the ADJUSTMENT type but owns stock movements.
+      const standalone =
+        entry?.sourceType === "MANUAL" || (entry?.sourceType === "ADJUSTMENT" && entry._count.inventoryMovements === 0);
+      if (entry && !standalone) {
         throw new Error(
           `This entry was created by ${entry.sourceType.toLowerCase().replace("_", " ")}${entry.sourceNumber ? ` ${entry.sourceNumber}` : ""}. Edit or void that document instead — reversing just the journal entry would leave the document and the ledger out of step.`,
         );

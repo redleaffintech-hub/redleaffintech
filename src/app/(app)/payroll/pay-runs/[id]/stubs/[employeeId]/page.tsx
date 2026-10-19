@@ -1,10 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { db } from "@/lib/db";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
-import { getCompanyProfile } from "@/server/companies/profile";
-import { payrollYtd } from "@/server/payroll/ytd";
+import { loadPayStub } from "@/server/payroll/pay-stub-data";
 import { formatDate, formatDateLong } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
 import { PROVINCES } from "@/lib/enums";
@@ -17,54 +15,14 @@ export default async function PayStubPage({ params }: { params: Promise<{ id: st
   const { company } = await requireCapability(CAPABILITIES.PAYROLL);
   const { id, employeeId } = await params;
 
-  const line = await db.payRunLine.findFirst({
-    where: { payRunId: id, employeeId, companyId: company.id },
-    include: { payRun: true, employee: true },
-  });
-  if (!line) notFound();
-  if (line.payRun.status !== "POSTED") notFound(); // stubs only exist for a finalized pay run
-
-  const [companyProfile, ytd] = await Promise.all([
-    getCompanyProfile(company.id),
-    payrollYtd(company.id, employeeId, line.payRun.payDate.getUTCFullYear(), line.payRun.payDate),
-  ]);
+  // Stubs only exist for a finalized pay run; the same data feeds the PDF.
+  const stub = await loadPayStub(company.id, id, employeeId);
+  if (!stub) notFound();
+  const { line, employee, payRun, profile: companyProfile, ytd, earnings, deductions, totalDeductions } = stub;
 
   const currency = company.baseCurrency;
   const fmt = (cents: number) => formatMoney(cents, { currency });
-  const { employee } = line;
   const provinceName = PROVINCES.find((p) => p.code === employee.provinceOfEmployment)?.name ?? employee.provinceOfEmployment;
-
-  // Year-to-date is only tracked in aggregate (see payrollYtd's comment on why
-  // this app doesn't store a running total per earnings type) — every
-  // individual earnings line below shows this period's amount only; the
-  // combined Gross pay row at the bottom is what carries the real YTD figure.
-  const earningsRows: { label: string; hours: number | null; current: number }[] = [
-    { label: "Regular", hours: line.regularHours, current: line.regularPayCents },
-    ...[
-      { label: "Overtime", hours: line.overtimeHours, current: line.overtimePayCents },
-      { label: "Vacation pay", hours: null, current: line.vacationPayCents },
-      { label: "Sick pay", hours: null, current: line.sickPayCents },
-      { label: "Bonus", hours: null, current: line.bonusCents },
-      { label: "Retroactive pay", hours: null, current: line.retroactivePayCents },
-      { label: "Statutory holiday pay", hours: null, current: line.statutoryHolidayPayCents },
-    ].filter((row) => row.current !== 0),
-  ];
-
-  const deductionRows: { label: string; current: number; ytd: number | null }[] = [
-    { label: "CPP", current: line.cppCents, ytd: ytd.cppCents },
-    { label: "CPP2", current: line.cpp2Cents, ytd: ytd.cpp2Cents },
-    { label: "EI", current: line.eiCents, ytd: ytd.eiCents },
-    // QPIP only applies to Quebec employees — omitted entirely rather than
-    // shown as a permanent $0.00 row for everyone else.
-    ...(line.qpipCents !== 0 || ytd.qpipCents !== 0 ? [{ label: "QPIP", current: line.qpipCents, ytd: ytd.qpipCents }] : []),
-    { label: "Federal tax", current: line.federalTaxCents, ytd: ytd.federalTaxCents },
-    { label: "Provincial tax", current: line.provincialTaxCents, ytd: ytd.provincialTaxCents },
-    // Not separately accumulated year-to-date (payrollYtd only totals the
-    // statutory deductions), so this period's amount only.
-    ...(line.otherDeductionsCents !== 0
-      ? [{ label: line.otherDeductionsNote || "Other deductions", current: line.otherDeductionsCents, ytd: null }]
-      : []),
-  ];
 
   return (
     <>
@@ -73,10 +31,10 @@ export default async function PayStubPage({ params }: { params: Promise<{ id: st
         breadcrumb={[
           { label: "Payroll", href: "/payroll/pay-runs" },
           { label: "Pay runs", href: "/payroll/pay-runs" },
-          { label: line.payRun.number, href: `/payroll/pay-runs/${line.payRun.id}` },
+          { label: payRun.number, href: `/payroll/pay-runs/${payRun.id}` },
           { label: "Pay stub" },
         ]}
-        actions={<PayStubActions pdfHref={`/payroll/pay-runs/${line.payRun.id}/stubs/${employee.id}/pdf`} />}
+        actions={<PayStubActions pdfHref={`/payroll/pay-runs/${payRun.id}/stubs/${employee.id}/pdf`} />}
       />
 
       <Card className="invoice-paper print-full">
@@ -101,9 +59,9 @@ export default async function PayStubPage({ params }: { params: Promise<{ id: st
             <p className="inv-accent text-[1.75rem] font-bold uppercase tracking-[0.02em]">Pay stub</p>
             <table className="mt-2 ml-auto text-[0.8125rem]">
               <tbody>
-                <tr><td className="py-0.5 pr-3 text-left text-[color:var(--inv-ink)]/70">Pay run</td><td className="tnum py-0.5 text-right font-medium">{line.payRun.number}</td></tr>
-                <tr><td className="py-0.5 pr-3 text-left text-[color:var(--inv-ink)]/70">Period</td><td className="tnum py-0.5 text-right font-medium">{formatDate(line.payRun.payPeriodStart)} – {formatDate(line.payRun.payPeriodEnd)}</td></tr>
-                <tr><td className="py-0.5 pr-3 text-left text-[color:var(--inv-ink)]/70">Pay date</td><td className="tnum py-0.5 text-right font-medium">{formatDateLong(line.payRun.payDate)}</td></tr>
+                <tr><td className="py-0.5 pr-3 text-left text-[color:var(--inv-ink)]/70">Pay run</td><td className="tnum py-0.5 text-right font-medium">{payRun.number}</td></tr>
+                <tr><td className="py-0.5 pr-3 text-left text-[color:var(--inv-ink)]/70">Period</td><td className="tnum py-0.5 text-right font-medium">{formatDate(payRun.payPeriodStart)} – {formatDate(payRun.payPeriodEnd)}</td></tr>
+                <tr><td className="py-0.5 pr-3 text-left text-[color:var(--inv-ink)]/70">Pay date</td><td className="tnum py-0.5 text-right font-medium">{formatDateLong(payRun.payDate)}</td></tr>
               </tbody>
             </table>
           </div>
@@ -127,32 +85,38 @@ export default async function PayStubPage({ params }: { params: Promise<{ id: st
               <p>Employee #: {employee.employeeNumber}</p>
               <p>Employment type: {employee.employeeType}</p>
               {employee.sinLast3 && <p>SIN: •••&nbsp;•••&nbsp;{employee.sinLast3}</p>}
-              {line.payRun.bankAccountId && <p>Direct deposit on file</p>}
+              {payRun.bankAccountId && <p>Direct deposit on file</p>}
             </div>
           </div>
         </div>
 
         <div className="inv-scroll mt-5">
-          <table className="inv-table min-w-[36rem]">
+          <table className="inv-table min-w-[40rem]">
             <thead>
               <tr>
                 <th>Earnings</th>
                 <th className="inv-num w-16">Hours</th>
+                <th className="inv-num w-20">Rate</th>
                 <th className="inv-num w-28">Current</th>
+                <th className="inv-num w-28">Year to date</th>
               </tr>
             </thead>
             <tbody>
-              {earningsRows.map((row, index) => (
+              {earnings.map((row, index) => (
                 <tr key={row.label}>
                   <td className={index === 0 ? "font-medium" : undefined}>{row.label}</td>
                   <td className="inv-num tnum">{row.hours ?? ""}</td>
-                  <td className="inv-num tnum">{fmt(row.current)}</td>
+                  <td className="inv-num tnum">{row.rateCents ? fmt(row.rateCents) : ""}</td>
+                  <td className="inv-num tnum">{fmt(row.currentCents)}</td>
+                  <td className="inv-num tnum">{fmt(row.ytdCents)}</td>
                 </tr>
               ))}
               <tr>
                 <td className="font-semibold">Gross pay</td>
                 <td className="inv-num" />
+                <td className="inv-num" />
                 <td className="inv-num tnum font-semibold">{fmt(line.grossPayCents)}</td>
+                <td className="inv-num tnum font-semibold">{fmt(ytd.grossCents)}</td>
               </tr>
             </tbody>
           </table>
@@ -168,13 +132,18 @@ export default async function PayStubPage({ params }: { params: Promise<{ id: st
               </tr>
             </thead>
             <tbody>
-              {deductionRows.map((row) => (
+              {deductions.map((row) => (
                 <tr key={row.label}>
                   <td>{row.label}</td>
-                  <td className="inv-num tnum">{fmt(row.current)}</td>
-                  <td className="inv-num tnum">{row.ytd === null ? "—" : fmt(row.ytd)}</td>
+                  <td className="inv-num tnum">{fmt(row.currentCents)}</td>
+                  <td className="inv-num tnum">{fmt(row.ytdCents)}</td>
                 </tr>
               ))}
+              <tr>
+                <td className="font-semibold">Total deductions</td>
+                <td className="inv-num tnum font-semibold">{fmt(totalDeductions.currentCents)}</td>
+                <td className="inv-num tnum font-semibold">{fmt(totalDeductions.ytdCents)}</td>
+              </tr>
             </tbody>
           </table>
         </div>
@@ -221,7 +190,7 @@ export default async function PayStubPage({ params }: { params: Promise<{ id: st
       </Card>
 
       <p className="no-print mt-3 text-[0.75rem] text-muted-ink">
-        <Link href={`/payroll/pay-runs/${line.payRun.id}`} className="text-brand-700 hover:underline">← Back to pay run {line.payRun.number}</Link>
+        <Link href={`/payroll/pay-runs/${payRun.id}`} className="text-brand-700 hover:underline">← Back to pay run {payRun.number}</Link>
       </p>
     </>
   );

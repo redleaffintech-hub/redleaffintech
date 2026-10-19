@@ -29,6 +29,8 @@ export function EmployeeForm({
   const router = useRouter();
   const isNew = !initial.id;
   const [compensationType, setCompensationType] = useState(initial.compensationType);
+  const [medicalOn, setMedicalOn] = useState(initial.medicalInsuranceEnabled);
+  const [medicalMethod, setMedicalMethod] = useState(initial.medicalInsuranceMethod);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -221,6 +223,52 @@ export function EmployeeForm({
             <input name="defaultOvertimeRateMultiplier" type="text" inputMode="decimal" defaultValue={initial.defaultOvertimeRateMultiplier} className={clsx(inputClass, "tnum")} />
           </Field>
         </div>
+      </section>
+
+      <section>
+        <SectionDivider label="Medical insurance deduction" />
+        <label className="mb-3 flex items-center gap-2 text-[0.8125rem] text-ink-900">
+          <input
+            type="checkbox"
+            name="medicalInsuranceEnabled"
+            checked={medicalOn}
+            onChange={(event) => setMedicalOn(event.target.checked)}
+            className="h-3.5 w-3.5 accent-[color:var(--color-brand-600)]"
+          />
+          Withhold a medical insurance premium from this employee&apos;s pay
+        </label>
+        {medicalOn && (
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <Field label="Calculation">
+              <Select name="medicalInsuranceMethod" value={medicalMethod} onChange={(event) => setMedicalMethod(event.target.value)}>
+                <option value="FIXED">Fixed amount</option>
+                <option value="PERCENT_OF_GROSS">% of gross pay</option>
+              </Select>
+            </Field>
+            {medicalMethod === "FIXED" ? (
+              <Field label="Amount per deduction ($)">
+                <input name="medicalInsuranceAmount" type="text" inputMode="decimal" defaultValue={initial.medicalInsuranceAmount} className={clsx(inputClass, "tnum")} />
+              </Field>
+            ) : (
+              <Field label="Percent of gross (%)">
+                <input name="medicalInsurancePercent" type="text" inputMode="decimal" defaultValue={initial.medicalInsurancePercent} className={clsx(inputClass, "tnum")} />
+              </Field>
+            )}
+            <Field label="Deduct">
+              <Select name="medicalInsuranceFrequency" defaultValue={initial.medicalInsuranceFrequency}>
+                <option value="EVERY_PAY">Every pay</option>
+                <option value="FIRST_PAY_OF_MONTH">First pay of each month</option>
+                <option value="LAST_PAY_OF_MONTH">Last pay of each month</option>
+              </Select>
+            </Field>
+            <Field label="Plan / policy" hint="Reference only — shown nowhere on the stub." className="sm:col-span-2 lg:col-span-3">
+              <input name="medicalInsurancePolicy" defaultValue={initial.medicalInsurancePolicy} maxLength={200} className={inputClass} placeholder="e.g. Group plan #A-1042, employee-only coverage" />
+            </Field>
+          </div>
+        )}
+        <p className="mt-2 text-[0.75rem] text-muted-ink">
+          The premium is withheld automatically on each pay run (and can be changed or waived per pay there). It reduces net pay, is shown as its own line on the pay stub with a year-to-date total, and is credited to Payroll Liabilities until you remit it to the insurer.
+        </p>
       </section>
 
       <section>

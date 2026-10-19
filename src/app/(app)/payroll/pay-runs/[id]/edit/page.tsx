@@ -21,7 +21,7 @@ export default async function EditPayRunPage({ params }: { params: Promise<{ id:
     db.employee.findMany({
       where: { companyId: company.id, employmentStatus: "ACTIVE" },
       orderBy: { legalFirstName: "asc" },
-      select: { id: true, legalFirstName: true, legalLastName: true, preferredName: true, compensationType: true, payRateCents: true, payFrequency: true },
+      select: { id: true, legalFirstName: true, legalLastName: true, preferredName: true, compensationType: true, payRateCents: true, payFrequency: true, standardHoursPerWeek: true },
     }),
     db.account.findMany({
       where: { companyId: company.id, isActive: true, subtype: { in: ["BANK", "CASH", "CREDIT_CARD"] } },

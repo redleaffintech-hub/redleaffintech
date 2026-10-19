@@ -87,11 +87,40 @@ const employeeSchema = z.object({
   payFrequency: z.enum(PAY_FREQUENCIES, { message: "Choose a pay frequency." }),
   standardHoursPerWeek: z.union([z.literal(""), z.coerce.number().min(0).max(168)]).optional(),
   defaultOvertimeRateMultiplier: z.union([z.literal(""), z.coerce.number().min(1).max(10)]).optional(),
+  medicalInsuranceEnabled: z.string().optional(),
+  medicalInsuranceMethod: z.enum(["FIXED", "PERCENT_OF_GROSS"]).optional(),
+  medicalInsuranceAmount: z.union([z.literal(""), z.coerce.number().min(0).max(100_000)]).optional(),
+  medicalInsurancePercent: z.union([z.literal(""), z.coerce.number().min(0).max(100)]).optional(),
+  medicalInsuranceFrequency: z.enum(["EVERY_PAY", "FIRST_PAY_OF_MONTH", "LAST_PAY_OF_MONTH"]).optional(),
+  medicalInsurancePolicy: optionalText(200),
   bankInstitutionNumber: optionalText(6),
   bankTransitNumber: optionalText(10),
   bankAccountNumber: optionalText(30),
   notes: optionalText(2000),
 });
+
+/** The medical-insurance deduction settings, normalised for storage. Off means every other field is reset to its default. */
+function medicalInsuranceFields(input: z.infer<typeof employeeSchema>) {
+  const enabled = input.medicalInsuranceEnabled === "on";
+  if (!enabled) {
+    return {
+      medicalInsuranceEnabled: false,
+      medicalInsuranceMethod: "FIXED",
+      medicalInsuranceAmountCents: 0,
+      medicalInsurancePercentMicro: 0,
+      medicalInsuranceFrequency: "EVERY_PAY",
+      medicalInsurancePolicy: null,
+    };
+  }
+  return {
+    medicalInsuranceEnabled: true,
+    medicalInsuranceMethod: input.medicalInsuranceMethod ?? "FIXED",
+    medicalInsuranceAmountCents: Math.round((Number(input.medicalInsuranceAmount) || 0) * 100),
+    medicalInsurancePercentMicro: Math.round((Number(input.medicalInsurancePercent) || 0) * 10_000),
+    medicalInsuranceFrequency: input.medicalInsuranceFrequency ?? "EVERY_PAY",
+    medicalInsurancePolicy: input.medicalInsurancePolicy ?? null,
+  };
+}
 
 function sinFields(rawSin: string | null | undefined): { error: string | null; sinLast3: string | null; sinHash: string | null } {
   if (!rawSin) return { error: null, sinLast3: null, sinHash: null };
@@ -183,6 +212,7 @@ export async function createEmployeeAction(formData: FormData) {
           payFrequency: input.payFrequency,
           standardHoursPerWeek: input.standardHoursPerWeek === "" || input.standardHoursPerWeek === undefined ? null : input.standardHoursPerWeek,
           defaultOvertimeRateMultiplierMicro: overtimeMultiplierMicro,
+          ...medicalInsuranceFields(input),
           notes: input.notes ?? null,
           createdById: user.id,
         },
@@ -273,9 +303,35 @@ export async function updateEmployeeAction(formData: FormData) {
       payFrequency: input.payFrequency,
       standardHoursPerWeek: input.standardHoursPerWeek === "" || input.standardHoursPerWeek === undefined ? null : input.standardHoursPerWeek,
       defaultOvertimeRateMultiplierMicro: overtimeMultiplierMicro,
+      ...medicalInsuranceFields(input),
       notes: input.notes ?? null,
     },
   });
+
+  // Deduction history for audit: who changed the medical-insurance setup and to what.
+  const newMedical = medicalInsuranceFields(input);
+  const medicalChanged =
+    newMedical.medicalInsuranceEnabled !== existing.medicalInsuranceEnabled ||
+    newMedical.medicalInsuranceMethod !== existing.medicalInsuranceMethod ||
+    newMedical.medicalInsuranceAmountCents !== existing.medicalInsuranceAmountCents ||
+    newMedical.medicalInsurancePercentMicro !== existing.medicalInsurancePercentMicro ||
+    newMedical.medicalInsuranceFrequency !== existing.medicalInsuranceFrequency;
+  if (medicalChanged) {
+    await recordAudit({
+      companyId: company.id,
+      userId: user.id,
+      action: "UPDATE",
+      entityType: "Employee",
+      entityId: id,
+      summary: newMedical.medicalInsuranceEnabled
+        ? `Medical insurance deduction set for ${input.legalFirstName} ${input.legalLastName}: ${
+            newMedical.medicalInsuranceMethod === "FIXED"
+              ? `$${(newMedical.medicalInsuranceAmountCents / 100).toFixed(2)}`
+              : `${newMedical.medicalInsurancePercentMicro / 10_000}% of gross`
+          }, ${newMedical.medicalInsuranceFrequency.replace(/_/g, " ").toLowerCase()}`
+        : `Medical insurance deduction turned off for ${input.legalFirstName} ${input.legalLastName}`,
+    });
+  }
 
   // A salary/hourly-rate or compensation-type change is recorded to the audit
   // history table so payroll can see when and why pay changed — see

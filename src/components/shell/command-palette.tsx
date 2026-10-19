@@ -27,7 +27,7 @@ const QUICK_ACTIONS: SearchHit[] = [
 ];
 
 /**
- * ⌘K search over customers, vendors, invoices, bills and accounts, plus the
+ * ⌘K search over customers, vendors, invoices, bills (by number), journal entries (by JE number) and accounts, plus the
  * common create actions — the fastest route to anything in the product.
  */
 export function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -137,7 +137,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
                   index === cursor ? "bg-brand-soft" : "hover:bg-paper-100",
                 )}
               >
-                <span className="w-[4.75rem] shrink-0 text-[0.6875rem] font-semibold uppercase tracking-[0.05em] text-muted-ink">
+                <span className="w-[6rem] shrink-0 text-[0.6875rem] font-semibold uppercase tracking-[0.05em] text-muted-ink">
                   {hit.type}
                 </span>
                 <span className="min-w-0 flex-1">

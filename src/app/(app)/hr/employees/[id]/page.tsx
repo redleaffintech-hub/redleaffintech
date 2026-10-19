@@ -32,6 +32,8 @@ import {
   vacationEntitlement,
 } from "@/server/hr/employment-standards";
 import { leaveBalancesForEmployee } from "@/server/hr/leave";
+import { employeeLeaveLedger, leaveTrackers } from "@/server/hr/leave-policy";
+import { hoursLabel } from "@/lib/leave-format";
 import { EmployeeActions } from "./employee-actions";
 
 const STATUS_TONE: Record<string, "positive" | "caution" | "neutral"> = {
@@ -64,7 +66,14 @@ export default async function EmployeeDetailPage({ params }: { params: Promise<{
     ...statutoryHolidays(employee.provinceOfEmployment, today.getUTCFullYear() + 1),
   ].filter((h) => h.date >= today).slice(0, 5);
 
-  const balances = await leaveBalancesForEmployee(company.id, employee.id);
+  const [balances, trackers, leaveLedger] = await Promise.all([
+    leaveBalancesForEmployee(company.id, employee.id),
+    leaveTrackers(company.id, { employeeId: employee.id }),
+    employeeLeaveLedger(company.id, employee.id),
+  ]);
+  // Types governed by a policy show the full tracker; the rest keep the simple ledger total.
+  const trackedTypeIds = new Set(trackers.map((t) => t.leaveTypeId));
+  const untracked = balances.filter((b) => !trackedTypeIds.has(b.leaveTypeId));
 
   const periodsPerYear = PAY_FREQUENCY_PERIODS_PER_YEAR[employee.payFrequency as keyof typeof PAY_FREQUENCY_PERIODS_PER_YEAR];
   const perPeriodCents = employee.compensationType === "SALARY" ? Math.round(employee.payRateCents / periodsPerYear) : null;
@@ -275,12 +284,58 @@ export default async function EmployeeDetailPage({ params }: { params: Promise<{
           </Card>
 
           <Card>
-            <CardHeader title="Leave balances" action={<Link href="/hr/time-off" className="text-[0.75rem] text-brand-700 hover:underline">Time off →</Link>} />
-            {balances.length === 0 ? (
+            <CardHeader title="Leave balances" action={<Link href="/hr/time-off/balances" className="text-[0.75rem] text-brand-700 hover:underline">All balances →</Link>} />
+            {trackers.length === 0 && balances.length === 0 && (
               <p className="mt-2 text-[0.8125rem] text-muted-ink">No leave types with a tracked balance.</p>
-            ) : (
+            )}
+            {trackers.map((row) => {
+              const t = row.tracker;
+              return (
+                <div key={row.leaveTypeId} className="mt-3 border-b border-paper-200 pb-3 text-[0.8125rem] last:border-0">
+                  <div className="flex items-baseline justify-between">
+                    <span className="font-medium text-ink-900">{row.leaveTypeName} <span className="text-[0.6875rem] font-normal text-muted-ink">· leave year {t.year}</span></span>
+                    <span className={t.remainingHours < 0 ? "tnum font-semibold text-negative" : "tnum font-semibold text-ink-950"}>{hoursLabel(t.remainingHours, row.policy)} left</span>
+                  </div>
+                  <dl className="mt-1.5 grid grid-cols-[1fr_auto] gap-x-3 gap-y-0.5 text-[0.75rem] text-muted-ink">
+                    <dt>Annual entitlement{t.entitlement.proratedHours !== t.entitlement.annualHours ? " (pro-rated)" : ""}</dt>
+                    <dd className="tnum text-ink-800">{hoursLabel(t.entitlement.proratedHours, row.policy)}</dd>
+                    <dt>Allocated to date</dt>
+                    <dd className="tnum text-ink-800">{hoursLabel(t.allocatedHours, row.policy)}</dd>
+                    {t.carriedForwardHours > 0 && (
+                      <>
+                        <dt>Carried forward{t.carryExpiresOn ? (t.expiredHours > 0 ? ` (${t.expiredHours}h expired)` : ` (expires ${formatDate(t.carryExpiresOn)})`) : ""}</dt>
+                        <dd className="tnum text-ink-800">{hoursLabel(t.carriedForwardHours, row.policy)}</dd>
+                      </>
+                    )}
+                    {t.adjustmentHours !== 0 && (<><dt>Adjustments</dt><dd className="tnum text-ink-800">{hoursLabel(t.adjustmentHours, row.policy)}</dd></>)}
+                    <dt>Used</dt>
+                    <dd className="tnum text-ink-800">{hoursLabel(t.usedHours, row.policy)}</dd>
+                    <dt>Pending approval</dt>
+                    <dd className="tnum text-ink-800">{hoursLabel(t.pendingHours, row.policy)}</dd>
+                  </dl>
+                  <p className="mt-1 text-[0.6875rem] text-muted-ink">{t.entitlement.explanation}</p>
+                </div>
+              );
+            })}
+            {leaveLedger.length > 0 && (
+              <details className="mt-3 text-[0.75rem]">
+                <summary className="cursor-pointer font-medium text-brand-700">Balance history ({leaveLedger.length})</summary>
+                <ul className="mt-2 space-y-1.5">
+                  {leaveLedger.map((entry) => (
+                    <li key={entry.id} className="flex justify-between gap-3 text-muted-ink">
+                      <span>
+                        <span className="text-ink-800">{formatDate(entry.effectiveDate)}</span> · {entry.leaveType.name} ·{" "}
+                        {entry.kind === "CARRY_FORWARD" ? "carry-forward" : entry.kind === "EXPIRY" ? "expired" : entry.kind === "FORFEIT" ? "forfeited" : "adjustment"} — {entry.reason}
+                      </span>
+                      <span className="tnum shrink-0 text-ink-800">{entry.hours > 0 && entry.kind !== "EXPIRY" && entry.kind !== "FORFEIT" ? "+" : entry.kind === "EXPIRY" || entry.kind === "FORFEIT" ? "−" : ""}{entry.hours}h</span>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
+            {untracked.length > 0 && (
               <ul className="mt-3 divide-y divide-paper-200">
-                {balances.map((b) => (
+                {untracked.map((b) => (
                   <li key={b.leaveTypeId} className="flex items-center justify-between py-2 text-[0.8125rem]">
                     <span className="text-ink-800">{b.leaveTypeName}</span>
                     <span className="tnum font-medium text-ink-900">{b.balanceHours.toFixed(1)}h</span>

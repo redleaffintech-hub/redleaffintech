@@ -57,6 +57,12 @@ export default async function EditEmployeePage({ params }: { params: Promise<{ i
     standardHoursPerWeek: employee.standardHoursPerWeek?.toString() ?? "",
     defaultOvertimeRateMultiplier:
       employee.defaultOvertimeRateMultiplierMicro != null ? (employee.defaultOvertimeRateMultiplierMicro / 1_000_000).toString() : "",
+    medicalInsuranceEnabled: employee.medicalInsuranceEnabled,
+    medicalInsuranceMethod: employee.medicalInsuranceMethod,
+    medicalInsuranceAmount: employee.medicalInsuranceAmountCents ? (employee.medicalInsuranceAmountCents / 100).toString() : "",
+    medicalInsurancePercent: employee.medicalInsurancePercentMicro ? (employee.medicalInsurancePercentMicro / 10_000).toString() : "",
+    medicalInsuranceFrequency: employee.medicalInsuranceFrequency,
+    medicalInsurancePolicy: employee.medicalInsurancePolicy ?? "",
     bankInstitutionNumber: employee.bankInstitutionNumber ?? "",
     bankTransitNumber: employee.bankTransitNumber ?? "",
     bankAccountMasked: employee.bankAccountNumberLast4 ? maskBankAccountNumber(employee.bankAccountNumberLast4) : null,

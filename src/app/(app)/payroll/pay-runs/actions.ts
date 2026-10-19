@@ -19,6 +19,9 @@ const lineSchema = z.object({
   employeeId: z.string().min(1),
   regularHours: z.number().min(0).max(1000).nullable().optional(),
   overtimeHours: z.number().min(0).max(1000).nullable().optional(),
+  vacationHours: z.number().min(0).max(1000).nullable().optional(),
+  sickHours: z.number().min(0).max(1000).nullable().optional(),
+  statutoryHolidayHours: z.number().min(0).max(1000).nullable().optional(),
   regularPayCents: z.number().int().min(0).optional(),
   overtimePayCents: z.number().int().min(0).nullable().optional(),
   vacationPayCents: z.number().int().min(0).optional(),
@@ -35,6 +38,7 @@ const lineSchema = z.object({
   provincialTaxCents: z.number().int().min(0).nullable().optional(),
   otherDeductionsCents: z.number().int().min(0).optional(),
   otherDeductionsNote: z.string().trim().max(200).nullable().optional(),
+  medicalInsuranceCents: z.number().int().min(0).nullable().optional(),
   employerCppCents: z.number().int().min(0).nullable().optional(),
   employerCpp2Cents: z.number().int().min(0).nullable().optional(),
   employerEiCents: z.number().int().min(0).nullable().optional(),
@@ -179,6 +183,11 @@ interface PreviewLineResult {
   employerCpp2Cents?: number;
   employerEiCents?: number;
   employerQpipCents?: number;
+  medicalInsuranceCents?: number;
+  regularHours?: number | null;
+  vacationHours?: number | null;
+  sickHours?: number | null;
+  statutoryHolidayHours?: number | null;
   netPayCents?: number;
 }
 
@@ -206,9 +215,9 @@ export async function previewLineAction(payload: string): Promise<PreviewLineRes
   try {
     // Leave every deduction unset so resolveLines suggests all of them, even
     // if the form already has a value the bookkeeper typed in.
-    const { cppCents, cpp2Cents, eiCents, qpipCents, federalTaxCents, provincialTaxCents, employerCppCents, employerCpp2Cents, employerEiCents, employerQpipCents, ...line } = parsed.data.line;
+    const { cppCents, cpp2Cents, eiCents, qpipCents, federalTaxCents, provincialTaxCents, employerCppCents, employerCpp2Cents, employerEiCents, employerQpipCents, medicalInsuranceCents, ...line } = parsed.data.line;
     void cppCents; void cpp2Cents; void eiCents; void qpipCents; void federalTaxCents; void provincialTaxCents;
-    void employerCppCents; void employerCpp2Cents; void employerEiCents; void employerQpipCents;
+    void medicalInsuranceCents; void employerCppCents; void employerCpp2Cents; void employerEiCents; void employerQpipCents;
 
     const resolved = await previewLineAmounts(company.id, payDate, line);
     return {
@@ -224,6 +233,11 @@ export async function previewLineAction(payload: string): Promise<PreviewLineRes
       employerCpp2Cents: resolved.employerCpp2Cents,
       employerEiCents: resolved.employerEiCents,
       employerQpipCents: resolved.employerQpipCents,
+      medicalInsuranceCents: resolved.medicalInsuranceCents,
+      regularHours: resolved.regularHours,
+      vacationHours: resolved.vacationHours,
+      sickHours: resolved.sickHours,
+      statutoryHolidayHours: resolved.statutoryHolidayHours,
       netPayCents: resolved.netPayCents,
     };
   } catch (caught) {

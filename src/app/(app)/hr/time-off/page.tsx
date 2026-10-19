@@ -4,7 +4,7 @@ import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES, can } from "@/lib/permissions";
 import { formatDate } from "@/lib/dates";
 import { LEAVE_REQUEST_STATUS_LABELS } from "@/lib/hr-enums";
-import { Badge, Card, PageHeader, Table, Td, Th, Tr } from "@/components/ui";
+import { Badge, Card, LinkButton, PageHeader, Table, Td, Th, Tr } from "@/components/ui";
 import { FilterBar } from "@/components/filter-bar";
 import { AdjustBalanceButton, LeaveRequestRowActions, NewLeaveRequestButton } from "./time-off-client";
 
@@ -48,10 +48,12 @@ export default async function TimeOffPage({ searchParams }: { searchParams: Prom
       <PageHeader
         title="Time off"
         breadcrumb={[{ label: "HR", href: "/hr/employees" }, { label: "Time off" }]}
-        description="Leave requests and balance adjustments. Approving a request does not check or reduce any payroll — there is no pay run engine yet."
+        description="Leave requests, balances and policies. Approving a request deducts its hours from the employee's leave balance; it does not change any pay run."
         actions={
           canEdit ? (
             <>
+              <LinkButton href="/hr/time-off/balances">Balances</LinkButton>
+              <LinkButton href="/hr/time-off/policies">Policies</LinkButton>
               <AdjustBalanceButton employees={employeeOptions} leaveTypes={leaveTypes} />
               <NewLeaveRequestButton employees={employeeOptions} leaveTypes={leaveTypes} />
             </>

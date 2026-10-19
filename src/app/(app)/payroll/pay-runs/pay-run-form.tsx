@@ -39,7 +39,8 @@ function netPayCents(line: PayRunLineFormValue): number {
     money(line.qpip) -
     money(line.federalTax) -
     money(line.provincialTax) -
-    money(line.other)
+    money(line.other) -
+    money(line.medicalInsurance)
   );
 }
 
@@ -90,6 +91,9 @@ export function PayRunForm({
         employeeId: line.employeeId,
         regularHours: line.regularHours ? Number(line.regularHours) : null,
         overtimeHours: line.overtimeHours ? Number(line.overtimeHours) : null,
+        vacationHours: line.vacationHours ? Number(line.vacationHours) : null,
+        sickHours: line.sickHours ? Number(line.sickHours) : null,
+        statutoryHolidayHours: line.statutoryHolidayHours ? Number(line.statutoryHolidayHours) : null,
         regularPayCents: money(line.regularPay),
         overtimePayCents: line.overtimePay ? money(line.overtimePay) : null,
         vacationPayCents: money(line.vacationPay),
@@ -116,6 +120,11 @@ export function PayRunForm({
       employerCpp2: fromCents(result.employerCpp2Cents ?? 0),
       employerEi: fromCents(result.employerEiCents ?? 0),
       employerQpip: fromCents(result.employerQpipCents ?? 0),
+      medicalInsurance: fromCents(result.medicalInsuranceCents ?? 0),
+      regularHours: line.regularHours || (result.regularHours ? String(result.regularHours) : ""),
+      vacationHours: line.vacationHours || (result.vacationHours ? String(result.vacationHours) : ""),
+      sickHours: line.sickHours || (result.sickHours ? String(result.sickHours) : ""),
+      statutoryHolidayHours: line.statutoryHolidayHours || (result.statutoryHolidayHours ? String(result.statutoryHolidayHours) : ""),
     });
   }
 
@@ -139,6 +148,9 @@ export function PayRunForm({
         employeeId: line.employeeId,
         regularHours: line.regularHours ? Number(line.regularHours) : null,
         overtimeHours: line.overtimeHours ? Number(line.overtimeHours) : null,
+        vacationHours: line.vacationHours ? Number(line.vacationHours) : null,
+        sickHours: line.sickHours ? Number(line.sickHours) : null,
+        statutoryHolidayHours: line.statutoryHolidayHours ? Number(line.statutoryHolidayHours) : null,
         regularPayCents: money(line.regularPay),
         overtimePayCents: line.overtimePay ? money(line.overtimePay) : null,
         vacationPayCents: money(line.vacationPay),
@@ -153,6 +165,7 @@ export function PayRunForm({
         federalTaxCents: line.federalTax ? money(line.federalTax) : null,
         provincialTaxCents: line.provincialTax ? money(line.provincialTax) : null,
         otherDeductionsCents: money(line.other),
+        medicalInsuranceCents: line.medicalInsurance ? money(line.medicalInsurance) : null,
         employerCppCents: line.employerCpp ? money(line.employerCpp) : null,
         employerCpp2Cents: line.employerCpp2 ? money(line.employerCpp2) : null,
         employerEiCents: line.employerEi ? money(line.employerEi) : null,
@@ -205,7 +218,7 @@ export function PayRunForm({
         </div>
 
         <div className="thin-scroll -mx-5 overflow-x-auto px-5">
-          <table className="w-full min-w-[86rem] border-collapse text-[0.8125rem]">
+          <table className="w-full min-w-[92rem] border-collapse text-[0.8125rem]">
             <thead>
               <tr className="border-b border-paper-300 text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-muted-ink">
                 <th className="w-8 py-1.5 pr-2 text-left">{""}</th>
@@ -218,6 +231,7 @@ export function PayRunForm({
                 <th className="w-20 py-1.5 pr-2 text-right">EI ($)</th>
                 <th className="w-24 py-1.5 pr-2 text-right">Fed tax ($)</th>
                 <th className="w-24 py-1.5 pr-2 text-right">Prov tax ($)</th>
+                <th className="w-20 py-1.5 pr-2 text-right">Medical ($)</th>
                 <th className="w-20 py-1.5 pr-2 text-right">Other ($)</th>
                 <th className="w-24 py-1.5 pr-2 text-right">Net pay</th>
                 <th className="w-16 py-1.5 pr-2 text-left">{""}</th>
@@ -246,6 +260,7 @@ export function PayRunForm({
                       <Cell value={line.ei} onChange={(v) => setLine(index, { ei: v })} disabled={!line.include} />
                       <Cell value={line.federalTax} onChange={(v) => setLine(index, { federalTax: v })} disabled={!line.include} />
                       <Cell value={line.provincialTax} onChange={(v) => setLine(index, { provincialTax: v })} disabled={!line.include} />
+                      <Cell value={line.medicalInsurance} onChange={(v) => setLine(index, { medicalInsurance: v })} disabled={!line.include} />
                       <Cell value={line.other} onChange={(v) => setLine(index, { other: v })} disabled={!line.include} />
                       <td className="tnum py-1.5 pr-2 text-right font-semibold text-ink-950">
                         {(netPayCents(line) / 100).toLocaleString("en-CA", { style: "currency", currency: "CAD" })}
@@ -264,14 +279,17 @@ export function PayRunForm({
                     {isExpanded && (
                       <tr className="border-b border-paper-200 bg-paper-50">
                         <td />
-                        <td colSpan={12} className="py-2 pr-2">
+                        <td colSpan={13} className="py-2 pr-2">
                           <div className="flex flex-wrap items-end gap-3">
                             <LabeledCell label="Overtime pay" value={line.overtimePay} onChange={(v) => setLine(index, { overtimePay: v })} disabled={!line.include} />
                             <LabeledCell label="Vacation pay" value={line.vacationPay} onChange={(v) => setLine(index, { vacationPay: v })} disabled={!line.include} />
+                            <LabeledCell label="Vacation hrs" value={line.vacationHours} onChange={(v) => setLine(index, { vacationHours: v })} disabled={!line.include} />
                             <LabeledCell label="Sick pay" value={line.sickPay} onChange={(v) => setLine(index, { sickPay: v })} disabled={!line.include} />
+                            <LabeledCell label="Sick hrs" value={line.sickHours} onChange={(v) => setLine(index, { sickHours: v })} disabled={!line.include} />
                             <LabeledCell label="Bonus" value={line.bonus} onChange={(v) => setLine(index, { bonus: v })} disabled={!line.include} />
                             <LabeledCell label="Retroactive pay" value={line.retroactivePay} onChange={(v) => setLine(index, { retroactivePay: v })} disabled={!line.include} />
                             <LabeledCell label="Stat holiday pay" value={line.statutoryHolidayPay} onChange={(v) => setLine(index, { statutoryHolidayPay: v })} disabled={!line.include} />
+                            <LabeledCell label="Stat hrs" value={line.statutoryHolidayHours} onChange={(v) => setLine(index, { statutoryHolidayHours: v })} disabled={!line.include} />
                             <LabeledCell label="Empr CPP" value={line.employerCpp} onChange={(v) => setLine(index, { employerCpp: v })} disabled={!line.include} />
                             <LabeledCell label="Empr CPP2" value={line.employerCpp2} onChange={(v) => setLine(index, { employerCpp2: v })} disabled={!line.include} />
                             <LabeledCell label="Empr EI" value={line.employerEi} onChange={(v) => setLine(index, { employerEi: v })} disabled={!line.include} />

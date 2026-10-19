@@ -50,7 +50,7 @@ export interface LeaveBalance {
  */
 export async function leaveBalance(employeeId: string, leaveTypeId: string): Promise<LeaveBalance> {
   const [adjustments, approvedRequests] = await Promise.all([
-    db.leaveBalanceAdjustment.findMany({ where: { employeeId, leaveTypeId }, select: { hours: true } }),
+    db.leaveBalanceAdjustment.findMany({ where: { employeeId, leaveTypeId, kind: { in: ["ADJUSTMENT", "CARRY_FORWARD"] } }, select: { hours: true } }),
     db.leaveRequest.findMany({ where: { employeeId, leaveTypeId, status: "APPROVED" }, select: { hours: true } }),
   ]);
 
@@ -65,7 +65,7 @@ export async function leaveBalancesForEmployee(companyId: string, employeeId: st
   const leaveTypes = await db.leaveType.findMany({ where: { companyId, trackBalance: true }, orderBy: { name: "asc" } });
 
   const [adjustments, approvedRequests] = await Promise.all([
-    db.leaveBalanceAdjustment.findMany({ where: { employeeId, leaveTypeId: { in: leaveTypes.map((t) => t.id) } } }),
+    db.leaveBalanceAdjustment.findMany({ where: { employeeId, leaveTypeId: { in: leaveTypes.map((t) => t.id) }, kind: { in: ["ADJUSTMENT", "CARRY_FORWARD"] } } }),
     db.leaveRequest.findMany({ where: { employeeId, status: "APPROVED", leaveTypeId: { in: leaveTypes.map((t) => t.id) } } }),
   ]);
 

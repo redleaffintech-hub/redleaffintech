@@ -242,6 +242,7 @@ model Company {
   leaveTypes              LeaveType[]
   leaveRequests           LeaveRequest[]
   leaveBalanceAdjustments LeaveBalanceAdjustment[]
+  leavePolicies           LeavePolicy[]
 
   payRuns     PayRun[]
   payRunLines PayRunLine[]
@@ -1729,8 +1730,8 @@ model Employee {
   /// carries no plaintext SIN to protect. A future payroll module that must
   /// print a full SIN on a T4 will need a properly encrypted-at-rest field,
   /// which this deliberately is not (see employment-standards.ts).
-  sinLast3     String?
-  sinHash      String?
+  sinLast3      String?
+  sinHash       String?
   sinExpiryDate DateTime?
 
   /// e.g. CITIZEN | PERMANENT_RESIDENT | WORK_PERMIT — reference only, not
@@ -1776,6 +1777,18 @@ model Employee {
   /// salaried roles) — see src/server/payroll/tax-engine.ts.
   defaultOvertimeRateMultiplierMicro Int?
 
+  /// Medical insurance premium withheld from pay. Off by default; applied to a
+  /// pay-run line only when enabled here (see resolveLines in pay-runs.ts).
+  medicalInsuranceEnabled      Boolean @default(false)
+  /// FIXED (medicalInsuranceAmountCents per deduction) | PERCENT_OF_GROSS
+  medicalInsuranceMethod       String  @default("FIXED")
+  medicalInsuranceAmountCents  Int     @default(0)
+  /// fraction x 1_000_000 (2.5% -> 25_000)
+  medicalInsurancePercentMicro Int     @default(0)
+  /// EVERY_PAY | FIRST_PAY_OF_MONTH | LAST_PAY_OF_MONTH
+  medicalInsuranceFrequency    String  @default("EVERY_PAY")
+  medicalInsurancePolicy       String?
+
   notes String?
 
   createdById String?
@@ -1814,6 +1827,7 @@ model LeaveType {
   company       Company                  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   leaveRequests LeaveRequest[]
   adjustments   LeaveBalanceAdjustment[]
+  policy        LeavePolicy?
 
   @@unique([companyId, name])
 }
@@ -1892,12 +1906,16 @@ model PayRun {
 /// CRA's PDOC tool, a payroll service, or their accountant). Net pay is always
 /// recomputed from whatever ends up stored here.
 model PayRunLine {
-  id            String @id @default(cuid())
-  payRunId      String
-  companyId     String
-  employeeId    String
-  regularHours  Float?
-  overtimeHours Float?
+  id                    String @id @default(cuid())
+  payRunId              String
+  companyId             String
+  employeeId            String
+  regularHours          Float?
+  overtimeHours         Float?
+  /// Hours behind the vacation / sick / stat-holiday pay buckets (shown on the pay stub).
+  vacationHours         Float?
+  sickHours             Float?
+  statutoryHolidayHours Float?
 
   /// Earnings breakdown — each bucket entered or auto-suggested (see
   /// src/server/payroll/tax-engine.ts) independently, so the pay stub can show
@@ -1917,16 +1935,18 @@ model PayRunLine {
   /// line only. Null defers to the employee's default.
   otRateMultiplierMicro Int?
 
-  cppCents             Int     @default(0)
-  cpp2Cents            Int     @default(0)
-  eiCents              Int     @default(0)
+  cppCents              Int     @default(0)
+  cpp2Cents             Int     @default(0)
+  eiCents               Int     @default(0)
   /// QPIP — Quebec employees only; 0 for every other province (see
   /// PayrollStatutoryRate's schema comment).
-  qpipCents            Int     @default(0)
-  federalTaxCents      Int     @default(0)
-  provincialTaxCents   Int     @default(0)
-  otherDeductionsCents Int     @default(0)
-  otherDeductionsNote  String?
+  qpipCents             Int     @default(0)
+  federalTaxCents       Int     @default(0)
+  provincialTaxCents    Int     @default(0)
+  otherDeductionsCents  Int     @default(0)
+  otherDeductionsNote   String?
+  /// Medical insurance premium withheld this period (its own stub line item).
+  medicalInsuranceCents Int     @default(0)
 
   /// Employer-side CPP/CPP2/EI/QPIP contributions — not deducted from the
   /// employee, but owed to Revenu Québec/CRA alongside the withheld amounts,
@@ -1990,12 +2010,12 @@ model PayrollStatutoryRate {
   /// YMPE — Year's Maximum Pensionable Earnings.
   cppMaxPensionableEarningsCents Int
 
-  cpp2RateMicro Int
+  cpp2RateMicro                   Int
   /// YAMPE — Year's Additional Maximum Pensionable Earnings. CPP2 applies
   /// between cppMaxPensionableEarningsCents and this figure.
   cpp2MaxPensionableEarningsCents Int
 
-  eiRateMicro Int // employee rate, every province except Quebec
+  eiRateMicro                 Int // employee rate, every province except Quebec
   /// Quebec's own, lower EI premium rate — offset by QPIP, which Quebec runs
   /// instead of EI's maternity/parental benefits. Everything else about EI
   /// (the employer multiplier below, the insurable-earnings maximum) is the
@@ -2003,7 +2023,7 @@ model PayrollStatutoryRate {
   /// Which rate a pay run uses is decided by the employee's province, not the
   /// company's (src/server/payroll/tax-engine.ts), matching how EI has always
   /// worked federally.
-  eiRateMicroQuebec Int @default(0)
+  eiRateMicroQuebec           Int @default(0)
   /// Employer EI = employee EI * this, rateMicro convention (1.4x -> 1_400_000).
   /// Same multiplier for Quebec and the rest of Canada.
   eiEmployerMultiplierMicro   Int
@@ -2080,11 +2100,65 @@ model LeaveBalanceAdjustment {
   createdById   String?
   createdAt     DateTime @default(now())
 
+  /// ADJUSTMENT (admin, counted) | CARRY_FORWARD (counted) | EXPIRY and FORFEIT
+  /// (records only — expiry is computed on read, never double-subtracted).
+  kind      String    @default("ADJUSTMENT")
+  leaveYear Int?
+  expiresOn DateTime?
+  /// Makes automatic entries idempotent: one carry-forward per employee, type and year.
+  dedupeKey String?
+
   company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   employee  Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
   leaveType LeaveType @relation(fields: [leaveTypeId], references: [id])
 
+  @@unique([companyId, dedupeKey])
   @@index([companyId, employeeId, leaveTypeId])
+}
+
+/// A company's leave policy for one leave type: how much is granted per leave
+/// year, who is eligible, how a mid-year joiner is pro-rated and what carries
+/// forward. Entitlement and accrual are computed on read from this policy
+/// (src/lib/leave-calc.ts); only carry-forward and admin adjustments are stored.
+model LeavePolicy {
+  id          String  @id @default(cuid())
+  companyId   String
+  leaveTypeId String  @unique
+  isActive    Boolean @default(true)
+
+  /// WEEKS | DAYS | HOURS
+  entitlementUnit   String @default("WEEKS")
+  entitlementAmount Float
+  hoursPerDay       Float  @default(8)
+  daysPerWeek       Float  @default(5)
+
+  /// FRONT_LOADED (whole entitlement available at the start of the leave year)
+  /// | ACCRUED (earned evenly through the year)
+  accrualMethod       String @default("FRONT_LOADED")
+  leaveYearStartMonth Int    @default(1)
+
+  /// Comma-separated employeeType values the policy applies to.
+  eligibleEmployeeTypes String @default("FULL_TIME,PART_TIME,CASUAL,SEASONAL,CONTRACT")
+  waitingPeriodDays     Int    @default(0)
+
+  /// DAYS (remaining days / days in year) | MONTHS (remaining whole months / 12) | NONE (full entitlement)
+  prorationMethod String @default("DAYS")
+
+  carryForwardEnabled      Boolean @default(false)
+  /// Hours; null means no cap.
+  carryForwardMaxHours     Float?
+  /// Carried hours expire this many months into the new leave year; null means never.
+  carryForwardExpiryMonths Int?
+  /// FORFEIT | PAYOUT — what is recorded for hours above the cap (payout is paid outside this system).
+  excessHandling           String  @default("FORFEIT")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  leaveType LeaveType @relation(fields: [leaveTypeId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
 }
 
 model Notification {

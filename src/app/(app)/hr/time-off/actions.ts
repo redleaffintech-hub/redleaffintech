@@ -5,6 +5,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { CAPABILITIES } from "@/lib/permissions";
 import { recordAudit, requireCapability } from "@/server/auth/context";
+import { leaveTrackers } from "@/server/hr/leave-policy";
 
 const requestSchema = z.object({
   employeeId: z.string().min(1, "Choose an employee."),
@@ -74,6 +75,20 @@ export async function decideLeaveRequestAction(formData: FormData) {
   });
   if (!existing) return { error: "That leave request no longer exists." };
   if (existing.status !== "PENDING") return { error: "This request has already been decided." };
+
+  // For a leave type with a policy, an approval may not overdraw the balance.
+  // Deducting happens by status (the balance is computed from APPROVED requests),
+  // so approving twice — or re-opening this page — can never deduct twice.
+  if (input.decision === "APPROVED") {
+    const [row] = (await leaveTrackers(company.id, { employeeId: existing.employeeId, asOf: existing.startDate })).filter(
+      (r) => r.leaveTypeId === existing.leaveTypeId,
+    );
+    if (row && existing.hours > row.tracker.remainingHours) {
+      return {
+        error: `${existing.employee.legalFirstName} has only ${row.tracker.remainingHours}h of ${existing.leaveType.name} available — this request is for ${existing.hours}h. Add a balance adjustment first, or decline it.`,
+      };
+    }
+  }
 
   await db.leaveRequest.update({
     where: { id: input.id },

@@ -37,6 +37,12 @@ export interface EmployeeFormValues {
   payFrequency: string;
   standardHoursPerWeek: string;
   defaultOvertimeRateMultiplier: string;
+  medicalInsuranceEnabled: boolean;
+  medicalInsuranceMethod: string;
+  medicalInsuranceAmount: string;
+  medicalInsurancePercent: string;
+  medicalInsuranceFrequency: string;
+  medicalInsurancePolicy: string;
   bankInstitutionNumber: string;
   bankTransitNumber: string;
   bankAccountMasked: string | null;
@@ -53,7 +59,10 @@ export function blankEmployee(companyProvince: string): EmployeeFormValues {
     jobTitle: "", departmentId: "", managerId: "",
     provinceOfEmployment: companyProvince, employeeType: "FULL_TIME", hireDate: "",
     compensationType: "SALARY", payRate: "", payFrequency: "BIWEEKLY", standardHoursPerWeek: "40",
-    defaultOvertimeRateMultiplier: "", bankInstitutionNumber: "", bankTransitNumber: "", bankAccountMasked: null,
+    defaultOvertimeRateMultiplier: "",
+    medicalInsuranceEnabled: false, medicalInsuranceMethod: "FIXED", medicalInsuranceAmount: "", medicalInsurancePercent: "",
+    medicalInsuranceFrequency: "EVERY_PAY", medicalInsurancePolicy: "",
+    bankInstitutionNumber: "", bankTransitNumber: "", bankAccountMasked: null,
     notes: "",
   };
 }

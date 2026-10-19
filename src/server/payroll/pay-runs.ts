@@ -15,7 +15,7 @@
  *   Dr  Salaries & Wages (or equivalent PAYROLL_EXPENSE account)
  *         gross pay + employer CPP + employer CPP2 + employer EI + employer QPIP, for every employee
  *   Cr  Payroll Liabilities (or equivalent PAYROLL_LIABILITY account)
- *         every withheld amount (CPP, CPP2, EI, QPIP, federal tax, provincial tax, other)
+ *         every withheld amount (CPP, CPP2, EI, QPIP, federal tax, provincial tax, medical insurance, other)
  *         plus the employer CPP/CPP2/EI/QPIP match — all of it owed to Revenu Québec/CRA until remitted
  *   Cr  Bank account
  *         net pay, paid out now
@@ -33,11 +33,16 @@ import { nextNumber } from "@/server/documents/numbering";
 import type { PayFrequency } from "@/lib/hr-enums";
 import { computeCppAndEi, currentPayrollStatutoryRate, currentTaxBrackets, periodIncomeTaxCents, suggestOvertimePayCents } from "@/server/payroll/tax-engine";
 import { payrollYtd } from "@/server/payroll/ytd";
+import { defaultPeriodHours, impliedHours, medicalInsuranceCents } from "@/lib/payroll-hours";
 
 export interface PayRunLineInput {
   employeeId: string;
   regularHours?: number | null;
   overtimeHours?: number | null;
+  /** Hours behind the vacation / sick / stat-holiday pay; derived from the employee's rate when omitted. */
+  vacationHours?: number | null;
+  sickHours?: number | null;
+  statutoryHolidayHours?: number | null;
 
   regularPayCents?: number;
   /** Omit to have this suggested from overtimeHours * the employee's (or otRateMultiplierMicro's) overtime rate. */
@@ -60,6 +65,8 @@ export interface PayRunLineInput {
   provincialTaxCents?: number | null;
   otherDeductionsCents?: number;
   otherDeductionsNote?: string | null;
+  /** Omit to withhold the employee's configured medical-insurance premium (if any); an explicit 0 waives it for this pay. */
+  medicalInsuranceCents?: number | null;
   employerCppCents?: number | null;
   employerCpp2Cents?: number | null;
   employerEiCents?: number | null;
@@ -94,6 +101,9 @@ interface ResolvedLine {
   employeeId: string;
   regularHours: number | null;
   overtimeHours: number | null;
+  vacationHours: number | null;
+  sickHours: number | null;
+  statutoryHolidayHours: number | null;
   regularPayCents: number;
   overtimePayCents: number;
   vacationPayCents: number;
@@ -111,6 +121,7 @@ interface ResolvedLine {
   provincialTaxCents: number;
   otherDeductionsCents: number;
   otherDeductionsNote: string | null;
+  medicalInsuranceCents: number;
   employerCppCents: number;
   employerCpp2Cents: number;
   employerEiCents: number;
@@ -127,7 +138,7 @@ function sumEarnings(line: Pick<ResolvedLine, (typeof EARNINGS_FIELDS)[number]>)
 export function computeNetPayCents(
   line: Pick<
     ResolvedLine,
-    (typeof EARNINGS_FIELDS)[number] | "cppCents" | "cpp2Cents" | "eiCents" | "qpipCents" | "federalTaxCents" | "provincialTaxCents" | "otherDeductionsCents"
+    (typeof EARNINGS_FIELDS)[number] | "cppCents" | "cpp2Cents" | "eiCents" | "qpipCents" | "federalTaxCents" | "provincialTaxCents" | "otherDeductionsCents" | "medicalInsuranceCents"
   >,
 ): number {
   return (
@@ -138,7 +149,8 @@ export function computeNetPayCents(
     line.qpipCents -
     line.federalTaxCents -
     line.provincialTaxCents -
-    line.otherDeductionsCents
+    line.otherDeductionsCents -
+    line.medicalInsuranceCents
   );
 }
 
@@ -177,7 +189,7 @@ async function resolveLines(tx: Tx, companyId: string, payDate: Date, lines: Pay
     nonNegativeFields.push(
       ["CPP", line.cppCents], ["CPP2", line.cpp2Cents], ["EI", line.eiCents], ["QPIP", line.qpipCents],
       ["federal tax", line.federalTaxCents], ["provincial tax", line.provincialTaxCents],
-      ["other deductions", line.otherDeductionsCents], ["employer CPP", line.employerCppCents],
+      ["other deductions", line.otherDeductionsCents], ["medical insurance", line.medicalInsuranceCents], ["employer CPP", line.employerCppCents],
       ["employer CPP2", line.employerCpp2Cents], ["employer EI", line.employerEiCents], ["employer QPIP", line.employerQpipCents],
     );
   }
@@ -211,6 +223,18 @@ async function resolveLines(tx: Tx, companyId: string, payDate: Date, lines: Pay
       statutoryHolidayPayCents: line.statutoryHolidayPayCents ?? 0,
     };
     const grossPayCents = sumEarnings(earnings);
+
+    // Hours are shown on the pay stub for every employee type. A salaried
+    // employee with standard hours on file gets a full period of regular hours
+    // by default; vacation/sick/stat hours are derived from the hourly rate
+    // when only the pay was entered.
+    const regularHours = line.regularHours ?? (earnings.regularPayCents > 0 ? defaultPeriodHours(employee) : null);
+    const vacationHours = line.vacationHours ?? impliedHours(earnings.vacationPayCents, employee);
+    const sickHours = line.sickHours ?? impliedHours(earnings.sickPayCents, employee);
+    const statutoryHolidayHours = line.statutoryHolidayHours ?? impliedHours(earnings.statutoryHolidayPayCents, employee);
+
+    // Medical insurance follows the employee's own configuration unless the line sets it explicitly.
+    const medicalInsurance = line.medicalInsuranceCents ?? medicalInsuranceCents(employee, grossPayCents, payDate);
 
     let cppCents = line.cppCents ?? undefined;
     let cpp2Cents = line.cpp2Cents ?? undefined;
@@ -258,8 +282,11 @@ async function resolveLines(tx: Tx, companyId: string, payDate: Date, lines: Pay
 
     const resolvedLine: ResolvedLine = {
       employeeId: line.employeeId,
-      regularHours: line.regularHours ?? null,
+      regularHours,
       overtimeHours,
+      vacationHours,
+      sickHours,
+      statutoryHolidayHours,
       ...earnings,
       grossPayCents,
       otRateMultiplierMicro: line.otRateMultiplierMicro ?? null,
@@ -271,6 +298,7 @@ async function resolveLines(tx: Tx, companyId: string, payDate: Date, lines: Pay
       provincialTaxCents: provincialTaxCents ?? 0,
       otherDeductionsCents: line.otherDeductionsCents ?? 0,
       otherDeductionsNote: line.otherDeductionsNote ?? null,
+      medicalInsuranceCents: medicalInsurance,
       employerCppCents: employerCppCents ?? 0,
       employerCpp2Cents: employerCpp2Cents ?? 0,
       employerEiCents: employerEiCents ?? 0,
@@ -305,6 +333,9 @@ function lineCreateData(companyId: string, line: ResolvedLine) {
     employeeId: line.employeeId,
     regularHours: line.regularHours,
     overtimeHours: line.overtimeHours,
+    vacationHours: line.vacationHours,
+    sickHours: line.sickHours,
+    statutoryHolidayHours: line.statutoryHolidayHours,
     regularPayCents: line.regularPayCents,
     overtimePayCents: line.overtimePayCents,
     vacationPayCents: line.vacationPayCents,
@@ -322,6 +353,7 @@ function lineCreateData(companyId: string, line: ResolvedLine) {
     provincialTaxCents: line.provincialTaxCents,
     otherDeductionsCents: line.otherDeductionsCents,
     otherDeductionsNote: line.otherDeductionsNote,
+    medicalInsuranceCents: line.medicalInsuranceCents,
     employerCppCents: line.employerCppCents,
     employerCpp2Cents: line.employerCpp2Cents,
     employerEiCents: line.employerEiCents,
@@ -453,7 +485,7 @@ export async function postPayRunInTx(tx: Tx, payRunId: string, companyId: string
     employerQpipTotal += line.employerQpipCents;
     liabilityTotal +=
       line.cppCents + line.cpp2Cents + line.eiCents + line.qpipCents + line.federalTaxCents + line.provincialTaxCents +
-      line.otherDeductionsCents + line.employerCppCents + line.employerCpp2Cents + line.employerEiCents + line.employerQpipCents;
+      line.otherDeductionsCents + line.medicalInsuranceCents + line.employerCppCents + line.employerCpp2Cents + line.employerEiCents + line.employerQpipCents;
     netPayTotal += netPay;
   }
 

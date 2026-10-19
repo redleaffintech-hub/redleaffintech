@@ -13,6 +13,16 @@ export interface PayrollYtd {
   federalTaxCents: number;
   provincialTaxCents: number;
   netCents: number;
+  /** Earnings by bucket, for the pay stub's YTD column. */
+  regularPayCents: number;
+  overtimePayCents: number;
+  vacationPayCents: number;
+  sickPayCents: number;
+  bonusCents: number;
+  retroactivePayCents: number;
+  statutoryHolidayPayCents: number;
+  medicalInsuranceCents: number;
+  otherDeductionsCents: number;
 }
 
 const EMPTY_YTD: PayrollYtd = {
@@ -26,6 +36,15 @@ const EMPTY_YTD: PayrollYtd = {
   federalTaxCents: 0,
   provincialTaxCents: 0,
   netCents: 0,
+  regularPayCents: 0,
+  overtimePayCents: 0,
+  vacationPayCents: 0,
+  sickPayCents: 0,
+  bonusCents: 0,
+  retroactivePayCents: 0,
+  statutoryHolidayPayCents: 0,
+  medicalInsuranceCents: 0,
+  otherDeductionsCents: 0,
 };
 
 /**
@@ -40,7 +59,18 @@ const EMPTY_YTD: PayrollYtd = {
  * excludes from CPP/EI (e.g. some taxable benefits), so treat those two
  * figures as close, not exact, until that distinction is added.
  */
-export async function payrollYtd(companyId: string, employeeId: string, year: number, throughDate: Date): Promise<PayrollYtd> {
+export async function payrollYtd(
+  companyId: string,
+  employeeId: string,
+  year: number,
+  throughDate: Date,
+  /**
+   * When set (a pay stub), YTD stops at that pay run: earlier pay dates plus
+   * this run, and — for other runs paid the same day — only those posted
+   * before it, so two same-day runs are never counted into each other's stub.
+   */
+  upTo?: { payRunId: string; createdAt: Date },
+): Promise<PayrollYtd> {
   const yearStart = new Date(Date.UTC(year, 0, 1));
   const lines = await db.payRunLine.findMany({
     where: {
@@ -49,6 +79,9 @@ export async function payrollYtd(companyId: string, employeeId: string, year: nu
       payRun: {
         status: "POSTED",
         payDate: { gte: yearStart, lte: throughDate },
+        ...(upTo
+          ? { OR: [{ payDate: { lt: throughDate } }, { id: upTo.payRunId }, { payDate: throughDate, createdAt: { lt: upTo.createdAt } }] }
+          : {}),
       },
     },
     select: {
@@ -60,6 +93,15 @@ export async function payrollYtd(companyId: string, employeeId: string, year: nu
       federalTaxCents: true,
       provincialTaxCents: true,
       netPayCents: true,
+      regularPayCents: true,
+      overtimePayCents: true,
+      vacationPayCents: true,
+      sickPayCents: true,
+      bonusCents: true,
+      retroactivePayCents: true,
+      statutoryHolidayPayCents: true,
+      medicalInsuranceCents: true,
+      otherDeductionsCents: true,
     },
   });
 
@@ -77,6 +119,15 @@ export async function payrollYtd(companyId: string, employeeId: string, year: nu
       federalTaxCents: totals.federalTaxCents + line.federalTaxCents,
       provincialTaxCents: totals.provincialTaxCents + line.provincialTaxCents,
       netCents: totals.netCents + line.netPayCents,
+      regularPayCents: totals.regularPayCents + line.regularPayCents,
+      overtimePayCents: totals.overtimePayCents + line.overtimePayCents,
+      vacationPayCents: totals.vacationPayCents + line.vacationPayCents,
+      sickPayCents: totals.sickPayCents + line.sickPayCents,
+      bonusCents: totals.bonusCents + line.bonusCents,
+      retroactivePayCents: totals.retroactivePayCents + line.retroactivePayCents,
+      statutoryHolidayPayCents: totals.statutoryHolidayPayCents + line.statutoryHolidayPayCents,
+      medicalInsuranceCents: totals.medicalInsuranceCents + line.medicalInsuranceCents,
+      otherDeductionsCents: totals.otherDeductionsCents + line.otherDeductionsCents,
     }),
     { ...EMPTY_YTD },
   );

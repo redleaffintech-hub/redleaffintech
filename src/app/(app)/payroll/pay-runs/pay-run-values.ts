@@ -8,6 +8,7 @@
  * there first).
  */
 import { PAY_FREQUENCY_PERIODS_PER_YEAR, type PayFrequency } from "@/lib/hr-enums";
+import { defaultPeriodHours } from "@/lib/payroll-hours";
 
 export interface PayRunLineFormValue {
   employeeId: string;
@@ -15,6 +16,9 @@ export interface PayRunLineFormValue {
   include: boolean;
   regularHours: string;
   overtimeHours: string;
+  vacationHours: string;
+  sickHours: string;
+  statutoryHolidayHours: string;
   /** The simple case: no detail panel opened, this is the entire gross. */
   regularPay: string;
   overtimePay: string;
@@ -31,6 +35,8 @@ export interface PayRunLineFormValue {
   federalTax: string;
   provincialTax: string;
   other: string;
+  /** Blank = withhold the employee's configured premium (if any); "0" waives it. */
+  medicalInsurance: string;
   employerCpp: string;
   employerCpp2: string;
   employerEi: string;
@@ -56,6 +62,7 @@ interface EmployeeForDefaults {
   compensationType: string;
   payRateCents: number;
   payFrequency: string;
+  standardHoursPerWeek: number | null;
 }
 
 const centsToStr = (cents: number) => (cents / 100).toFixed(2);
@@ -70,8 +77,11 @@ export function defaultLineFor(employee: EmployeeForDefaults): PayRunLineFormVal
     employeeId: employee.id,
     employeeName: `${employee.preferredName || employee.legalFirstName} ${employee.legalLastName}`,
     include: true,
-    regularHours: "",
+    regularHours: defaultPeriodHours(employee)?.toString() ?? "",
     overtimeHours: "",
+    vacationHours: "",
+    sickHours: "",
+    statutoryHolidayHours: "",
     regularPay: grossPay,
     overtimePay: "",
     vacationPay: "",
@@ -86,6 +96,7 @@ export function defaultLineFor(employee: EmployeeForDefaults): PayRunLineFormVal
     federalTax: "",
     provincialTax: "",
     other: "",
+    medicalInsurance: "",
     employerCpp: "",
     employerCpp2: "",
     employerEi: "",
@@ -110,6 +121,10 @@ interface SavedPayRunLine {
   employee: { legalFirstName: string; legalLastName: string; preferredName: string | null };
   regularHours: number | null;
   overtimeHours: number | null;
+  vacationHours: number | null;
+  sickHours: number | null;
+  statutoryHolidayHours: number | null;
+  medicalInsuranceCents: number;
   regularPayCents: number;
   overtimePayCents: number;
   vacationPayCents: number;
@@ -138,6 +153,9 @@ function lineFromSaved(line: SavedPayRunLine): PayRunLineFormValue {
     include: true,
     regularHours: line.regularHours?.toString() ?? "",
     overtimeHours: line.overtimeHours?.toString() ?? "",
+    vacationHours: line.vacationHours?.toString() ?? "",
+    sickHours: line.sickHours?.toString() ?? "",
+    statutoryHolidayHours: line.statutoryHolidayHours?.toString() ?? "",
     regularPay: centsToStr(line.regularPayCents),
     overtimePay: centsToStr(line.overtimePayCents),
     vacationPay: centsToStr(line.vacationPayCents),
@@ -152,6 +170,8 @@ function lineFromSaved(line: SavedPayRunLine): PayRunLineFormValue {
     federalTax: centsToStr(line.federalTaxCents),
     provincialTax: centsToStr(line.provincialTaxCents),
     other: centsToStr(line.otherDeductionsCents),
+    // Saved lines keep exactly what was stored, so re-saving never re-derives it.
+    medicalInsurance: centsToStr(line.medicalInsuranceCents),
     employerCpp: centsToStr(line.employerCppCents),
     employerCpp2: centsToStr(line.employerCpp2Cents),
     employerEi: centsToStr(line.employerEiCents),

@@ -10,6 +10,8 @@ import { balanceSheet, cashFlow, profitAndLoss, trialBalance } from "../src/serv
 import { apAging, arAging } from "../src/server/reports/aging";
 import { taxSummary } from "../src/server/reports/tax";
 import { utcDate, toUtcDay } from "../src/lib/dates";
+import { annualEntitlementHours, carryForwardFor, computeTracker, entitlementForYear, type LeavePolicyRules } from "../src/lib/leave-calc";
+import { medicalInsuranceCents } from "../src/lib/payroll-hours";
 import { calculateTax } from "../src/server/tax/engine";
 import { resolveSuppressedKinds } from "../src/server/tax/policy";
 import { computeDocument } from "../src/server/documents/lines";
@@ -440,7 +442,41 @@ async function companySettingsChecks() {
   );
 }
 
+/** Leave policy arithmetic and the medical-insurance schedule — pure rules, so no fixtures needed. */
+function leaveAndMedicalChecks() {
+  const d = (s: string) => new Date(`${s}T00:00:00.000Z`);
+  const policy: LeavePolicyRules = {
+    entitlementUnit: "WEEKS", entitlementAmount: 2, hoursPerDay: 8, daysPerWeek: 5, accrualMethod: "FRONT_LOADED",
+    leaveYearStartMonth: 1, eligibleEmployeeTypes: "FULL_TIME,PART_TIME", waitingPeriodDays: 0, prorationMethod: "DAYS",
+    carryForwardEnabled: true, carryForwardMaxHours: 20, carryForwardExpiryMonths: 3, excessHandling: "FORFEIT",
+  };
+  const veteran = { hireDate: d("2020-03-01"), employeeType: "FULL_TIME" };
+  const joiner = { hireDate: d("2026-07-01"), employeeType: "FULL_TIME" };
+
+  check("Leave: 2 weeks at 8h x 5 days is 80 hours", annualEntitlementHours(policy) === 80, `${annualEntitlementHours(policy)}h`);
+  check("Leave: a 1 July joiner is pro-rated by days (184/365 of 80h)", entitlementForYear(policy, joiner, 2026).proratedHours === 40.33, `${entitlementForYear(policy, joiner, 2026).proratedHours}h`);
+  check("Leave: pro-rating by full months gives 6/12 for a 1 July joiner", entitlementForYear({ ...policy, prorationMethod: "MONTHS" }, joiner, 2026).proratedHours === 40, "40h expected");
+  check("Leave: a type outside the policy gets no entitlement", entitlementForYear(policy, { ...veteran, employeeType: "CASUAL" }, 2026).proratedHours === 0, "casual excluded");
+  const carry = carryForwardFor(policy, 30, 2027);
+  check("Leave: carry-forward is capped at 20h with 10h excess and a 3-month expiry", carry.carriedHours === 20 && carry.excessHours === 10 && carry.expiresOn?.toISOString().slice(0, 10) === "2027-04-01", `${carry.carriedHours}h carried, ${carry.excessHours}h excess`);
+  const ledger = [{ kind: "CARRY_FORWARD", hours: 20, effectiveDate: d("2027-01-01"), leaveYear: 2027, expiresOn: d("2027-04-01") }];
+  const requests = [
+    { status: "APPROVED", hours: 5, startDate: d("2027-02-10") },
+    { status: "APPROVED", hours: 8, startDate: d("2027-06-01") },
+    { status: "PENDING", hours: 8, startDate: d("2027-08-01") },
+  ];
+  const after = computeTracker(policy, veteran, 2027, d("2027-05-01"), ledger, requests);
+  check("Leave: carried hours not used before expiry lapse (15h) and pending stays separate", after.expiredHours === 15 && after.pendingHours === 8 && after.remainingHours === 72, `expired ${after.expiredHours}h, remaining ${after.remainingHours}h`);
+
+  const medical = { medicalInsuranceEnabled: true, medicalInsuranceMethod: "FIXED", medicalInsuranceAmountCents: 5000, medicalInsurancePercentMicro: 0, medicalInsuranceFrequency: "FIRST_PAY_OF_MONTH", payFrequency: "BIWEEKLY" };
+  check("Medical insurance: first-pay-of-month withholds on day 5 but not day 19", medicalInsuranceCents(medical, 200000, d("2026-10-05")) === 5000 && medicalInsuranceCents(medical, 200000, d("2026-10-19")) === 0, "50.00 then 0");
+  check("Medical insurance: % of gross (2.5% of $2,000) is $50", medicalInsuranceCents({ ...medical, medicalInsuranceMethod: "PERCENT_OF_GROSS", medicalInsurancePercentMicro: 25_000, medicalInsuranceFrequency: "EVERY_PAY" }, 200000, d("2026-10-05")) === 5000, "5000 cents");
+  check("Medical insurance: nothing is withheld when it is not enabled", medicalInsuranceCents({ ...medical, medicalInsuranceEnabled: false }, 200000, d("2026-10-05")) === 0, "0");
+}
+
 let aborted: unknown = null;
+
+leaveAndMedicalChecks();
 
 main()
   .catch((error) => {
