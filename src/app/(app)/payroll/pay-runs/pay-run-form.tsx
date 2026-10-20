@@ -136,13 +136,19 @@ export function PayRunForm({
     const result = await pullApprovedLeaveAction(start, end);
     if ("error" in result) return setError(result.error ?? null);
     const byId = new Map(result.rows.map((row) => [row.employeeId, row]));
-    let count = 0;
+    // Counted here, not inside the state updater: React runs updaters later, so a
+    // counter bumped in there is still zero when the message below is built.
+    const withLeave = form.lines.filter((line) => {
+      const row = byId.get(line.employeeId);
+      return row && row.vacationHours + row.sickHours > 0;
+    });
+    const count = withLeave.length;
+    setExpanded((current) => new Set([...current, ...withLeave.map((line) => line.employeeId)]));
     setForm((current) => ({
       ...current,
       lines: current.lines.map((line) => {
         const row = byId.get(line.employeeId);
         if (!row) return line;
-        if (row.vacationHours + row.sickHours > 0) count++;
         return {
           ...line,
           vacationHours: row.vacationHours ? String(row.vacationHours) : "",
@@ -154,7 +160,7 @@ export function PayRunForm({
         };
       }),
     }));
-    setLeaveNote(count > 0 ? `Approved leave pulled in for ${count} employee${count === 1 ? "" : "s"} — see Hours and the detail panel.` : "No approved vacation or sick leave falls in this period.");
+    setLeaveNote(count > 0 ? `Approved leave pulled in for ${withLeave.map((line) => { const row = byId.get(line.employeeId)!; return `${line.employeeName} (${row.vacationHours}h vacation, ${row.sickHours}h sick)`; }).join("; ")}.` : "No approved vacation or sick leave falls in this period.");
   }
 
   const includedCount = form.lines.filter((l) => l.include).length;
