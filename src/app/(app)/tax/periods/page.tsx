@@ -18,6 +18,9 @@ export default async function TaxPeriodsPage() {
     orderBy: { startDate: "desc" },
   });
 
+  const filingYears = await db.taxFilingYear.findMany({ where: { companyId: company.id } });
+  const configs: Record<number, string> = Object.fromEntries(filingYears.map((row) => [row.year, row.frequency]));
+
   // One pass over the subledger gives every period its net figure, rather than
   // running the full return working paper once per row.
   const [collected, recoverable, counts] = await Promise.all([
@@ -147,7 +150,7 @@ export default async function TaxPeriodsPage() {
         </Card>
 
         <div className="space-y-4">
-          {editable && <GeneratePeriodsForm defaultYear={today().getUTCFullYear()} />}
+          {editable && <GeneratePeriodsForm defaultYear={today().getUTCFullYear()} configs={configs} />}
 
           <Card>
             <CardHeader title="How the due date is worked out" />

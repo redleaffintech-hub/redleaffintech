@@ -8,6 +8,8 @@ import { PROVINCES } from "@/lib/enums";
 import { CAPABILITIES } from "@/lib/permissions";
 import { recordAudit, requireCapability } from "@/server/auth/context";
 import { setTaxPeriodStatus } from "@/server/reports/tax";
+import { configureFilingYear } from "@/server/tax/filing-years";
+import { normalizeAllPst, type PstField } from "@/lib/tax-registration";
 import { createProvincialTaxCodes } from "@/server/setup/provision";
 import { PROVINCIAL_TAX_CODES } from "@/server/setup/templates";
 
@@ -89,6 +91,20 @@ export async function generateTaxPeriodsAction(formData: FormData) {
     return { error: `${year} already has filing periods. Delete the open ones first if the frequency changed.` };
   }
 
+  // The year's stored configuration decides the schedule. A configured year
+  // can only be opened on its own frequency; an unconfigured one is configured
+  // by this call (and so becomes subject to the same lock).
+  const configured = await db.taxFilingYear.findUnique({ where: { companyId_year: { companyId: company.id, year } } });
+  if (configured) {
+    if (!configured.applicable) return { error: `GST/HST is marked Not applicable for ${year}, so there are no filing periods to open.` };
+    if (configured.frequency !== frequency) {
+      return { error: `${year} is configured as ${configured.frequency.toLowerCase()} filing. Periods must follow it.` };
+    }
+  } else {
+    const configuredNow = await configureFilingYear({ companyId: company.id, userId: user.id, year, applicable: true, frequency });
+    if ("error" in configuredNow) return { error: configuredNow.error };
+  }
+
   const monthsPerPeriod = frequency === "MONTHLY" ? 1 : frequency === "QUARTERLY" ? 3 : 12;
   const data = [];
   for (let i = 0; i < 12 / monthsPerPeriod; i++) {
@@ -122,6 +138,53 @@ export async function generateTaxPeriodsAction(formData: FormData) {
   revalidatePath("/tax");
   revalidatePath("/tax/periods");
   return { ok: true, count: data.length };
+}
+
+// ── Year-wise GST/HST filing configuration ──────────────────────────────────
+
+export async function saveFilingYearAction(year: number, applicable: boolean, frequency: string) {
+  const { company, user } = await requireCapability(CAPABILITIES.TAX_SETTINGS);
+  const result = await configureFilingYear({
+    companyId: company.id,
+    userId: user.id,
+    year: Number(year),
+    applicable: applicable === true,
+    frequency,
+  });
+  if ("error" in result) return { error: result.error };
+  revalidatePath("/tax");
+  revalidatePath("/tax/periods");
+  revalidatePath("/company");
+  return { ok: true };
+}
+
+// ── Provincial PST registrations ────────────────────────────────────────────
+
+export async function savePstRegistrationsAction(formData: FormData) {
+  const { company, user } = await requireCapability(CAPABILITIES.TAX_SETTINGS);
+  const pick = (field: PstField) => {
+    const value = formData.get(field);
+    return typeof value === "string" ? value : "";
+  };
+  const normalized = normalizeAllPst({
+    bcPstNumber: pick("bcPstNumber"),
+    mbRstNumber: pick("mbRstNumber"),
+    skPstNumber: pick("skPstNumber"),
+  });
+  if (!normalized.ok) return { error: normalized.error };
+
+  await db.company.update({ where: { id: company.id }, data: normalized.values });
+  await recordAudit({
+    companyId: company.id,
+    userId: user.id,
+    action: "UPDATE",
+    entityType: "Company",
+    entityId: company.id,
+    summary: "Provincial PST registration numbers updated",
+  });
+  revalidatePath("/tax");
+  revalidatePath("/company");
+  return { ok: true };
 }
 
 /** Only an untouched, still-open period may be removed. */

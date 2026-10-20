@@ -21,6 +21,9 @@ export interface PreviewCompany {
   gstNumber: string | null;
   qstNumber: string | null;
   pstNumber: string | null;
+  bcPstNumber?: string | null;
+  mbRstNumber?: string | null;
+  skPstNumber?: string | null;
   phone?: string | null;
   email?: string | null;
   website?: string | null;

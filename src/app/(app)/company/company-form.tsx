@@ -6,6 +6,8 @@ import clsx from "clsx";
 import { Button, Card, CardHeader, Field, inputClass } from "@/components/ui";
 import type { CurrencyOption } from "@/lib/currency";
 import { PROVINCES } from "@/lib/enums";
+import { PST_REGISTRATIONS } from "@/lib/tax-registration";
+import { FILING_FREQUENCY_LABELS } from "@/lib/tax-filing";
 import { saveCompanyProfileAction, saveCustomerCodeAction, saveNumberingAction } from "./actions";
 import { FiscalYearField } from "./fiscal-year-field";
 
@@ -18,6 +20,12 @@ interface CompanyProfile {
   gstNumber: string;
   qstNumber: string;
   pstNumber: string;
+  bcPstNumber: string;
+  mbRstNumber: string;
+  skPstNumber: string;
+  /** Current-year GST/HST filing frequency, "" while not yet configured. */
+  filingFrequency: string;
+  filingYear: number;
   gstHstStatus: TaxStatus;
   qstStatus: TaxStatus;
   pstStatus: TaxStatus;
@@ -158,6 +166,28 @@ export function CompanyProfileForm({
             numberHint="Must appear on every invoice charging GST/HST."
             numberPlaceholder="123456789 RT0001"
           />
+          {gstHstStatus === "APPLICABLE" ? (
+            company.filingFrequency ? (
+              <p className="text-[0.75rem] text-muted-ink">
+                {company.filingYear} GST/HST filing: <span className="font-medium text-ink-900">{FILING_FREQUENCY_LABELS[company.filingFrequency as keyof typeof FILING_FREQUENCY_LABELS]}</span> —
+                final for the calendar year. Future years are set in the Tax Centre.
+              </p>
+            ) : (
+              <Field label={`${company.filingYear} GST/HST filing frequency`} hint="Final once saved — it cannot be changed during the calendar year. Future years can be set in the Tax Centre.">
+                <select name="gstHstFilingFrequency" defaultValue="" className={clsx(inputClass, "pr-8")}>
+                  <option value="">Choose later</option>
+                  <option value="MONTHLY">Monthly</option>
+                  <option value="QUARTERLY">Quarterly</option>
+                  <option value="ANNUAL">Annually</option>
+                </select>
+              </Field>
+            )
+          ) : company.filingFrequency ? null : (
+            <>
+              <input type="hidden" name="gstHstFilingFrequency" value="EXEMPT" />
+              <p className="text-[0.75rem] text-muted-ink">{company.filingYear} filing frequency will be recorded as Exempt.</p>
+            </>
+          )}
           <TaxStatusField
             label="QST number"
             name="qstStatus"
@@ -168,16 +198,44 @@ export function CompanyProfileForm({
             numberHint="Québec sales tax registration."
             numberPlaceholder="1234567890 TQ0001"
           />
-          <TaxStatusField
-            label="PST number"
-            name="pstStatus"
-            status={pstStatus}
-            onStatusChange={setPstStatus}
-            numberName="pstNumber"
-            numberValue={company.pstNumber}
-            numberHint="Provincial sales tax registration (BC, SK, MB) or retail sales tax (MB)."
-            numberPlaceholder="PST/RST registration number"
-          />
+          <div className="space-y-2">
+            <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_9rem]">
+              <p className="text-[0.75rem] leading-5 text-muted-ink sm:self-end">
+                PST/RST registrations are kept per province — fill in only the provinces the company is registered in.
+              </p>
+              <Field label="Collection status">
+                <select
+                  name="pstStatus"
+                  value={pstStatus}
+                  onChange={(event) => setPstStatus(event.target.value as TaxStatus)}
+                  className={clsx(inputClass, "pr-8")}
+                >
+                  {TAX_STATUS_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-3">
+              {PST_REGISTRATIONS.map((registration) => (
+                <Field key={registration.field} label={registration.label} hint="Optional">
+                  <input
+                    name={registration.field}
+                    defaultValue={company[registration.field]}
+                    maxLength={30}
+                    className={clsx(inputClass, "tnum")}
+                    placeholder={registration.placeholder}
+                  />
+                </Field>
+              ))}
+            </div>
+            {company.pstNumber && (
+              <>
+                <input type="hidden" name="pstNumber" value={company.pstNumber} />
+                <p className="text-[0.75rem] text-muted-ink">Existing PST number on file: {company.pstNumber} (not tied to BC, MB or SK).</p>
+              </>
+            )}
+          </div>
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2">

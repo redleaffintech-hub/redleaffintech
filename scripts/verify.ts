@@ -26,7 +26,8 @@ import { can } from "../src/lib/permissions";
 import { DEPRECIATION_AMORTIZATION_SUBTYPES, ITEM_TYPES, SYSTEM_ACCOUNTS } from "../src/lib/enums";
 import { formatMoney } from "../src/lib/money";
 import { DEFAULT_CURRENCY, normalizeCurrency } from "../src/lib/currency";
-import { taxRegistrationLines } from "../src/lib/tax-registration";
+import { normalizeAllPst, normalizePstNumber, taxRegistrationLines } from "../src/lib/tax-registration";
+import { filingYearLock, resolveFilingSelection } from "../src/lib/tax-filing";
 
 const results: { name: string; pass: boolean; detail: string }[] = [];
 function check(name: string, pass: boolean, detail: string) {
@@ -474,9 +475,28 @@ function leaveAndMedicalChecks() {
   check("Medical insurance: nothing is withheld when it is not enabled", medicalInsuranceCents({ ...medical, medicalInsuranceEnabled: false }, 200000, d("2026-10-05")) === 0, "0");
 }
 
+/** GST/HST filing-year lock and provincial PST registration rules — pure, no fixtures. */
+function filingAndPstChecks() {
+  check("Filing: Not applicable forces Exempt", JSON.stringify(resolveFilingSelection(false, undefined)) === JSON.stringify({ ok: true, value: { applicable: false, frequency: "EXEMPT" } }), "exempt");
+  check("Filing: Not applicable with Monthly is rejected as contradictory", !resolveFilingSelection(false, "MONTHLY").ok, "rejected");
+  check("Filing: Applicable needs Monthly/Quarterly/Annual (Exempt or blank rejected)", !resolveFilingSelection(true, "EXEMPT").ok && !resolveFilingSelection(true, "").ok && resolveFilingSelection(true, "ANNUAL").ok, "ok");
+  check("Filing lock: a future year is editable", filingYearLock(2027, 2026, true) === "EDITABLE" && filingYearLock(2027, 2026, false) === "EDITABLE", "2027 editable");
+  check("Filing lock: the current year is final once configured, settable once if blank", filingYearLock(2026, 2026, true) === "LOCKED_CURRENT" && filingYearLock(2026, 2026, false) === "EDITABLE", "2026 locked once set");
+  check("Filing lock: past years are never editable", filingYearLock(2025, 2026, true) === "LOCKED_PAST" && filingYearLock(2025, 2026, false) === "LOCKED_PAST", "2025 locked");
+  const ok = (field: "bcPstNumber" | "mbRstNumber" | "skPstNumber", raw: string) => { const r = normalizePstNumber(field, raw); return r.ok ? r.value : "ERR"; };
+  check("PST: BC normalises to PST-####-####", ok("bcPstNumber", "12345678") === "PST-1234-5678" && ok("bcPstNumber", "pst 1234 5678") === "PST-1234-5678", String(ok("bcPstNumber", "12345678")));
+  check("PST: Manitoba normalises to ######-#, Saskatchewan is 7 digits", ok("mbRstNumber", "1234567") === "123456-7" && ok("skPstNumber", "1234567") === "1234567", "formats");
+  check("PST: wrong length or letters are rejected, blank is allowed", ok("bcPstNumber", "1234") === "ERR" && ok("skPstNumber", "12A4567") === "ERR" && ok("mbRstNumber", "") === (null as unknown as string), "validation");
+  const mixed = normalizeAllPst({ bcPstNumber: "PST-1111-2222", mbRstNumber: "", skPstNumber: "7654321" });
+  check("PST: any combination is kept against its own province", mixed.ok && mixed.values.bcPstNumber === "PST-1111-2222" && mixed.values.mbRstNumber === null && mixed.values.skPstNumber === "7654321", "BC + SK only");
+  const lines = taxRegistrationLines({ gstNumber: null, qstNumber: null, pstNumber: null, bcPstNumber: "PST-1111-2222", skPstNumber: "7654321" });
+  check("PST: documents label each province's number separately", lines.length === 2 && lines[0].label === "BC PST" && lines[1].label === "SK PST", lines.map((l) => l.label).join(", "));
+}
+
 let aborted: unknown = null;
 
 leaveAndMedicalChecks();
+filingAndPstChecks();
 
 main()
   .catch((error) => {

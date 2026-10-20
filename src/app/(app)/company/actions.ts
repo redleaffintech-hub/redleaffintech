@@ -11,6 +11,9 @@ import { CAPABILITIES } from "@/lib/permissions";
 import { assignmentFromPlan, sellablePlanByCode } from "@/server/plans/catalogue";
 import { hashPassword } from "@/server/auth/password";
 import { recordAudit, requireCapability } from "@/server/auth/context";
+import { configureFilingYear, currentFilingYear } from "@/server/tax/filing-years";
+import { normalizeAllPst } from "@/lib/tax-registration";
+import { filingYearLock, resolveFilingSelection } from "@/lib/tax-filing";
 
 // ── Profile & preferences ───────────────────────────────────────────────────
 
@@ -24,6 +27,11 @@ const profileSchema = z.object({
   gstNumber: z.string().trim().max(30).optional(),
   qstNumber: z.string().trim().max(30).optional(),
   pstNumber: z.string().trim().max(30).optional(),
+  bcPstNumber: z.string().trim().max(30).optional(),
+  mbRstNumber: z.string().trim().max(30).optional(),
+  skPstNumber: z.string().trim().max(30).optional(),
+  /** Current-year GST/HST filing frequency; only honoured while the year is unconfigured. */
+  gstHstFilingFrequency: z.string().trim().max(12).optional(),
   gstHstStatus: taxStatus,
   qstStatus: taxStatus,
   pstStatus: taxStatus,
@@ -71,8 +79,21 @@ export async function saveCompanyProfileAction(formData: FormData) {
   if (input.qstStatus === "APPLICABLE" && !input.qstNumber) {
     return { error: "Enter a QST number, or set QST to Exempt or Not applicable." };
   }
-  if (input.pstStatus === "APPLICABLE" && !input.pstNumber) {
-    return { error: "Enter a PST number, or set PST/RST to Exempt or Not applicable." };
+  const pst = normalizeAllPst(input);
+  if (!pst.ok) return { error: pst.error };
+  if (input.pstStatus === "APPLICABLE" && !input.pstNumber && !pst.values.bcPstNumber && !pst.values.mbRstNumber && !pst.values.skPstNumber) {
+    return { error: "Enter at least one provincial PST/RST number, or set PST/RST to Exempt or Not applicable." };
+  }
+
+  // GST/HST filing frequency for the current year: set once at setup, then final.
+  const filingYear = currentFilingYear();
+  const filingExisting = await db.taxFilingYear.findUnique({ where: { companyId_year: { companyId: company.id, year: filingYear } } });
+  let filingToSet: { applicable: boolean; frequency: string } | null = null;
+  if (!filingExisting && input.gstHstFilingFrequency && filingYearLock(filingYear, filingYear, false) === "EDITABLE") {
+    const applicable = input.gstHstStatus === "APPLICABLE";
+    const resolved = resolveFilingSelection(applicable, applicable ? input.gstHstFilingFrequency : "EXEMPT");
+    if (!resolved.ok) return { error: resolved.error };
+    filingToSet = resolved.value;
   }
 
   // Base currency is a LABEL, not a conversion. Amounts are stored as integer
@@ -114,7 +135,8 @@ export async function saveCompanyProfileAction(formData: FormData) {
       businessNumber: input.businessNumber || null,
       gstNumber: input.gstNumber || null,
       qstNumber: input.qstNumber || null,
-      pstNumber: input.pstNumber || null,
+      pstNumber: input.pstNumber === undefined ? undefined : input.pstNumber || null,
+      ...pst.values,
       gstHstStatus: input.gstHstStatus,
       qstStatus: input.qstStatus,
       pstStatus: input.pstStatus,
@@ -133,6 +155,17 @@ export async function saveCompanyProfileAction(formData: FormData) {
       creditNoteFooter: input.creditNoteFooter || null,
     },
   });
+
+  if (filingToSet) {
+    const configured = await configureFilingYear({
+      companyId: company.id,
+      userId: user.id,
+      year: filingYear,
+      applicable: filingToSet.applicable,
+      frequency: filingToSet.frequency,
+    });
+    if ("error" in configured) return { error: `Profile saved, but the filing frequency was not: ${configured.error}` };
+  }
 
   await recordAudit({
     companyId: company.id,

@@ -52,6 +52,9 @@ export interface CompanyContext {
     gstNumber: string | null;
     qstNumber: string | null;
     pstNumber: string | null;
+    bcPstNumber: string | null;
+    mbRstNumber: string | null;
+    skPstNumber: string | null;
     businessNumber: string | null;
     isReadOnly: boolean;
     defaultTaxInclusive: boolean;
@@ -76,6 +79,7 @@ export interface CompanyContext {
 const COMPANY_CONTEXT_SELECT = {
   id: true, name: true, legalName: true, province: true, baseCurrency: true, locale: true,
   fiscalYearStartMonth: true, gstNumber: true, qstNumber: true, pstNumber: true,
+  bcPstNumber: true, mbRstNumber: true, skPstNumber: true,
   businessNumber: true, isReadOnly: true,
   defaultTaxInclusive: true, defaultPaymentTermsDays: true, logoUrl: true, enabledModules: true,
 } as const;

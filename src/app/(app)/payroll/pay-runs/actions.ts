@@ -246,6 +246,17 @@ export async function previewLineAction(payload: string): Promise<PreviewLineRes
   }
 }
 
+/** Approved paid vacation/sick leave inside the pay period, as pay-line figures. */
+export async function pullApprovedLeaveAction(start: string, end: string) {
+  const { company } = await requireCapability(CAPABILITIES.PAYROLL);
+  const from = new Date(`${start}T00:00:00.000Z`);
+  const to = new Date(`${end}T00:00:00.000Z`);
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return { error: "Set the pay period start and end first." };
+  if (to < from) return { error: "The pay period end is before its start." };
+  const { approvedLeaveForPeriod } = await import("@/server/payroll/leave-pay");
+  return { rows: await approvedLeaveForPeriod(company.id, from, to) };
+}
+
 export async function deletePayRunAction(formData: FormData) {
   const { company, user } = await requireCapability(CAPABILITIES.PAYROLL);
   const id = String(formData.get("id") ?? "");

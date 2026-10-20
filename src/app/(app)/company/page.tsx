@@ -1,9 +1,11 @@
 import { db } from "@/lib/db";
+import { currentFilingYear } from "@/server/tax/filing-years";
 import { requireVisible } from "@/server/auth/context";
 import { CAPABILITIES, can } from "@/lib/permissions";
 import { formatDate } from "@/lib/dates";
 import { DEFAULT_CURRENCY, currencyLabel, currencyOptions } from "@/lib/currency";
 import { PROVINCES } from "@/lib/enums";
+import { FILING_FREQUENCY_LABELS, type FilingFrequency } from "@/lib/tax-filing";
 import { Badge, Card, CardHeader, DefinitionList, PageHeader } from "@/components/ui";
 import { CompanyProfileForm, CustomerCodeForm, NumberingForm } from "./company-form";
 import { CompanyLogoCard } from "./logo-card";
@@ -20,6 +22,9 @@ export default async function CompanyPage() {
     db.account.count({ where: { companyId: company.id, isActive: true } }),
     db.companyUser.count({ where: { companyId: company.id, status: "ACTIVE" } }),
   ]);
+
+  const filingYear = currentFilingYear();
+  const filing = await db.taxFilingYear.findUnique({ where: { companyId_year: { companyId: company.id, year: filingYear } } });
 
   const provinceName = PROVINCES.find((p) => p.code === record.province)?.name ?? record.province;
 
@@ -43,6 +48,11 @@ export default async function CompanyPage() {
                 gstNumber: record.gstNumber ?? "",
                 qstNumber: record.qstNumber ?? "",
                 pstNumber: record.pstNumber ?? "",
+                bcPstNumber: record.bcPstNumber ?? "",
+                mbRstNumber: record.mbRstNumber ?? "",
+                skPstNumber: record.skPstNumber ?? "",
+                filingFrequency: filing?.frequency ?? "",
+                filingYear,
                 gstHstStatus: record.gstHstStatus === "UNSET" ? "APPLICABLE" : (record.gstHstStatus as "APPLICABLE" | "EXEMPT" | "NOT_APPLICABLE"),
                 qstStatus: record.qstStatus === "UNSET" ? "APPLICABLE" : (record.qstStatus as "APPLICABLE" | "EXEMPT" | "NOT_APPLICABLE"),
                 pstStatus: record.pstStatus === "UNSET" ? "APPLICABLE" : (record.pstStatus as "APPLICABLE" | "EXEMPT" | "NOT_APPLICABLE"),
@@ -76,6 +86,10 @@ export default async function CompanyPage() {
                   { label: "GST/HST", value: taxStatusLine(record.gstHstStatus, record.gstNumber) },
                   { label: "QST", value: taxStatusLine(record.qstStatus, record.qstNumber) },
                   { label: "PST/RST", value: taxStatusLine(record.pstStatus, record.pstNumber) },
+                  { label: "BC PST", value: record.bcPstNumber ?? "—" },
+                  { label: "Manitoba RST/PST", value: record.mbRstNumber ?? "—" },
+                  { label: "Saskatchewan PST", value: record.skPstNumber ?? "—" },
+                  { label: `${filingYear} GST/HST filing`, value: filing ? FILING_FREQUENCY_LABELS[filing.frequency as FilingFrequency] ?? filing.frequency : "Not set" },
                   { label: "Base currency", value: currencyLabel(record.baseCurrency || DEFAULT_CURRENCY) },
                   { label: "Address", value: [record.addressLine1, record.city, record.postalCode].filter(Boolean).join(", ") || "—" },
                   { label: "Email", value: record.email ?? "—" },

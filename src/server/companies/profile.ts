@@ -25,6 +25,7 @@ export const getCompanyProfile = cache(async (companyId: string) => {
     select: {
       name: true, legalName: true, addressLine1: true, addressLine2: true, city: true, province: true,
       postalCode: true, businessNumber: true, gstNumber: true, qstNumber: true, pstNumber: true,
+      bcPstNumber: true, mbRstNumber: true, skPstNumber: true,
       email: true, phone: true, website: true, logoUrl: true,
       invoiceFooter: true, quoteFooter: true, creditNoteFooter: true,
       gstHstStatus: true, qstStatus: true, pstStatus: true,

@@ -92,7 +92,11 @@ async function createCompanyAndSetup(tx: Tx, input: ProvisionCompanyInput) {
       businessNumber: input.businessNumber,
       gstNumber: input.gstNumber,
       qstNumber: input.qstNumber,
-      pstNumber: input.pstNumber,
+      // A single PST number goes to the company's own province when that province has its own field.
+      pstNumber: ["BC", "MB", "SK"].includes(input.province) ? undefined : input.pstNumber,
+      bcPstNumber: input.province === "BC" ? input.pstNumber : undefined,
+      mbRstNumber: input.province === "MB" ? input.pstNumber : undefined,
+      skPstNumber: input.province === "SK" ? input.pstNumber : undefined,
       ...defaultTaxStatuses(input.province),
       // An unrecognised code must not create a company that formats as garbage;
       // fall back to the default rather than storing whatever was passed.
@@ -120,7 +124,12 @@ async function createCompanyAndSetup(tx: Tx, input: ProvisionCompanyInput) {
   for (const year of years) {
     await createFiscalYear(tx, company.id, year, fiscalYearStartMonth);
   }
-  await createTaxPeriods(tx, company.id, years, input.taxFilingFrequency ?? "QUARTERLY");
+  const filingFrequency = input.taxFilingFrequency ?? "QUARTERLY";
+  await createTaxPeriods(tx, company.id, years, filingFrequency);
+  await tx.taxFilingYear.createMany({
+    data: years.map((year) => ({ companyId: company.id, year, applicable: true, frequency: filingFrequency })),
+    skipDuplicates: true,
+  });
 
   return company;
 }

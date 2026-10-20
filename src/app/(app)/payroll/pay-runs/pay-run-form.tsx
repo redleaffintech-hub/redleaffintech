@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { Fragment, useState } from "react";
 import clsx from "clsx";
 import { Button, Field, Select, inputClass } from "@/components/ui";
-import { createPayRunAction, previewLineAction, updatePayRunAction } from "./actions";
+import { createPayRunAction, previewLineAction, pullApprovedLeaveAction, updatePayRunAction } from "./actions";
 import type { PayRunFormValues, PayRunLineFormValue } from "./pay-run-values";
 
 interface BankAccountOption {
@@ -128,6 +128,35 @@ export function PayRunForm({
     });
   }
 
+  const [leaveNote, setLeaveNote] = useState<string | null>(null);
+
+  /** Fill vacation/sick hours and pay from approved leave in the period; salaried regular hours/pay shrink to match. */
+  async function pullLeave(start: string, end: string) {
+    if (!start || !end) return;
+    const result = await pullApprovedLeaveAction(start, end);
+    if ("error" in result) return setError(result.error ?? null);
+    const byId = new Map(result.rows.map((row) => [row.employeeId, row]));
+    let count = 0;
+    setForm((current) => ({
+      ...current,
+      lines: current.lines.map((line) => {
+        const row = byId.get(line.employeeId);
+        if (!row) return line;
+        if (row.vacationHours + row.sickHours > 0) count++;
+        return {
+          ...line,
+          vacationHours: row.vacationHours ? String(row.vacationHours) : "",
+          sickHours: row.sickHours ? String(row.sickHours) : "",
+          vacationPay: row.vacationPayCents ? fromCents(row.vacationPayCents) : "",
+          sickPay: row.sickPayCents ? fromCents(row.sickPayCents) : "",
+          regularHours: row.regularHours != null ? String(row.regularHours) : line.regularHours,
+          regularPay: row.regularPayCents != null ? fromCents(row.regularPayCents) : line.regularPay,
+        };
+      }),
+    }));
+    setLeaveNote(count > 0 ? `Approved leave pulled in for ${count} employee${count === 1 ? "" : "s"} — see Hours and the detail panel.` : "No approved vacation or sick leave falls in this period.");
+  }
+
   const includedCount = form.lines.filter((l) => l.include).length;
 
   async function submit() {
@@ -185,10 +214,10 @@ export function PayRunForm({
     <div className="space-y-5">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Field label="Pay period start" required>
-          <input type="date" value={form.payPeriodStart} onChange={(e) => setField("payPeriodStart", e.target.value)} className={inputClass} />
+          <input type="date" value={form.payPeriodStart} onChange={(e) => { setField("payPeriodStart", e.target.value); if (isNew) void pullLeave(e.target.value, form.payPeriodEnd); }} className={inputClass} />
         </Field>
         <Field label="Pay period end" required>
-          <input type="date" value={form.payPeriodEnd} onChange={(e) => setField("payPeriodEnd", e.target.value)} className={inputClass} />
+          <input type="date" value={form.payPeriodEnd} onChange={(e) => { setField("payPeriodEnd", e.target.value); if (isNew) void pullLeave(form.payPeriodStart, e.target.value); }} className={inputClass} />
         </Field>
         <Field label="Pay date" required hint="Determines the fiscal period this posts to, and which year's rates apply.">
           <input type="date" value={form.payDate} onChange={(e) => setField("payDate", e.target.value)} className={inputClass} />
@@ -201,6 +230,11 @@ export function PayRunForm({
             ))}
           </Select>
         </Field>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3">
+        <Button type="button" onClick={() => void pullLeave(form.payPeriodStart, form.payPeriodEnd)}>Pull approved leave</Button>
+        <span className="text-[0.75rem] text-muted-ink">{leaveNote ?? "Approved paid vacation and sick leave in the pay period is added automatically; click to refresh it (this re-sets leave and salaried regular pay)."}</span>
       </div>
 
       <Field label="Memo" hint="Appears on the journal entry.">

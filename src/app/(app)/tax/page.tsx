@@ -8,6 +8,9 @@ import { formatMoney } from "@/lib/money";
 import { taxRegistrationLines } from "@/lib/tax-registration";
 import { Badge, Callout, Card, CardHeader, LinkButton, Money, PageHeader, StatusBadge, Table, Td, Th, Tr } from "@/components/ui";
 import { FilePeriodButton } from "./file-period-button";
+import { FilingConfigCard, PstRegistrationsCard, type FilingYearRow } from "./filing-config";
+import { currentFilingYear } from "@/server/tax/filing-years";
+import { FILING_YEARS_AHEAD, filingYearLock, type FilingFrequency } from "@/lib/tax-filing";
 
 export const metadata = { title: "Tax Centre" };
 
@@ -38,6 +41,46 @@ export default async function TaxCentrePage({ searchParams }: PageProps<"/tax">)
     orderBy: { code: "asc" },
   });
 
+  // Year-wise filing configuration: every stored year, plus the current year
+  // and the upcoming ones that can still be set up.
+  const currentYear = currentFilingYear();
+  const stored = await db.taxFilingYear.findMany({ where: { companyId: company.id }, orderBy: { year: "desc" } });
+  const storedByYear = new Map(stored.map((row) => [row.year, row]));
+  const years = new Set<number>(stored.map((row) => row.year));
+  for (let y = currentYear; y <= currentYear + Math.min(FILING_YEARS_AHEAD, 3); y++) years.add(y);
+  const filingRows: FilingYearRow[] = [...years]
+    .sort((a, b) => b - a)
+    .map((year) => {
+      const row = storedByYear.get(year);
+      const lock = filingYearLock(year, currentYear, Boolean(row));
+      return {
+        year,
+        applicable: row ? row.applicable : null,
+        frequency: (row?.frequency as FilingFrequency | undefined) ?? null,
+        editable: lock === "EDITABLE",
+        lockLabel: lock === "LOCKED_PAST" ? "Historical · read-only" : "Final · read-only",
+      };
+    });
+  const companyRecord = await db.company.findUniqueOrThrow({
+    where: { id: company.id },
+    select: { pstNumber: true, bcPstNumber: true, mbRstNumber: true, skPstNumber: true },
+  });
+  const canConfigure = can(role, CAPABILITIES.TAX_SETTINGS);
+  const configCards = (
+    <>
+      <FilingConfigCard rows={filingRows} canEdit={canConfigure} currentYear={currentYear} />
+      <PstRegistrationsCard
+        canEdit={canConfigure}
+        values={{
+          bcPstNumber: companyRecord.bcPstNumber ?? "",
+          mbRstNumber: companyRecord.mbRstNumber ?? "",
+          skPstNumber: companyRecord.skPstNumber ?? "",
+          legacy: companyRecord.pstNumber ?? "",
+        }}
+      />
+    </>
+  );
+
   return (
     <>
       <PageHeader
@@ -55,6 +98,9 @@ export default async function TaxCentrePage({ searchParams }: PageProps<"/tax">)
         <Callout tone="caution" title="No filing periods configured">
           Create tax periods so remittances can be tracked and reconciled.
         </Callout>
+      ) : null}
+      {!result ? (
+        <div className="mt-4 grid gap-4 lg:grid-cols-2 lg:items-start">{configCards}</div>
       ) : (
         <div className="grid gap-4 lg:grid-cols-[1fr_20rem] lg:items-start">
           <div className="space-y-4">
@@ -182,6 +228,7 @@ export default async function TaxCentrePage({ searchParams }: PageProps<"/tax">)
           </div>
 
           <div className="space-y-4">
+            {configCards}
             <Card>
               <CardHeader title="Filing periods" action={<LinkButton href="/tax/periods">All</LinkButton>} />
               <ul className="mt-3 space-y-1">

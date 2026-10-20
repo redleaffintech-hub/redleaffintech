@@ -120,7 +120,12 @@ model Company {
   businessNumber       String?
   gstNumber            String?
   qstNumber            String?
+  /// Legacy single PST number. Migrated into the province fields below when the
+  /// company's province is BC/MB/SK; otherwise kept here untouched.
   pstNumber            String?
+  bcPstNumber          String?
+  mbRstNumber          String?
+  skPstNumber          String?
   province             String    @default("ON")
   country              String    @default("CA")
   addressLine1         String?
@@ -208,6 +213,7 @@ model Company {
   accounts                  Account[]
   taxCodes                  TaxCode[]
   taxPeriods                TaxPeriod[]
+  taxFilingYears            TaxFilingYear[]
   fiscalPeriods             FiscalPeriod[]
   fiscalCalendarChanges     FiscalCalendarChange[]
   subscriptionCompany       SubscriptionCompany?
@@ -464,6 +470,25 @@ model TaxPeriod {
   taxEntries TaxEntry[]
 
   @@index([companyId, startDate])
+}
+
+/// GST/HST filing configuration for one calendar year. Stored per year so a
+/// company can file monthly in 2026 and quarterly in 2027. Once the year has
+/// begun (or was first configured while current) the row is immutable —
+/// enforced in src/server/tax/filing-years.ts, with no override path.
+model TaxFilingYear {
+  id          String   @id @default(cuid())
+  companyId   String
+  year        Int
+  applicable  Boolean
+  frequency   String // EXEMPT | MONTHLY | QUARTERLY | ANNUAL
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, year])
 }
 
 /// One row per tax component per source line — powers Tax Summary & Tax Detail

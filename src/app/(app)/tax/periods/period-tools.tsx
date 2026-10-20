@@ -6,11 +6,14 @@ import clsx from "clsx";
 import { Button, Card, CardHeader, Field, inputClass } from "@/components/ui";
 import { deleteTaxPeriodAction, generateTaxPeriodsAction } from "../actions";
 
-export function GeneratePeriodsForm({ defaultYear }: { defaultYear: number }) {
+export function GeneratePeriodsForm({ defaultYear, configs }: { defaultYear: number; configs: Record<number, string> }) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const years = [defaultYear - 1, defaultYear, defaultYear + 1];
+  const [year, setYear] = useState(defaultYear);
+  const fixed = configs[year];
+  const fixedLabel: Record<string, string> = { MONTHLY: "Monthly", QUARTERLY: "Quarterly", ANNUAL: "Annually", EXEMPT: "Exempt" };
 
   return (
     <Card>
@@ -29,18 +32,20 @@ export function GeneratePeriodsForm({ defaultYear }: { defaultYear: number }) {
         className="mt-3 space-y-3"
       >
         <Field label="Calendar year" required>
-          <select name="year" className={clsx(inputClass, "pr-8")} defaultValue={String(defaultYear)}>
+          <select name="year" className={clsx(inputClass, "pr-8")} value={year} onChange={(event) => setYear(Number(event.target.value))}>
             {years.map((year) => (
               <option key={year} value={year}>{year}</option>
             ))}
           </select>
         </Field>
 
-        <Field label="Filing frequency" required hint="Quarterly is the common assignment for small filers.">
-          <select name="frequency" className={clsx(inputClass, "pr-8")} defaultValue="QUARTERLY">
+        <Field label="Filing frequency" required hint={fixed ? `Set for ${year} in the Tax Centre and fixed for the year.` : "Quarterly is the common assignment for small filers. Saved as this year's frequency."}>
+          {fixed && <input type="hidden" name="frequency" value={fixed} />}
+          <select name={fixed ? undefined : "frequency"} disabled={Boolean(fixed)} className={clsx(inputClass, "pr-8")} {...(fixed ? { value: fixed, onChange: () => {} } : { defaultValue: "QUARTERLY" })}>
             <option value="MONTHLY">Monthly</option>
             <option value="QUARTERLY">Quarterly</option>
             <option value="ANNUAL">Annual</option>
+            {fixed === "EXEMPT" && <option value="EXEMPT">{fixedLabel.EXEMPT}</option>}
           </select>
         </Field>
 
