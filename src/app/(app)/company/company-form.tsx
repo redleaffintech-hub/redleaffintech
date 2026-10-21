@@ -170,10 +170,10 @@ export function CompanyProfileForm({
             company.filingFrequency ? (
               <p className="text-[0.75rem] text-muted-ink">
                 {company.filingYear} GST/HST filing: <span className="font-medium text-ink-900">{FILING_FREQUENCY_LABELS[company.filingFrequency as keyof typeof FILING_FREQUENCY_LABELS]}</span> —
-                final for the calendar year. Future years are set in the Tax Centre.
+                change it in the Tax Centre.
               </p>
             ) : (
-              <Field label={`${company.filingYear} GST/HST filing frequency`} hint="Final once saved — it cannot be changed during the calendar year. Future years can be set in the Tax Centre.">
+              <Field label={`${company.filingYear} GST/HST filing frequency`} hint="You can change this later in the Tax Centre.">
                 <select name="gstHstFilingFrequency" defaultValue="" className={clsx(inputClass, "pr-8")}>
                   <option value="">Choose later</option>
                   <option value="MONTHLY">Monthly</option>

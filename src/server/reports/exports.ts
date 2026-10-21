@@ -585,6 +585,7 @@ const taxSummaryExport: ExportDefinition = {
         jurisdiction: "",
         taxCode: "",
         taxCodeName: "Total",
+        province: "",
         ...report.totals,
       },
     ];

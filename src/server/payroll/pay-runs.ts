@@ -43,6 +43,9 @@ export interface PayRunLineInput {
   vacationHours?: number | null;
   sickHours?: number | null;
   statutoryHolidayHours?: number | null;
+  /** Unpaid leave already deducted from regularPayCents (informational; gross is unaffected). */
+  unpaidLeaveHours?: number | null;
+  unpaidLeaveCents?: number;
 
   regularPayCents?: number;
   /** Omit to have this suggested from overtimeHours * the employee's (or otRateMultiplierMicro's) overtime rate. */
@@ -104,6 +107,8 @@ interface ResolvedLine {
   vacationHours: number | null;
   sickHours: number | null;
   statutoryHolidayHours: number | null;
+  unpaidLeaveHours: number | null;
+  unpaidLeaveCents: number;
   regularPayCents: number;
   overtimePayCents: number;
   vacationPayCents: number;
@@ -287,6 +292,8 @@ async function resolveLines(tx: Tx, companyId: string, payDate: Date, lines: Pay
       vacationHours,
       sickHours,
       statutoryHolidayHours,
+      unpaidLeaveHours: line.unpaidLeaveHours ?? null,
+      unpaidLeaveCents: line.unpaidLeaveCents ?? 0,
       ...earnings,
       grossPayCents,
       otRateMultiplierMicro: line.otRateMultiplierMicro ?? null,
@@ -336,6 +343,8 @@ function lineCreateData(companyId: string, line: ResolvedLine) {
     vacationHours: line.vacationHours,
     sickHours: line.sickHours,
     statutoryHolidayHours: line.statutoryHolidayHours,
+    unpaidLeaveHours: line.unpaidLeaveHours,
+    unpaidLeaveCents: line.unpaidLeaveCents,
     regularPayCents: line.regularPayCents,
     overtimePayCents: line.overtimePayCents,
     vacationPayCents: line.vacationPayCents,

@@ -1,9 +1,12 @@
+import { Fragment } from "react";
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES, can } from "@/lib/permissions";
+import type { TaxLineSummary } from "@/server/reports/tax";
 import { taxPeriodReturn } from "@/server/reports/tax";
 import { addDays, addMonths, endOfMonth, formatDate, today } from "@/lib/dates";
+import { PROVINCES } from "@/lib/enums";
 import { formatMoney } from "@/lib/money";
 import { taxRegistrationLines } from "@/lib/tax-registration";
 import { Badge, Callout, Card, CardHeader, LinkButton, Money, PageHeader, StatusBadge, Table, Td, Th, Tr } from "@/components/ui";
@@ -33,6 +36,7 @@ export default async function TaxCentrePage({ searchParams }: PageProps<"/tax">)
 
   const selected = periods.find((p) => p.id === selectedId);
   const result = selected ? await taxPeriodReturn(company.id, selected.id) : null;
+  const provinceGroups = groupByProvince(result?.summary.rows ?? []);
   const dueDate = selected ? endOfMonth(addMonths(selected.endDate, 1)) : null;
 
   const taxCodes = await db.taxCode.findMany({
@@ -198,11 +202,11 @@ export default async function TaxCentrePage({ searchParams }: PageProps<"/tax">)
             </Card>
 
             <Card className="p-5">
-              <CardHeader title="By tax code" subtitle="What makes up the return" />
+              <CardHeader title="By province" subtitle="What makes up the return, grouped by province" />
               <Table className="mt-3">
                 <thead>
                   <tr>
-                    <Th>Code</Th>
+                    <Th>Province</Th>
                     <Th width="9rem" align="right">Taxable sales</Th>
                     <Th width="9rem" align="right">Collected</Th>
                     <Th width="9rem" align="right">ITCs</Th>
@@ -210,17 +214,30 @@ export default async function TaxCentrePage({ searchParams }: PageProps<"/tax">)
                   </tr>
                 </thead>
                 <tbody>
-                  {result.summary.rows.map((row) => (
-                    <Tr key={`${row.kind}-${row.taxCode}`}>
-                      <Td>
-                        <span className="font-medium text-ink-900">{row.taxCode}</span>
-                        <span className="block text-[0.75rem] text-muted-ink">{row.taxCodeName}</span>
-                      </Td>
-                      <Td align="right"><Money cents={row.salesTaxableCents} blankZero /></Td>
-                      <Td align="right"><Money cents={row.taxCollectedCents} blankZero /></Td>
-                      <Td align="right"><Money cents={row.recoverableCents} blankZero /></Td>
-                      <Td align="right"><Money cents={row.netCents} bold /></Td>
-                    </Tr>
+                  {provinceGroups.map((group) => (
+                    <Fragment key={group.province}>
+                      <Tr>
+                        <Td>
+                          <span className="font-semibold text-ink-900">{group.label}</span>
+                        </Td>
+                        <Td align="right"><Money cents={group.sales} blankZero bold /></Td>
+                        <Td align="right"><Money cents={group.collected} blankZero bold /></Td>
+                        <Td align="right"><Money cents={group.itc} blankZero bold /></Td>
+                        <Td align="right"><Money cents={group.net} bold /></Td>
+                      </Tr>
+                      {group.rows.map((row) => (
+                        <Tr key={`${row.kind}-${row.taxCode}`}>
+                          <Td>
+                            <span className="pl-4 text-ink-900">{row.taxCode}</span>
+                            <span className="block pl-4 text-[0.75rem] text-muted-ink">{row.taxCodeName}</span>
+                          </Td>
+                          <Td align="right"><Money cents={row.salesTaxableCents} blankZero /></Td>
+                          <Td align="right"><Money cents={row.taxCollectedCents} blankZero /></Td>
+                          <Td align="right"><Money cents={row.recoverableCents} blankZero /></Td>
+                          <Td align="right"><Money cents={row.netCents} /></Td>
+                        </Tr>
+                      ))}
+                    </Fragment>
                   ))}
                 </tbody>
               </Table>
@@ -312,5 +329,33 @@ function ReturnLine({
         {formatMoney(value, { currency })}
       </span>
     </div>
+  );
+}
+
+function groupByProvince(rows: TaxLineSummary[]) {
+  const groups = new Map<string, { province: string; label: string; rows: TaxLineSummary[]; sales: number; collected: number; itc: number; net: number }>();
+  for (const row of rows) {
+    let group = groups.get(row.province);
+    if (!group) {
+      const name = PROVINCES.find((p) => p.code === row.province)?.name;
+      group = {
+        province: row.province,
+        label: name ?? (row.province === "CA" ? "Federal (GST only)" : row.province),
+        rows: [],
+        sales: 0,
+        collected: 0,
+        itc: 0,
+        net: 0,
+      };
+      groups.set(row.province, group);
+    }
+    group.rows.push(row);
+    group.sales += row.salesTaxableCents;
+    group.collected += row.taxCollectedCents;
+    group.itc += row.recoverableCents;
+    group.net += row.netCents;
+  }
+  return [...groups.values()].sort((a, b) =>
+    a.province === "CA" ? -1 : b.province === "CA" ? 1 : a.label.localeCompare(b.label),
   );
 }

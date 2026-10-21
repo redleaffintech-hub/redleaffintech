@@ -94,6 +94,8 @@ export function PayRunForm({
         vacationHours: line.vacationHours ? Number(line.vacationHours) : null,
         sickHours: line.sickHours ? Number(line.sickHours) : null,
         statutoryHolidayHours: line.statutoryHolidayHours ? Number(line.statutoryHolidayHours) : null,
+        unpaidLeaveHours: line.unpaidLeaveHours ? Number(line.unpaidLeaveHours) : null,
+        unpaidLeaveCents: money(line.unpaidLeave),
         regularPayCents: money(line.regularPay),
         overtimePayCents: line.overtimePay ? money(line.overtimePay) : null,
         vacationPayCents: money(line.vacationPay),
@@ -133,14 +135,14 @@ export function PayRunForm({
   /** Fill vacation/sick hours and pay from approved leave in the period; salaried regular hours/pay shrink to match. */
   async function pullLeave(start: string, end: string) {
     if (!start || !end) return;
-    const result = await pullApprovedLeaveAction(start, end);
+    const result = await pullApprovedLeaveAction(start, end, initial.id || null);
     if ("error" in result) return setError(result.error ?? null);
     const byId = new Map(result.rows.map((row) => [row.employeeId, row]));
     // Counted here, not inside the state updater: React runs updaters later, so a
     // counter bumped in there is still zero when the message below is built.
     const withLeave = form.lines.filter((line) => {
       const row = byId.get(line.employeeId);
-      return row && row.vacationHours + row.sickHours > 0;
+      return row && row.vacationHours + row.sickHours + row.unpaidHours > 0;
     });
     const count = withLeave.length;
     setExpanded((current) => new Set([...current, ...withLeave.map((line) => line.employeeId)]));
@@ -155,12 +157,14 @@ export function PayRunForm({
           sickHours: row.sickHours ? String(row.sickHours) : "",
           vacationPay: row.vacationPayCents ? fromCents(row.vacationPayCents) : "",
           sickPay: row.sickPayCents ? fromCents(row.sickPayCents) : "",
+          unpaidLeaveHours: row.unpaidHours ? String(row.unpaidHours) : "",
+          unpaidLeave: row.unpaidCents ? fromCents(row.unpaidCents) : "",
           regularHours: row.regularHours != null ? String(row.regularHours) : line.regularHours,
           regularPay: row.regularPayCents != null ? fromCents(row.regularPayCents) : line.regularPay,
         };
       }),
     }));
-    setLeaveNote(count > 0 ? `Approved leave pulled in for ${withLeave.map((line) => { const row = byId.get(line.employeeId)!; return `${line.employeeName} (${row.vacationHours}h vacation, ${row.sickHours}h sick)`; }).join("; ")}.` : "No approved vacation or sick leave falls in this period.");
+    setLeaveNote(count > 0 ? `Approved leave pulled in for ${withLeave.map((line) => { const row = byId.get(line.employeeId)!; return `${line.employeeName} (${[row.vacationHours && `${row.vacationHours}h vacation`, row.sickHours && `${row.sickHours}h sick`, row.unpaidHours && `${row.unpaidHours}h unpaid (-${fromCents(row.unpaidCents)})`].filter(Boolean).join(", ")})`; }).join("; ")}.` : "No approved leave falls in this period.");
   }
 
   const includedCount = form.lines.filter((l) => l.include).length;
@@ -186,6 +190,8 @@ export function PayRunForm({
         vacationHours: line.vacationHours ? Number(line.vacationHours) : null,
         sickHours: line.sickHours ? Number(line.sickHours) : null,
         statutoryHolidayHours: line.statutoryHolidayHours ? Number(line.statutoryHolidayHours) : null,
+        unpaidLeaveHours: line.unpaidLeaveHours ? Number(line.unpaidLeaveHours) : null,
+        unpaidLeaveCents: money(line.unpaidLeave),
         regularPayCents: money(line.regularPay),
         overtimePayCents: line.overtimePay ? money(line.overtimePay) : null,
         vacationPayCents: money(line.vacationPay),

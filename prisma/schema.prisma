@@ -1955,6 +1955,12 @@ model PayRunLine {
   retroactivePayCents      Int @default(0)
   statutoryHolidayPayCents Int @default(0)
   grossPayCents            Int
+  /// Unpaid leave already carved out of regularPayCents (salaried employees):
+  /// regular pay is stored net of it, and the pay stub shows it as its own
+  /// negative line. Also the record that stops the same leave being deducted in
+  /// a second pay run.
+  unpaidLeaveHours         Float?
+  unpaidLeaveCents         Int @default(0)
 
   /// Overrides the employee's defaultOvertimeRateMultiplierMicro for this
   /// line only. Null defers to the employee's default.

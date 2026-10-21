@@ -83,6 +83,42 @@ export async function decideLeaveRequestAction(formData: FormData) {
     const [row] = (await leaveTrackers(company.id, { employeeId: existing.employeeId, asOf: existing.startDate })).filter(
       (r) => r.leaveTypeId === existing.leaveTypeId,
     );
+    // Vacation is the one paid leave that rolls over into unpaid: hours beyond
+    // the balance are approved as unpaid leave (and deducted in payroll) instead
+    // of blocking the request. Other tracked leave still may not overdraw.
+    if (row && existing.leaveType.category === "VACATION" && existing.hours > row.tracker.remainingHours) {
+      const available = Math.max(0, Math.round(row.tracker.remainingHours * 100) / 100);
+      const excess = Math.round((existing.hours - available) * 100) / 100;
+      const unpaidType =
+        (await db.leaveType.findFirst({ where: { companyId: company.id, isActive: true, isPaid: false, category: "UNPAID" } })) ??
+        (await db.leaveType.create({ data: { companyId: company.id, name: "Unpaid leave of absence", category: "UNPAID", isPaid: false, trackBalance: false } }));
+      const decided = { decidedById: user.id, decidedAt: new Date() };
+      const note = `${input.decisionNote ? `${input.decisionNote} ` : ""}Auto-classified as unpaid: vacation balance was ${available}h.`;
+
+      await db.$transaction(async (tx) => {
+        if (available > 0) {
+          await tx.leaveRequest.update({ where: { id: existing.id }, data: { status: "APPROVED", hours: available, ...decided, decisionNote: input.decisionNote || null } });
+          await tx.leaveRequest.create({
+            data: {
+              companyId: company.id, employeeId: existing.employeeId, leaveTypeId: unpaidType.id,
+              startDate: existing.startDate, endDate: existing.endDate, hours: excess,
+              reason: `${existing.reason ? `${existing.reason} — ` : ""}Excess over vacation balance`,
+              requestedById: existing.requestedById, status: "APPROVED", ...decided, decisionNote: note,
+            },
+          });
+        } else {
+          await tx.leaveRequest.update({ where: { id: existing.id }, data: { status: "APPROVED", leaveTypeId: unpaidType.id, ...decided, decisionNote: note } });
+        }
+      });
+
+      await recordAudit({
+        companyId: company.id, userId: user.id, action: "UPDATE", entityType: "LeaveRequest", entityId: existing.id,
+        summary: `Leave request for ${existing.employee.legalFirstName} ${existing.employee.legalLastName} approved: ${available}h vacation + ${excess}h unpaid (vacation balance exhausted)`,
+      });
+      revalidatePath("/hr/time-off");
+      revalidatePath(`/hr/employees/${existing.employeeId}`);
+      return { ok: true as const };
+    }
     if (row && existing.hours > row.tracker.remainingHours) {
       return {
         error: `${existing.employee.legalFirstName} has only ${row.tracker.remainingHours}h of ${existing.leaveType.name} available — this request is for ${existing.hours}h. Add a balance adjustment first, or decline it.`,

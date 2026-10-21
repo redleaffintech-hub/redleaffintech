@@ -2,11 +2,8 @@
  * GST/HST filing-frequency rules, kept pure so the server action, the UI and
  * the acceptance checks all apply exactly the same logic.
  *
- * Finalisation: a calendar year's configuration is final from the moment the
- * year has begun. A year that has not started yet is editable; the current
- * year may be configured once if it has no configuration at all (a new
- * company's first setup) and is then final; past years are never editable.
- * There is no role that bypasses this.
+ * The current year and future years are editable; past calendar years are
+ * final and never editable. There is no role that bypasses this.
  */
 
 export const FILING_FREQUENCIES = ["EXEMPT", "MONTHLY", "QUARTERLY", "ANNUAL"] as const;
@@ -60,8 +57,7 @@ export function resolveFilingSelection(
  */
 export function filingYearLock(year: number, currentYear: number, exists: boolean): YearLock {
   if (year > currentYear + FILING_YEARS_AHEAD) return "NOT_YET_OPEN";
-  if (year > currentYear) return "EDITABLE";
-  if (year === currentYear) return exists ? "LOCKED_CURRENT" : "EDITABLE";
+    if (year >= currentYear) return "EDITABLE";
   return "LOCKED_PAST";
 }
 

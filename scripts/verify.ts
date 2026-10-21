@@ -481,7 +481,7 @@ function filingAndPstChecks() {
   check("Filing: Not applicable with Monthly is rejected as contradictory", !resolveFilingSelection(false, "MONTHLY").ok, "rejected");
   check("Filing: Applicable needs Monthly/Quarterly/Annual (Exempt or blank rejected)", !resolveFilingSelection(true, "EXEMPT").ok && !resolveFilingSelection(true, "").ok && resolveFilingSelection(true, "ANNUAL").ok, "ok");
   check("Filing lock: a future year is editable", filingYearLock(2027, 2026, true) === "EDITABLE" && filingYearLock(2027, 2026, false) === "EDITABLE", "2027 editable");
-  check("Filing lock: the current year is final once configured, settable once if blank", filingYearLock(2026, 2026, true) === "LOCKED_CURRENT" && filingYearLock(2026, 2026, false) === "EDITABLE", "2026 locked once set");
+  check("Filing lock: the current year stays editable", filingYearLock(2026, 2026, true) === "EDITABLE" && filingYearLock(2026, 2026, false) === "EDITABLE", "2026 editable");
   check("Filing lock: past years are never editable", filingYearLock(2025, 2026, true) === "LOCKED_PAST" && filingYearLock(2025, 2026, false) === "LOCKED_PAST", "2025 locked");
   const ok = (field: "bcPstNumber" | "mbRstNumber" | "skPstNumber", raw: string) => { const r = normalizePstNumber(field, raw); return r.ok ? r.value : "ERR"; };
   check("PST: BC normalises to PST-####-####", ok("bcPstNumber", "12345678") === "PST-1234-5678" && ok("bcPstNumber", "pst 1234 5678") === "PST-1234-5678", String(ok("bcPstNumber", "12345678")));

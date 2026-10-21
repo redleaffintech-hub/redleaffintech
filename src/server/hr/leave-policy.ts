@@ -40,7 +40,15 @@ export const BALANCE_KINDS = ["ADJUSTMENT", "CARRY_FORWARD"] as const;
  */
 export async function leaveTrackers(
   companyId: string,
-  opts: { employeeId?: string; asOf?: Date } = {},
+  opts: {
+    employeeId?: string;
+    asOf?: Date;
+    /**
+     * Pay-stub mode: balance exactly as of `asOf`. Leave that starts after that
+     * date is not yet taken, and a terminated employee still gets a figure.
+     */
+    historical?: boolean;
+  } = {},
 ): Promise<TrackerRow[]> {
   const asOf = opts.asOf ?? todayUtc();
 
@@ -51,7 +59,7 @@ export async function leaveTrackers(
       orderBy: { leaveType: { name: "asc" } },
     }),
     db.employee.findMany({
-      where: { companyId, employmentStatus: { not: "TERMINATED" }, ...(opts.employeeId ? { id: opts.employeeId } : {}) },
+      where: { companyId, ...(opts.historical ? {} : { employmentStatus: { not: "TERMINATED" } }), ...(opts.employeeId ? { id: opts.employeeId } : {}) },
       orderBy: [{ legalFirstName: "asc" }, { legalLastName: "asc" }],
       select: { id: true, legalFirstName: true, legalLastName: true, employeeType: true, hireDate: true, terminationDate: true },
     }),
@@ -77,6 +85,7 @@ export async function leaveTrackers(
         .map((r) => ({ kind: r.kind, hours: r.hours, effectiveDate: r.effectiveDate, leaveYear: r.leaveYear, expiresOn: r.expiresOn }));
       const reqs: LeaveRequestRow[] = requests
         .filter((r) => r.employeeId === employee.id && r.leaveTypeId === policy.leaveTypeId)
+        .filter((r) => !opts.historical || r.startDate <= asOf)
         .map((r) => ({ status: r.status, hours: r.hours, startDate: r.startDate }));
 
       rows.push({

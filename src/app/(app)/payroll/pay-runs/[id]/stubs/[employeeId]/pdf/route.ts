@@ -28,7 +28,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
 
   const stub = await loadPayStub(company.id, id, employeeId);
   if (!stub) return new NextResponse("Pay stub not found", { status: 404 });
-  const { line, employee, payRun, profile, ytd, earnings, deductions, totalDeductions } = stub;
+  const { line, employee, payRun, profile, ytd, earnings, deductions, totalDeductions, leaveSummary } = stub;
 
   const currency = company.baseCurrency;
   const fmt = (cents: number) => ascii(formatMoney(cents, { currency }));
@@ -192,6 +192,31 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     }
     y = Math.min(y, cy);
   }
+
+  // ── Leave balance summary (hours, as of the pay date) ─────────────────────
+  y -= 18;
+  ensureSpace(80);
+  const lh = (v: number | null) => (v === null ? "N/A" : v.toFixed(2));
+  const lCar = 330;
+  const lAcc = 410;
+  const lUse = 488;
+  const lRem = RIGHT;
+  header("LEAVE BALANCE SUMMARY (HOURS)", [
+    { label: "Carried/adj.", xRight: lCar },
+    { label: "Accrued YTD", xRight: lAcc },
+    { label: "Availed YTD", xRight: lUse },
+    { label: "Remaining", xRight: lRem },
+  ]);
+  for (const l of leaveSummary) {
+    row(l.label, [
+      { v: lh(l.carriedHours), xRight: lCar },
+      { v: lh(l.accruedHours), xRight: lAcc },
+      { v: lh(l.availedHours), xRight: lUse },
+      { v: lh(l.remainingHours), xRight: lRem },
+    ]);
+  }
+  text(`Balances as of the pay date, ${formatDate(payRun.payDate)}. Remaining = carried/adj. + accrued - availed; pending requests are not deducted.`, LEFT, y + 2, font, 7.5, muted);
+  y -= 12;
 
   if (line.notes) {
     y -= 16;

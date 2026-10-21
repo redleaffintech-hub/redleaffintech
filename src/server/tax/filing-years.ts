@@ -67,9 +67,8 @@ export async function configureFilingYear(input: {
       update: { applicable, frequency },
     });
   } catch (error) {
-    // A concurrent first-time save of the same year hit the unique index: the
-    // year is now configured, and for the current year that means final.
-    if ((error as { code?: string }).code === "P2002") return { error: filingLockMessage("LOCKED_CURRENT", year) };
+    // A concurrent first-time save of the same year hit the unique index.
+    if ((error as { code?: string }).code === "P2002") return { error: "Another save for this year just completed. Refresh and try again." };
     throw error;
   }
 

@@ -18,7 +18,7 @@ export default async function PayStubPage({ params }: { params: Promise<{ id: st
   // Stubs only exist for a finalized pay run; the same data feeds the PDF.
   const stub = await loadPayStub(company.id, id, employeeId);
   if (!stub) notFound();
-  const { line, employee, payRun, profile: companyProfile, ytd, earnings, deductions, totalDeductions } = stub;
+  const { line, employee, payRun, profile: companyProfile, ytd, earnings, deductions, totalDeductions, leaveSummary } = stub;
 
   const currency = company.baseCurrency;
   const fmt = (cents: number) => formatMoney(cents, { currency });
@@ -146,6 +146,37 @@ export default async function PayStubPage({ params }: { params: Promise<{ id: st
               </tr>
             </tbody>
           </table>
+        </div>
+
+        <div className="inv-scroll mt-4">
+          <table className="inv-table min-w-[36rem]">
+            <thead>
+              <tr>
+                <th>Leave balance summary (hours)</th>
+                <th className="inv-num w-28">Carried / adj.</th>
+                <th className="inv-num w-28">Accrued YTD</th>
+                <th className="inv-num w-28">Availed YTD</th>
+                <th className="inv-num w-28">Remaining</th>
+              </tr>
+            </thead>
+            <tbody>
+              {leaveSummary.map((row) => {
+                const h = (v: number | null) => (v === null ? "N/A" : v.toFixed(2));
+                return (
+                  <tr key={row.label}>
+                    <td>{row.label}</td>
+                    <td className="inv-num tnum">{h(row.carriedHours)}</td>
+                    <td className="inv-num tnum">{h(row.accruedHours)}</td>
+                    <td className="inv-num tnum">{h(row.availedHours)}</td>
+                    <td className="inv-num tnum font-semibold">{h(row.remainingHours)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <p className="mt-1 text-[0.6875rem] text-[color:var(--inv-ink)]/65">
+            As of the pay date, {formatDate(payRun.payDate)}. Remaining = carried / adj. + accrued − availed; pending requests are not deducted.
+          </p>
         </div>
 
         <div className="mt-5 grid gap-4 sm:grid-cols-2">

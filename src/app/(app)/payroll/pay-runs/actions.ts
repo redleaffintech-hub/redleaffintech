@@ -22,6 +22,8 @@ const lineSchema = z.object({
   vacationHours: z.number().min(0).max(1000).nullable().optional(),
   sickHours: z.number().min(0).max(1000).nullable().optional(),
   statutoryHolidayHours: z.number().min(0).max(1000).nullable().optional(),
+  unpaidLeaveHours: z.number().min(0).max(1000).nullable().optional(),
+  unpaidLeaveCents: z.number().int().min(0).optional(),
   regularPayCents: z.number().int().min(0).optional(),
   overtimePayCents: z.number().int().min(0).nullable().optional(),
   vacationPayCents: z.number().int().min(0).optional(),
@@ -247,14 +249,14 @@ export async function previewLineAction(payload: string): Promise<PreviewLineRes
 }
 
 /** Approved paid vacation/sick leave inside the pay period, as pay-line figures. */
-export async function pullApprovedLeaveAction(start: string, end: string) {
+export async function pullApprovedLeaveAction(start: string, end: string, payRunId: string | null = null) {
   const { company } = await requireCapability(CAPABILITIES.PAYROLL);
   const from = new Date(`${start}T00:00:00.000Z`);
   const to = new Date(`${end}T00:00:00.000Z`);
   if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return { error: "Set the pay period start and end first." };
   if (to < from) return { error: "The pay period end is before its start." };
   const { approvedLeaveForPeriod } = await import("@/server/payroll/leave-pay");
-  return { rows: await approvedLeaveForPeriod(company.id, from, to) };
+  return { rows: await approvedLeaveForPeriod(company.id, from, to, { excludePayRunId: payRunId }) };
 }
 
 export async function deletePayRunAction(formData: FormData) {

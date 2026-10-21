@@ -91,7 +91,7 @@ function YearRow({ row, canEdit, currentYear }: { row: FilingYearRow; canEdit: b
         >
           {saving ? "Saving…" : saved ? "Saved" : "Save"}
         </Button>
-        <p className="mt-1 text-[0.6875rem] text-muted-ink">{row.year === currentYear ? "Final once saved" : "Editable until Jan 1"}</p>
+        <p className="mt-1 text-[0.6875rem] text-muted-ink">{row.year === currentYear ? "Current year" : "Editable"}</p>
       </td>
     </tr>
   );
@@ -102,7 +102,7 @@ export function FilingConfigCard({ rows, canEdit, currentYear }: { rows: FilingY
     <Card className="p-5">
       <CardHeader
         title="GST/HST filing frequency by year"
-        subtitle={`Each calendar year (Jan 1 – Dec 31) has its own frequency. The ${currentYear} setting and earlier years are final; only future years can be changed.`}
+        subtitle={`Each calendar year (Jan 1 – Dec 31) has its own frequency. The current year and future years can be changed; past years are final.`}
       />
       <div className="thin-scroll mt-3 overflow-x-auto">
         <table className="w-full text-[0.8125rem]">

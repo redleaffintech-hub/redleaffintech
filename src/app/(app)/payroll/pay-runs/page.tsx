@@ -2,8 +2,9 @@ import { db } from "@/lib/db";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES, can } from "@/lib/permissions";
 import { formatDate } from "@/lib/dates";
-import { Badge, Card, LinkButton, LinkCell, Money, PageHeader, Table, Td, Th, Tr } from "@/components/ui";
+import { Callout, Badge, Card, LinkButton, LinkCell, Money, PageHeader, Table, Td, Th, Tr } from "@/components/ui";
 import { FilterBar } from "@/components/filter-bar";
+import { unpaidLeaveGaps } from "@/server/payroll/leave-pay";
 import { Icon } from "@/components/shell/icons";
 
 export const metadata = { title: "Pay runs" };
@@ -26,6 +27,8 @@ export default async function PayRunsPage({ searchParams }: { searchParams: Prom
     take: 100,
   });
 
+  const gaps = await unpaidLeaveGaps(company.id);
+
   const counts = {
     draft: payRuns.filter((p) => p.status === "DRAFT").length,
     posted: payRuns.filter((p) => p.status === "POSTED").length,
@@ -47,6 +50,16 @@ export default async function PayRunsPage({ searchParams }: { searchParams: Prom
           ) : undefined
         }
       />
+
+      {gaps.length > 0 && (
+        <Callout tone="caution" title="Unpaid leave not deducted — review needed">
+          {gaps.map((g) => (
+            <span key={`${g.payRunId}-${g.employeeName}`} className="block">
+              {g.payRunNumber} ({g.period}): {g.employeeName} has {g.missingHours}h of approved unpaid leave that was not deducted ({(g.missingCents / 100).toFixed(2)}). Void the run and reissue it, or correct it through a payroll adjustment.
+            </span>
+          ))}
+        </Callout>
+      )}
 
       <FilterBar
         tabs={[

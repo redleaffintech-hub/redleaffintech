@@ -17,6 +17,8 @@ export interface TaxLineSummary {
   jurisdiction: string;
   taxCode: string;
   taxCodeName: string;
+  /** The tax code's province ("CA" for federal-only codes such as plain GST). */
+  province: string;
   salesTaxableCents: number;
   taxCollectedCents: number;
   purchaseTaxableCents: number;
@@ -28,7 +30,7 @@ export interface TaxLineSummary {
 export async function taxSummary(companyId: string, range: DateRange) {
   const entries = await db.taxEntry.findMany({
     where: { companyId, date: { gte: range.from, lte: range.to } },
-    include: { taxCode: { select: { code: true, name: true } } },
+    include: { taxCode: { select: { code: true, name: true, jurisdiction: true } } },
   });
 
   const byKey = new Map<string, TaxLineSummary>();
@@ -41,6 +43,7 @@ export async function taxSummary(companyId: string, range: DateRange) {
         jurisdiction: entry.jurisdiction,
         taxCode: entry.taxCode.code,
         taxCodeName: entry.taxCode.name,
+        province: entry.taxCode.jurisdiction,
         salesTaxableCents: 0,
         taxCollectedCents: 0,
         purchaseTaxableCents: 0,
@@ -62,7 +65,7 @@ export async function taxSummary(companyId: string, range: DateRange) {
   }
 
   const rows = [...byKey.values()].sort(
-    (a, b) => a.kind.localeCompare(b.kind) || a.taxCode.localeCompare(b.taxCode),
+    (a, b) => a.province.localeCompare(b.province) || a.kind.localeCompare(b.kind) || a.taxCode.localeCompare(b.taxCode),
   );
 
   const totals = {

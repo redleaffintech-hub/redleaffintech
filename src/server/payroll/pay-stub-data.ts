@@ -3,6 +3,7 @@ import "server-only";
 import { db } from "@/lib/db";
 import { getCompanyProfile } from "@/server/companies/profile";
 import { payrollYtd } from "@/server/payroll/ytd";
+import { leaveTrackers } from "@/server/hr/leave-policy";
 import { defaultPeriodHours, impliedHours } from "@/lib/payroll-hours";
 
 export interface StubEarningsRow {
@@ -12,6 +13,18 @@ export interface StubEarningsRow {
   rateCents: number | null;
   currentCents: number;
   ytdCents: number;
+}
+
+/** One line of the Leave Balance Summary; null figures mean the employee has no such leave (shown as N/A). */
+export interface StubLeaveRow {
+  label: string;
+  /** Pro-rated hours earned this leave year up to the pay date. */
+  accruedHours: number | null;
+  /** Carried-forward (net of expired) plus manual adjustments. */
+  carriedHours: number | null;
+  /** Approved leave taken this leave year up to the pay date. */
+  availedHours: number | null;
+  remainingHours: number | null;
 }
 
 export interface StubDeductionRow {
@@ -47,6 +60,22 @@ export async function loadPayStub(companyId: string, payRunId: string, employeeI
   const sickHours = line.sickHours ?? impliedHours(line.sickPayCents, employee);
   const statHours = line.statutoryHolidayHours ?? impliedHours(line.statutoryHolidayPayCents, employee);
 
+  // Leave balances as of the pay date, from the same tracker the Leave Balances page uses.
+  const trackers = await leaveTrackers(companyId, { employeeId, asOf: payRun.payDate, historical: true });
+  const leaveRow = (label: string, category: string): StubLeaveRow => {
+    const mine = trackers.filter((t) => t.category === category && t.tracker.entitlement.eligible);
+    if (mine.length === 0) return { label, accruedHours: null, carriedHours: null, availedHours: null, remainingHours: null };
+    const sum = (pick: (t: (typeof mine)[number]) => number) => Math.round(mine.reduce((s, t) => s + pick(t), 0) * 100) / 100;
+    return {
+      label,
+      accruedHours: sum((t) => t.tracker.allocatedHours),
+      carriedHours: sum((t) => t.tracker.carriedForwardHours - t.tracker.expiredHours + t.tracker.adjustmentHours),
+      availedHours: sum((t) => t.tracker.usedHours),
+      remainingHours: sum((t) => t.tracker.remainingHours),
+    };
+  };
+  const leaveSummary: StubLeaveRow[] = [leaveRow("Vacation leave", "VACATION"), leaveRow("Sick leave", "SICK")];
+
   const rate = (cents: number, hours: number | null) => (hours && hours > 0 && cents > 0 ? Math.round(cents / hours) : null);
   const earn = (label: string, hours: number | null, current: number, ytdCents: number): StubEarningsRow => ({
     label,
@@ -57,11 +86,19 @@ export async function loadPayStub(companyId: string, payRunId: string, employeeI
   });
 
   const earnings: StubEarningsRow[] = [
-    earn("Regular pay", regularHours, line.regularPayCents, ytd.regularPayCents),
+    // Regular pay is stored net of unpaid leave; the stub shows the scheduled
+    // amount and the unpaid-leave deduction as its own negative line.
+    earn(
+      "Regular pay",
+      regularHours !== null && line.unpaidLeaveHours ? Math.round((regularHours + line.unpaidLeaveHours) * 100) / 100 : regularHours,
+      line.regularPayCents + line.unpaidLeaveCents,
+      ytd.regularPayCents + ytd.unpaidLeaveCents,
+    ),
     ...[
       earn("Overtime pay", line.overtimeHours ?? null, line.overtimePayCents, ytd.overtimePayCents),
       earn("Vacation pay", vacationHours, line.vacationPayCents, ytd.vacationPayCents),
       earn("Sick pay", sickHours, line.sickPayCents, ytd.sickPayCents),
+      earn("Unpaid leave deduction", line.unpaidLeaveHours ?? null, -line.unpaidLeaveCents, -ytd.unpaidLeaveCents),
       earn("Bonus", null, line.bonusCents, ytd.bonusCents),
       earn("Retroactive pay", null, line.retroactivePayCents, ytd.retroactivePayCents),
       earn("Statutory holiday pay", statHours, line.statutoryHolidayPayCents, ytd.statutoryHolidayPayCents),
@@ -88,7 +125,7 @@ export async function loadPayStub(companyId: string, payRunId: string, employeeI
     ytdCents: deductions.reduce((s, d) => s + d.ytdCents, 0),
   };
 
-  return { line, employee, payRun, profile, ytd, earnings, deductions, totalDeductions };
+  return { line, employee, payRun, profile, ytd, earnings, deductions, totalDeductions, leaveSummary };
 }
 
 export type PayStub = NonNullable<Awaited<ReturnType<typeof loadPayStub>>>;

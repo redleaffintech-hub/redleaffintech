@@ -21,6 +21,7 @@ export interface PayrollYtd {
   bonusCents: number;
   retroactivePayCents: number;
   statutoryHolidayPayCents: number;
+  unpaidLeaveCents: number;
   medicalInsuranceCents: number;
   otherDeductionsCents: number;
 }
@@ -43,6 +44,7 @@ const EMPTY_YTD: PayrollYtd = {
   bonusCents: 0,
   retroactivePayCents: 0,
   statutoryHolidayPayCents: 0,
+  unpaidLeaveCents: 0,
   medicalInsuranceCents: 0,
   otherDeductionsCents: 0,
 };
@@ -100,6 +102,7 @@ export async function payrollYtd(
       bonusCents: true,
       retroactivePayCents: true,
       statutoryHolidayPayCents: true,
+      unpaidLeaveCents: true,
       medicalInsuranceCents: true,
       otherDeductionsCents: true,
     },
@@ -126,6 +129,7 @@ export async function payrollYtd(
       bonusCents: totals.bonusCents + line.bonusCents,
       retroactivePayCents: totals.retroactivePayCents + line.retroactivePayCents,
       statutoryHolidayPayCents: totals.statutoryHolidayPayCents + line.statutoryHolidayPayCents,
+      unpaidLeaveCents: totals.unpaidLeaveCents + line.unpaidLeaveCents,
       medicalInsuranceCents: totals.medicalInsuranceCents + line.medicalInsuranceCents,
       otherDeductionsCents: totals.otherDeductionsCents + line.otherDeductionsCents,
     }),

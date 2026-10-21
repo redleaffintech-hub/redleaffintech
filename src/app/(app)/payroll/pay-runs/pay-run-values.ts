@@ -19,6 +19,9 @@ export interface PayRunLineFormValue {
   vacationHours: string;
   sickHours: string;
   statutoryHolidayHours: string;
+  /** Unpaid leave already taken out of regular pay (set by Pull approved leave). */
+  unpaidLeaveHours: string;
+  unpaidLeave: string;
   /** The simple case: no detail panel opened, this is the entire gross. */
   regularPay: string;
   overtimePay: string;
@@ -82,6 +85,8 @@ export function defaultLineFor(employee: EmployeeForDefaults): PayRunLineFormVal
     vacationHours: "",
     sickHours: "",
     statutoryHolidayHours: "",
+    unpaidLeaveHours: "",
+    unpaidLeave: "",
     regularPay: grossPay,
     overtimePay: "",
     vacationPay: "",
@@ -124,6 +129,8 @@ interface SavedPayRunLine {
   vacationHours: number | null;
   sickHours: number | null;
   statutoryHolidayHours: number | null;
+  unpaidLeaveHours: number | null;
+  unpaidLeaveCents: number;
   medicalInsuranceCents: number;
   regularPayCents: number;
   overtimePayCents: number;
@@ -156,6 +163,8 @@ function lineFromSaved(line: SavedPayRunLine): PayRunLineFormValue {
     vacationHours: line.vacationHours?.toString() ?? "",
     sickHours: line.sickHours?.toString() ?? "",
     statutoryHolidayHours: line.statutoryHolidayHours?.toString() ?? "",
+    unpaidLeaveHours: line.unpaidLeaveHours?.toString() ?? "",
+    unpaidLeave: centsToStr(line.unpaidLeaveCents),
     regularPay: centsToStr(line.regularPayCents),
     overtimePay: centsToStr(line.overtimePayCents),
     vacationPay: centsToStr(line.vacationPayCents),
