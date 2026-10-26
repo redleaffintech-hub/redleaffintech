@@ -1685,6 +1685,9 @@ model Attachment {
   sizeBytes    Int
   /// Private object-storage key — never a public URL (§21)
   storageKey   String
+  /// The file itself, for deployments with no object storage or persistent disk
+  /// (Netlify). Served only through the authenticated /api/attachments/[id] route.
+  data         Bytes?
   sourceType   String?
   sourceId     String?
   ocrStatus    String   @default("NONE") // NONE | PENDING | DONE | FAILED

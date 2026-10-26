@@ -28,6 +28,8 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  // Expense receipts are posted to a server action together with the form; the default 1 MB cap would reject a phone photo.
+  experimental: { serverActions: { bodySizeLimit: "6mb" } },
   // Opt in for a portable Node server; hosted adapters retain their own output.
   ...(process.env.STANDALONE_BUILD === "1" ? { output: "standalone" as const } : {}),
   async headers() {

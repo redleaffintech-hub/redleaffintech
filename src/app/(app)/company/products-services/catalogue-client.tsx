@@ -19,6 +19,22 @@ export interface CatalogueOptions {
   currency: string;
 }
 
+/** A saved product/service as the document editors need it. */
+export interface CreatedItem {
+  id: string;
+  type: string;
+  code: string;
+  name: string;
+  description: string | null;
+  unit: string;
+  unitPriceCents: number;
+  discountPercentMicro: number;
+  incomeAccountId: string | null;
+  expenseAccountId: string | null;
+  taxCodeId: string | null;
+  purchaseTaxCodeId: string | null;
+}
+
 export interface CatalogueItem {
   id: string;
   type: string;
@@ -159,7 +175,7 @@ export function ItemDialog({
   options: CatalogueOptions;
   onClose: () => void;
   /** Called with the saved item after a create (used by "Add new" inside a document editor). */
-  onCreated?: (created: NonNullable<Awaited<ReturnType<typeof createItemAction>>["item"]>) => void;
+  onCreated?: (created: CreatedItem) => void;
 }) {
   const router = useRouter();
   const money = useMoney();
@@ -187,7 +203,7 @@ export function ItemDialog({
           const failed = "error" in result ? result.error : null;
           if (failed) setError(failed);
           else {
-            const created = (result as { item?: Parameters<NonNullable<typeof onCreated>>[0] }).item;
+            const created = (result as { item?: CreatedItem }).item;
             if (created) onCreated?.(created);
             onClose();
             if (!onCreated) router.refresh();

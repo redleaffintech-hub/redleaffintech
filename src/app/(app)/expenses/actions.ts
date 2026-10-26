@@ -7,6 +7,8 @@ import { toCents } from "@/lib/money";
 import { CAPABILITIES } from "@/lib/permissions";
 import { requireCapability, requireCompany } from "@/server/auth/context";
 import { createExpense } from "@/server/documents/expenses";
+import { filesFromForm, saveAttachments, validateFiles } from "@/server/documents/attachments";
+import { recordAudit } from "@/server/auth/context";
 
 const schema = z.object({
   date: z.string(),
@@ -25,6 +27,10 @@ export async function createExpenseAction(formData: FormData) {
   const { company, user } = await requireCapability(CAPABILITIES.EXPENSES);
   const parsed = schema.safeParse(Object.fromEntries(formData));
   if (!parsed.success) return { error: parsed.error.issues[0].message };
+
+  const files = filesFromForm(formData);
+  const fileError = validateFiles(files);
+  if (fileError) return { error: fileError };
 
   try {
     const expense = await createExpense({
@@ -48,6 +54,9 @@ export async function createExpenseAction(formData: FormData) {
         },
       ],
     });
+    if (files.length > 0) {
+      await saveAttachments({ companyId: company.id, sourceType: "EXPENSE", sourceId: expense.id, files, userId: user.id });
+    }
     revalidatePath("/expenses");
     revalidatePath("/");
     return { redirectTo: `/accounting/journals/${expense.journalEntryId}` };
@@ -81,4 +90,31 @@ export async function expenseFormOptions() {
     }),
   ]);
   return { paymentAccounts, expenseAccounts, taxCodes, vendors, companyProvince: company.province ?? null };
+}
+
+/** Add receipts/invoices to an existing expense. */
+export async function addExpenseAttachmentsAction(expenseId: string, formData: FormData) {
+  const { company, user } = await requireCapability(CAPABILITIES.EXPENSES);
+  const expense = await db.expense.findFirst({ where: { id: expenseId, companyId: company.id }, select: { id: true, number: true } });
+  if (!expense) return { error: "That expense does not exist." };
+
+  const files = filesFromForm(formData);
+  if (files.length === 0) return { error: "Choose a file to attach." };
+  const fileError = validateFiles(files);
+  if (fileError) return { error: fileError };
+
+  await saveAttachments({ companyId: company.id, sourceType: "EXPENSE", sourceId: expense.id, files, userId: user.id });
+  await recordAudit({ companyId: company.id, userId: user.id, action: "UPDATE", entityType: "Expense", entityId: expense.id, summary: `Attached ${files.length} file(s) to expense ${expense.number}` });
+  revalidatePath(`/expenses/${expense.id}`);
+  return { ok: true as const };
+}
+
+export async function removeExpenseAttachmentAction(attachmentId: string) {
+  const { company, user } = await requireCapability(CAPABILITIES.EXPENSES);
+  const attachment = await db.attachment.findFirst({ where: { id: attachmentId, companyId: company.id, sourceType: "EXPENSE" } });
+  if (!attachment?.sourceId) return { error: "That attachment does not exist." };
+  await db.attachment.delete({ where: { id: attachment.id } });
+  await recordAudit({ companyId: company.id, userId: user.id, action: "UPDATE", entityType: "Expense", entityId: attachment.sourceId, summary: `Removed attachment ${attachment.fileName}` });
+  revalidatePath(`/expenses/${attachment.sourceId}`);
+  return { ok: true as const };
 }

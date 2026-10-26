@@ -198,6 +198,10 @@ export function ExpenseForm({
             </Field>
           </div>
 
+          <Field label="Attachments" hint="Optional. Attach the receipt as PDF, JPG or PNG (up to 4 MB each).">
+            <input name="files" type="file" multiple accept="application/pdf,image/png,image/jpeg" className={inputClass} />
+          </Field>
+
           {error && (
             <p className="rounded-md border border-[color:var(--color-negative)]/25 bg-negative-soft px-3 py-2 text-[0.8125rem] text-negative">
               {error}

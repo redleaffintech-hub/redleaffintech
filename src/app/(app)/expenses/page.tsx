@@ -100,13 +100,9 @@ export default async function ExpensesPage({ searchParams }: PageProps<"/expense
               {expenses.map((expense) => (
                 <Tr key={expense.id}>
                   <Td>
-                    {expense.journalEntryId ? (
-                      <Link href={`/accounting/journals/${expense.journalEntryId}`} className="tnum font-medium text-ink-900 hover:text-brand-700 hover:underline">
-                        {expense.number}
-                      </Link>
-                    ) : (
-                      <span className="tnum font-medium text-ink-900">{expense.number}</span>
-                    )}
+                    <Link href={`/expenses/${expense.id}`} className="tnum font-medium text-ink-900 hover:text-brand-700 hover:underline">
+                      {expense.number}
+                    </Link>
                   </Td>
                   <Td className="text-muted-ink">{formatDate(expense.date)}</Td>
                   <Td>
