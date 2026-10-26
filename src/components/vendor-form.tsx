@@ -29,6 +29,9 @@ export interface VendorFormValues {
   province: string | null;
   postalCode: string | null;
   notes: string | null;
+  /** Opening balance as typed ("" = none) and the date it is as of. */
+  openingBalance?: string;
+  openingBalanceDate?: string;
 }
 
 function toFormState(vendor: VendorFormValues): FormState {
@@ -44,6 +47,8 @@ function toFormState(vendor: VendorFormValues): FormState {
     province: vendor.province ?? "",
     postalCode: vendor.postalCode ?? "",
     notes: vendor.notes ?? "",
+    openingBalance: vendor.openingBalance ?? "",
+    openingBalanceDate: vendor.openingBalanceDate ?? "",
   };
 }
 
@@ -59,6 +64,8 @@ interface FormState {
   province: string;
   postalCode: string;
   notes: string;
+  openingBalance: string;
+  openingBalanceDate: string;
 }
 
 const EMPTY: FormState = {
@@ -73,6 +80,8 @@ const EMPTY: FormState = {
   province: "",
   postalCode: "",
   notes: "",
+  openingBalance: "",
+  openingBalanceDate: "",
 };
 
 /**
@@ -212,6 +221,27 @@ export function VendorForm({
             onChange={(event) => set("postalCode", event.target.value.toUpperCase())}
             className={inputClass}
             placeholder="M5V 2T6"
+          />
+        </Field>
+      </div>
+
+      <SectionDivider label="Opening balance" />
+      <div className={clsx("grid gap-3", cols)}>
+        <Field label="Opening balance" hint="Amount you owe this vendor on the day your books start. Leave blank if none.">
+          <input
+            inputMode="decimal"
+            value={form.openingBalance}
+            onChange={(event) => set("openingBalance", event.target.value)}
+            className={inputClass}
+            placeholder="0.00"
+          />
+        </Field>
+        <Field label="As of date" hint="Defaults to today.">
+          <input
+            type="date"
+            value={form.openingBalanceDate}
+            onChange={(event) => set("openingBalanceDate", event.target.value)}
+            className={inputClass}
           />
         </Field>
       </div>

@@ -7,6 +7,8 @@ import { PROVINCES } from "@/lib/enums";
 import { CAPABILITIES } from "@/lib/permissions";
 import { recordAudit, requireCapability } from "@/server/auth/context";
 import { nextCustomerCode } from "@/server/documents/numbering";
+import { setOpeningBalance } from "@/server/documents/opening-balance";
+import { toCents } from "@/lib/money";
 
 const provinceCodes = PROVINCES.map((p) => p.code);
 
@@ -61,11 +63,33 @@ const customerSchema = z.object({
 
   notes: optionalText(2000),
 
+  /** Opening balance (dollars as typed) and its as-of date; undefined = leave the existing one alone. */
+  openingBalance: z.string().trim().max(20).optional(),
+  openingBalanceDate: z.string().trim().max(10).optional(),
+
   /** Scoped narrowly to GST and PST/RST only — see src/server/tax/policy.ts
    * for why HST/QST are deliberately never touched by these two flags. */
   gstExempt: z.boolean().optional().default(false),
   pstExempt: z.boolean().optional().default(false),
 });
+
+
+/** Applies the form's opening balance (if the field was sent) by re-issuing the party's opening document. */
+async function applyOpeningBalance(companyId: string, partyId: string, input: { openingBalance?: string; openingBalanceDate?: string }, userId: string): Promise<string | null> {
+  if (input.openingBalance === undefined) return null;
+  let amountCents = 0;
+  try {
+    amountCents = input.openingBalance === "" ? 0 : toCents(input.openingBalance);
+  } catch {
+    return "Enter the opening balance as a number.";
+  }
+  try {
+    await setOpeningBalance({ companyId, party: "CUSTOMER", partyId, amountCents, date: input.openingBalanceDate || new Date().toISOString().slice(0, 10), userId });
+  } catch (error) {
+    return (error as Error).message;
+  }
+  return null;
+}
 
 /**
  * Create a customer.
@@ -133,6 +157,9 @@ export async function createCustomerAction(payload: string) {
       },
     });
   });
+
+  const openingError = await applyOpeningBalance(company.id, customer.id, input, user.id);
+  if (openingError) return { error: `Customer saved, but the opening balance was not posted: ${openingError}` };
 
   await recordAudit({
     companyId: company.id,
@@ -217,6 +244,9 @@ export async function updateCustomerAction(customerId: string, payload: string) 
       pstExempt: input.pstExempt,
     },
   });
+
+  const openingError = await applyOpeningBalance(company.id, customer.id, input, user.id);
+  if (openingError) return { error: `Customer saved, but the opening balance was not changed: ${openingError}` };
 
   await recordAudit({
     companyId: company.id,

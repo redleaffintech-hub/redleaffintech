@@ -695,6 +695,11 @@ model Customer {
   notes               String?
   isActive            Boolean  @default(true)
   openingBalanceCents Int      @default(0)
+  /// The opening balance is carried by a real, posted invoice (Dr A/R, Cr Opening
+  /// Balance Equity) so aging, statements and payment allocation all work on it
+  /// unchanged. These point at it so an edit can void and re-issue it.
+  openingBalanceDate  DateTime?
+  openingBalanceDocId String?
   /// Per-customer sales-tax exemption (issue 5, 15 Sep 2026 review), layered
   /// on top of the company's own collection status in Company.*Status.
   /// Deliberately scoped to GST and PST/RST only — HST and QST customer-level
@@ -744,6 +749,9 @@ model Vendor {
   notes               String?
   isActive            Boolean  @default(true)
   openingBalanceCents Int      @default(0)
+  /// Carried by a real, posted bill (Dr Opening Balance Equity, Cr A/P) — see Customer.
+  openingBalanceDate  DateTime?
+  openingBalanceDocId String?
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 

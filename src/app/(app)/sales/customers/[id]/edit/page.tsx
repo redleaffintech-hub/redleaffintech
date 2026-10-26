@@ -55,6 +55,8 @@ export default async function EditCustomerPage({ params }: { params: Promise<{ i
             shipToProvince: customer.shipToProvince,
             shipToPostalCode: customer.shipToPostalCode,
             notes: customer.notes,
+            openingBalance: customer.openingBalanceCents ? (customer.openingBalanceCents / 100).toFixed(2) : "",
+            openingBalanceDate: customer.openingBalanceDate ? customer.openingBalanceDate.toISOString().slice(0, 10) : "",
             gstExempt: customer.gstExempt,
             pstExempt: customer.pstExempt,
           }}

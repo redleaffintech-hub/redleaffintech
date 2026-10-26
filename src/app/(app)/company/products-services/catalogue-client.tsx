@@ -163,7 +163,13 @@ function ItemDialog({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [type, setType] = useState<string>(item.type);
+  const [track, setTrack] = useState(item.trackInventory);
+  const [openQty, setOpenQty] = useState("");
+  const [openCost, setOpenCost] = useState("");
   const isNew = item.id === "";
+  // Opening stock: a new tracked product, or one that has no stock yet.
+  const canOpenStock = type === "PRODUCT" && track && item.quantityOnHandMilli === 0;
+  const openingTotal = (Number(openQty.replace(/,/g, "")) || 0) * (Number(openCost.replace(/,/g, "")) || 0);
 
   return (
     <Modal open onClose={onClose} size="lg" title={isNew ? "New product or service" : `Edit ${item.code}`}>
@@ -285,7 +291,8 @@ function ItemDialog({
             <input
               type="checkbox"
               name="trackInventory"
-              defaultChecked={item.trackInventory}
+              checked={track}
+              onChange={(e) => setTrack(e.target.checked)}
               className="mt-0.5 h-3.5 w-3.5 accent-[color:var(--color-brand-600)]"
             />
             <span className="text-[0.8125rem] leading-5 text-ink-800">
@@ -302,6 +309,29 @@ function ItemDialog({
               </span>
             </span>
           </label>
+        )}
+
+        {canOpenStock && (
+          <div className="rounded-lg border border-paper-300 p-3">
+            <p className="text-[0.8125rem] font-medium text-ink-800">Opening stock</p>
+            <p className="mb-2 text-[0.75rem] text-muted-ink">
+              Stock already on hand when you start using the books. Posts Dr Inventory / Cr Opening Balance Equity.
+            </p>
+            <div className="grid gap-3 sm:grid-cols-4">
+              <Field label="Opening quantity">
+                <input name="openingQuantity" inputMode="decimal" value={openQty} onChange={(e) => setOpenQty(e.target.value)} placeholder="0" className={inputClass} />
+              </Field>
+              <Field label="Opening average cost">
+                <input name="openingUnitCost" inputMode="decimal" value={openCost} onChange={(e) => setOpenCost(e.target.value)} placeholder="0.00" className={inputClass} />
+              </Field>
+              <Field label="Total amount">
+                <input readOnly value={money.format(Math.round(openingTotal * 100))} className={clsx(inputClass, "bg-paper-100")} />
+              </Field>
+              <Field label="As of date">
+                <input name="openingDate" type="date" defaultValue={new Date().toISOString().slice(0, 10)} className={inputClass} />
+              </Field>
+            </div>
+          </div>
         )}
 
         <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-paper-300 p-3">

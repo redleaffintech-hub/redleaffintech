@@ -7,6 +7,9 @@ import { ITEM_TYPES } from "@/lib/enums";
 import { toCents } from "@/lib/money";
 import { CAPABILITIES } from "@/lib/permissions";
 import { recordAudit, requireCapability } from "@/server/auth/context";
+import { getSystemAccount } from "@/server/accounting/ledger";
+import { adjustStock } from "@/server/inventory/costing";
+import { SYSTEM_ACCOUNTS } from "@/lib/enums";
 
 /**
  * Products & services catalogue.
@@ -39,7 +42,29 @@ const itemSchema = z.object({
   purchaseTaxCodeId: z.string().trim().optional(),
   isActive: z.string().optional(),
   trackInventory: z.string().optional(),
+  /** Opening stock for a tracked product: quantity and weighted-average cost per unit, as of a date. */
+  openingQuantity: z.string().trim().max(20).optional(),
+  openingUnitCost: z.string().trim().max(20).optional(),
+  openingDate: z.string().trim().max(10).optional(),
 });
+
+/**
+ * Parses the optional opening-stock fields. Returns null when none were entered.
+ * The quantity is in whole units (decimals allowed), the cost per unit in dollars.
+ */
+function parseOpening(input: ItemInput): { error: string } | { quantityMilli: number; unitCostCents: number; date: string } | null {
+  if (!input.openingQuantity) return null;
+  const quantity = Number(input.openingQuantity.replace(/,/g, ""));
+  if (!Number.isFinite(quantity) || quantity <= 0) return { error: "Opening quantity must be a number greater than zero." };
+  let unitCostCents = 0;
+  try {
+    unitCostCents = toCents(input.openingUnitCost || "0");
+  } catch {
+    return { error: "Enter the opening average cost as a number." };
+  }
+  if (unitCostCents <= 0) return { error: "Enter the opening average cost per unit." };
+  return { quantityMilli: Math.round(quantity * 1000), unitCostCents, date: input.openingDate || new Date().toISOString().slice(0, 10) };
+}
 
 type ItemInput = z.infer<typeof itemSchema>;
 
@@ -132,10 +157,32 @@ export async function createItemAction(formData: FormData) {
   const result = await validate(company.id, parsed.data);
   if ("error" in result) return result;
 
-  const item = await db.serviceItem.create({
-    data: { companyId: company.id, ...result.data } as never,
-    select: { id: true, code: true, name: true, type: true },
-  });
+  const opening = parseOpening(parsed.data);
+  if (opening && "error" in opening) return opening;
+  if (opening && !(result.data as { trackInventory?: boolean }).trackInventory) {
+    return { error: "Opening stock needs a product with Track inventory switched on." };
+  }
+
+  let item;
+  try {
+    // Item and opening stock are created together or not at all.
+    item = await db.$transaction(async (tx) => {
+      const created = await tx.serviceItem.create({
+        data: { companyId: company.id, ...result.data } as never,
+        select: { id: true, code: true, name: true, type: true },
+      });
+      if (opening) {
+        const obe = await getSystemAccount(tx, company.id, SYSTEM_ACCOUNTS.OPENING_BALANCE_EQUITY);
+        await adjustStock(tx, {
+          companyId: company.id, itemId: created.id, date: opening.date, quantityMilli: opening.quantityMilli,
+          unitCostCents: opening.unitCostCents, offsetAccountId: obe.id, reason: "Opening stock", userId: user.id,
+        });
+      }
+      return created;
+    });
+  } catch (error) {
+    return { error: (error as Error).message };
+  }
 
   await recordAudit({
     companyId: company.id,
@@ -167,7 +214,28 @@ export async function updateItemAction(itemId: string, formData: FormData) {
   const result = await validate(company.id, parsed.data, itemId);
   if ("error" in result) return result;
 
-  await db.serviceItem.update({ where: { id: itemId }, data: result.data as never });
+  // Opening stock can still be entered on a tracked product that has no stock yet (nothing to double count).
+  const opening = parseOpening(parsed.data);
+  if (opening && "error" in opening) return opening;
+  if (opening) {
+    const current = await db.serviceItem.findFirst({ where: { id: itemId, companyId: company.id }, select: { quantityOnHandMilli: true } });
+    if (!(result.data as { trackInventory?: boolean }).trackInventory) return { error: "Opening stock needs Track inventory switched on." };
+    if ((current?.quantityOnHandMilli ?? 0) !== 0) return { error: "This item already has stock. Use Adjust stock to correct the quantity." };
+  }
+  try {
+    await db.$transaction(async (tx) => {
+      await tx.serviceItem.update({ where: { id: itemId }, data: result.data as never });
+      if (opening) {
+        const obe = await getSystemAccount(tx, company.id, SYSTEM_ACCOUNTS.OPENING_BALANCE_EQUITY);
+        await adjustStock(tx, {
+          companyId: company.id, itemId, date: opening.date, quantityMilli: opening.quantityMilli,
+          unitCostCents: opening.unitCostCents, offsetAccountId: obe.id, reason: "Opening stock", userId: user.id,
+        });
+      }
+    });
+  } catch (error) {
+    return { error: (error as Error).message };
+  }
 
   await recordAudit({
     companyId: company.id,

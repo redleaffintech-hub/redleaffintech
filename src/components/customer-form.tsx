@@ -31,6 +31,9 @@ export interface CustomerFormValues {
   shipToProvince: string | null;
   shipToPostalCode: string | null;
   notes: string | null;
+  /** Opening balance as typed ("" = none) and the date it is as of. */
+  openingBalance?: string;
+  openingBalanceDate?: string;
   gstExempt: boolean;
   pstExempt: boolean;
 }
@@ -70,6 +73,8 @@ interface FormState {
   shipToProvince: string;
   shipToPostalCode: string;
   notes: string;
+  openingBalance: string;
+  openingBalanceDate: string;
   gstExempt: boolean;
   pstExempt: boolean;
 }
@@ -91,6 +96,8 @@ const EMPTY: FormState = {
   shipToProvince: "",
   shipToPostalCode: "",
   notes: "",
+  openingBalance: "",
+  openingBalanceDate: "",
   gstExempt: false,
   pstExempt: false,
 };
@@ -114,6 +121,8 @@ function toFormState(customer: CustomerFormValues): FormState {
     shipToProvince: customer.shipToProvince ?? "",
     shipToPostalCode: customer.shipToPostalCode ?? "",
     notes: customer.notes ?? "",
+    openingBalance: customer.openingBalance ?? "",
+    openingBalanceDate: customer.openingBalanceDate ?? "",
     gstExempt: customer.gstExempt,
     pstExempt: customer.pstExempt,
   };
@@ -301,6 +310,27 @@ export function CustomerForm({
           <AddressBlock form={form} set={set} cols={cols} fields={SHIPPING_FIELDS} />
         </>
       )}
+
+      <SectionDivider label="Opening balance" />
+      <div className={clsx("grid gap-3", cols)}>
+        <Field label="Opening balance" hint="Amount this customer owes you on the day your books start. Leave blank if none.">
+          <input
+            inputMode="decimal"
+            value={form.openingBalance}
+            onChange={(event) => set("openingBalance", event.target.value)}
+            className={inputClass}
+            placeholder="0.00"
+          />
+        </Field>
+        <Field label="As of date" hint="Defaults to today.">
+          <input
+            type="date"
+            value={form.openingBalanceDate}
+            onChange={(event) => set("openingBalanceDate", event.target.value)}
+            className={inputClass}
+          />
+        </Field>
+      </div>
 
       {!compact && (
         <>

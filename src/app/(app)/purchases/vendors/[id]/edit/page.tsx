@@ -50,6 +50,8 @@ export default async function EditVendorPage({ params }: { params: Promise<{ id:
             province: vendor.province,
             postalCode: vendor.postalCode,
             notes: vendor.notes,
+            openingBalance: vendor.openingBalanceCents ? (vendor.openingBalanceCents / 100).toFixed(2) : "",
+            openingBalanceDate: vendor.openingBalanceDate ? vendor.openingBalanceDate.toISOString().slice(0, 10) : "",
           }}
         />
       </Card>

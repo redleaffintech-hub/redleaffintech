@@ -6,6 +6,8 @@ import { db } from "@/lib/db";
 import { PROVINCES } from "@/lib/enums";
 import { CAPABILITIES } from "@/lib/permissions";
 import { recordAudit, requireCapability } from "@/server/auth/context";
+import { setOpeningBalance } from "@/server/documents/opening-balance";
+import { toCents } from "@/lib/money";
 
 const provinceCodes = PROVINCES.map((p) => p.code);
 
@@ -47,7 +49,29 @@ const vendorSchema = z.object({
   postalCode: optionalText(12),
 
   notes: optionalText(2000),
+
+  /** Opening balance (dollars as typed) and its as-of date; undefined = leave the existing one alone. */
+  openingBalance: z.string().trim().max(20).optional(),
+  openingBalanceDate: z.string().trim().max(10).optional(),
 });
+
+
+/** Applies the form's opening balance (if the field was sent) by re-issuing the party's opening document. */
+async function applyOpeningBalance(companyId: string, partyId: string, input: { openingBalance?: string; openingBalanceDate?: string }, userId: string): Promise<string | null> {
+  if (input.openingBalance === undefined) return null;
+  let amountCents = 0;
+  try {
+    amountCents = input.openingBalance === "" ? 0 : toCents(input.openingBalance);
+  } catch {
+    return "Enter the opening balance as a number.";
+  }
+  try {
+    await setOpeningBalance({ companyId, party: "VENDOR", partyId, amountCents, date: input.openingBalanceDate || new Date().toISOString().slice(0, 10), userId });
+  } catch (error) {
+    return (error as Error).message;
+  }
+  return null;
+}
 
 /**
  * Create a vendor.
@@ -101,6 +125,9 @@ export async function createVendorAction(payload: string) {
       notes: input.notes ?? null,
     },
   });
+
+  const openingError = await applyOpeningBalance(company.id, vendor.id, input, user.id);
+  if (openingError) return { error: `Vendor saved, but the opening balance was not posted: ${openingError}` };
 
   await recordAudit({
     companyId: company.id,
@@ -174,6 +201,9 @@ export async function updateVendorAction(vendorId: string, payload: string) {
       notes: input.notes ?? null,
     },
   });
+
+  const openingError = await applyOpeningBalance(company.id, vendor.id, input, user.id);
+  if (openingError) return { error: `Vendor saved, but the opening balance was not changed: ${openingError}` };
 
   await recordAudit({
     companyId: company.id,
