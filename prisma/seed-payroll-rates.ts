@@ -26,12 +26,12 @@ async function main() {
   if (!existingStatutory) {
     await db.payrollStatutoryRate.create({
       data: {
-        cppRateMicro: 5_950_000, // 5.95%
+        cppRateMicro: 59_500, // 5.95%
         cppBasicExemptionCents: 350_000, // $3,500
         cppMaxPensionableEarningsCents: 7_130_000, // $71,300 (YMPE)
-        cpp2RateMicro: 4_000_000, // 4%
+        cpp2RateMicro: 40_000, // 4%
         cpp2MaxPensionableEarningsCents: 8_120_000, // $81,200 (YAMPE)
-        eiRateMicro: 1_640_000, // 1.64%
+        eiRateMicro: 16_400, // 1.64%
         eiEmployerMultiplierMicro: 1_400_000, // 1.4x
         eiMaxInsurableEarningsCents: 6_570_000, // $65,700
         effectiveFrom: EFFECTIVE_FROM,
@@ -46,20 +46,20 @@ async function main() {
   }
 
   const federalBrackets = [
-    { minCents: 0, maxCents: 5_737_500, rateMicro: 15_00_000 },
-    { minCents: 5_737_500, maxCents: 11_475_000, rateMicro: 20_50_000 },
-    { minCents: 11_475_000, maxCents: 17_788_200, rateMicro: 26_00_000 },
-    { minCents: 17_788_200, maxCents: 25_341_400, rateMicro: 29_00_000 },
-    { minCents: 25_341_400, maxCents: null, rateMicro: 33_00_000 },
+    { minCents: 0, maxCents: 5_737_500, rateMicro: 150_000 },
+    { minCents: 5_737_500, maxCents: 11_475_000, rateMicro: 205_000 },
+    { minCents: 11_475_000, maxCents: 17_788_200, rateMicro: 260_000 },
+    { minCents: 17_788_200, maxCents: 25_341_400, rateMicro: 290_000 },
+    { minCents: 25_341_400, maxCents: null, rateMicro: 330_000 },
   ];
   const federalBpaCents = 1_612_900; // $16,129
 
   const ontarioBrackets = [
-    { minCents: 0, maxCents: 5_288_600, rateMicro: 5_05_000 },
-    { minCents: 5_288_600, maxCents: 10_577_500, rateMicro: 9_15_000 },
-    { minCents: 10_577_500, maxCents: 15_000_000, rateMicro: 11_16_000 },
-    { minCents: 15_000_000, maxCents: 22_000_000, rateMicro: 12_16_000 },
-    { minCents: 22_000_000, maxCents: null, rateMicro: 13_16_000 },
+    { minCents: 0, maxCents: 5_288_600, rateMicro: 50_500 },
+    { minCents: 5_288_600, maxCents: 10_577_500, rateMicro: 91_500 },
+    { minCents: 10_577_500, maxCents: 15_000_000, rateMicro: 111_600 },
+    { minCents: 15_000_000, maxCents: 22_000_000, rateMicro: 121_600 },
+    { minCents: 22_000_000, maxCents: null, rateMicro: 131_600 },
   ];
   const ontarioBpaCents = 1_274_700; // $12,747
 
