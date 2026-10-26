@@ -96,7 +96,9 @@ export async function leaveTrackers(
         leaveTypeName: policy.leaveType.name,
         category: policy.leaveType.category,
         policy,
-        tracker: computeTracker(policy, employee, year, asOf, ledger, reqs),
+        // A pay stub reports what has been ACCRUED to the pay date. A policy that grants the whole
+        // year up front would otherwise print the full annual entitlement on a January stub.
+        tracker: computeTracker(opts.historical ? { ...policy, accrualMethod: "ACCRUED" } : policy, employee, year, asOf, ledger, reqs),
         asOf,
       });
     }

@@ -105,9 +105,11 @@ export async function loadPayStub(companyId: string, payRunId: string, employeeI
     ].filter((row) => row.currentCents !== 0 || row.ytdCents !== 0),
   ];
 
+  // Quebec employees contribute to the QPP instead of the CPP; the amounts live in the same columns.
+  const pensionLabel = employee.provinceOfEmployment === "QC" ? "QPP" : "CPP";
   const deductions: StubDeductionRow[] = [
-    { label: "CPP", currentCents: line.cppCents, ytdCents: ytd.cppCents },
-    { label: "CPP2", currentCents: line.cpp2Cents, ytdCents: ytd.cpp2Cents },
+    { label: pensionLabel, currentCents: line.cppCents, ytdCents: ytd.cppCents },
+    { label: `${pensionLabel}2`, currentCents: line.cpp2Cents, ytdCents: ytd.cpp2Cents },
     { label: "EI", currentCents: line.eiCents, ytdCents: ytd.eiCents },
     // QPIP applies to Quebec employees only.
     ...(line.qpipCents !== 0 || ytd.qpipCents !== 0 ? [{ label: "QPIP", currentCents: line.qpipCents, ytdCents: ytd.qpipCents }] : []),
@@ -125,7 +127,16 @@ export async function loadPayStub(companyId: string, payRunId: string, employeeI
     ytdCents: deductions.reduce((s, d) => s + d.ytdCents, 0),
   };
 
-  return { line, employee, payRun, profile, ytd, earnings, deductions, totalDeductions, leaveSummary };
+  const employerContributions: StubDeductionRow[] = [
+    { label: `Employer ${pensionLabel}`, currentCents: line.employerCppCents, ytdCents: ytd.employerCppCents },
+    { label: `Employer ${pensionLabel}2`, currentCents: line.employerCpp2Cents, ytdCents: ytd.employerCpp2Cents },
+    { label: "Employer EI", currentCents: line.employerEiCents, ytdCents: ytd.employerEiCents },
+    ...(line.employerQpipCents !== 0 || ytd.employerQpipCents !== 0
+      ? [{ label: "Employer QPIP", currentCents: line.employerQpipCents, ytdCents: ytd.employerQpipCents }]
+      : []),
+  ];
+
+  return { line, employee, payRun, profile, ytd, earnings, deductions, totalDeductions, employerContributions, leaveSummary };
 }
 
 export type PayStub = NonNullable<Awaited<ReturnType<typeof loadPayStub>>>;

@@ -2069,6 +2069,16 @@ model PayrollStatutoryRate {
   qpipEmployerRateMicro         Int @default(0)
   qpipMaxInsurableEarningsCents Int @default(0)
 
+  /// QPP — the Québec Pension Plan, which REPLACES CPP/CPP2 for employees whose
+  /// province of employment is Quebec. Same basic exemption, YMPE and YAMPE as
+  /// CPP; only the rates differ (QPP's 6.30% in 2026 includes the first
+  /// additional contribution). 0 = not configured, and the engine then falls
+  /// back to the CPP rates for that employee (flagged in the admin UI).
+  /// The QPP amounts are stored in the same PayRunLine cpp/cpp2 columns and
+  /// relabelled by the employee's province at display time.
+  qppRateMicro  Int @default(0)
+  qpp2RateMicro Int @default(0)
+
   effectiveFrom DateTime
   effectiveTo   DateTime?
   isActive      Boolean   @default(true)

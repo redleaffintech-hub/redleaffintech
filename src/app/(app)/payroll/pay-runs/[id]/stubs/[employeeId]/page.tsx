@@ -18,7 +18,7 @@ export default async function PayStubPage({ params }: { params: Promise<{ id: st
   // Stubs only exist for a finalized pay run; the same data feeds the PDF.
   const stub = await loadPayStub(company.id, id, employeeId);
   if (!stub) notFound();
-  const { line, employee, payRun, profile: companyProfile, ytd, earnings, deductions, totalDeductions, leaveSummary } = stub;
+  const { line, employee, payRun, profile: companyProfile, ytd, earnings, deductions, totalDeductions, employerContributions, leaveSummary } = stub;
 
   const currency = company.baseCurrency;
   const fmt = (cents: number) => formatMoney(cents, { currency });
@@ -181,14 +181,20 @@ export default async function PayStubPage({ params }: { params: Promise<{ id: st
 
         <div className="mt-5 grid gap-4 sm:grid-cols-2">
           <div className="inv-keep">
-            {(line.employerCppCents > 0 || line.employerCpp2Cents > 0 || line.employerEiCents > 0 || line.employerQpipCents > 0) && (
+            {employerContributions.some((c) => c.currentCents > 0 || c.ytdCents > 0) && (
               <>
                 <div className="inv-band">Employer contributions (informational)</div>
                 <div className="inv-box text-[0.8125rem] leading-6">
-                  <p>Employer CPP: {fmt(line.employerCppCents)}</p>
-                  <p>Employer CPP2: {fmt(line.employerCpp2Cents)}</p>
-                  <p>Employer EI: {fmt(line.employerEiCents)}</p>
-                  {line.employerQpipCents > 0 && <p>Employer QPIP: {fmt(line.employerQpipCents)}</p>}
+                  <div className="flex justify-between gap-4 text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-[color:var(--inv-ink)]/65">
+                    <span />
+                    <span className="flex gap-6"><span className="w-20 text-right">Current</span><span className="w-24 text-right">Year to date</span></span>
+                  </div>
+                  {employerContributions.map((c) => (
+                    <div key={c.label} className="flex justify-between gap-4">
+                      <span>{c.label}</span>
+                      <span className="tnum flex gap-6"><span className="w-20 text-right">{fmt(c.currentCents)}</span><span className="w-24 text-right">{fmt(c.ytdCents)}</span></span>
+                    </div>
+                  ))}
                 </div>
               </>
             )}

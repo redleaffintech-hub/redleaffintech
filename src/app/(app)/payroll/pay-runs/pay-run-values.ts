@@ -8,11 +8,16 @@
  * there first).
  */
 import { PAY_FREQUENCY_PERIODS_PER_YEAR, type PayFrequency } from "@/lib/hr-enums";
-import { defaultPeriodHours } from "@/lib/payroll-hours";
+import { defaultPeriodHours, hourlyRegularPayCents } from "@/lib/payroll-hours";
 
 export interface PayRunLineFormValue {
   employeeId: string;
   employeeName: string;
+  /** Employee facts the form needs to keep hourly pay and the CPP/QPP labels right. */
+  province: string;
+  isHourly: boolean;
+  /** Hourly rate in cents for hourly employees, else 0. */
+  hourlyRateCents: number;
   include: boolean;
   regularHours: string;
   overtimeHours: string;
@@ -66,6 +71,8 @@ interface EmployeeForDefaults {
   payRateCents: number;
   payFrequency: string;
   standardHoursPerWeek: number | null;
+  employeeType: string;
+  provinceOfEmployment: string;
 }
 
 const centsToStr = (cents: number) => (cents / 100).toFixed(2);
@@ -73,14 +80,24 @@ const centsToStr = (cents: number) => (cents / 100).toFixed(2);
 /** Salaried: gross defaults to salary / pay periods per year. Hourly: left blank for hours to be entered. */
 export function defaultLineFor(employee: EmployeeForDefaults): PayRunLineFormValue {
   const periodsPerYear = PAY_FREQUENCY_PERIODS_PER_YEAR[employee.payFrequency as PayFrequency] ?? 26;
+  const hours = defaultPeriodHours(employee);
+  // Salaried: salary / periods. Hourly: standard period hours x rate (casual staff have no standard
+  // hours, so their pay stays blank until hours are typed).
   const grossPay =
-    employee.compensationType === "SALARY" ? centsToStr(Math.round(employee.payRateCents / periodsPerYear)) : "";
+    employee.compensationType === "SALARY"
+      ? centsToStr(Math.round(employee.payRateCents / periodsPerYear))
+      : hours
+        ? centsToStr(hourlyRegularPayCents(employee, hours) ?? 0)
+        : "";
 
   return {
     employeeId: employee.id,
     employeeName: `${employee.preferredName || employee.legalFirstName} ${employee.legalLastName}`,
+    province: employee.provinceOfEmployment,
+    isHourly: employee.compensationType === "HOURLY",
+    hourlyRateCents: employee.compensationType === "HOURLY" ? employee.payRateCents : 0,
     include: true,
-    regularHours: defaultPeriodHours(employee)?.toString() ?? "",
+    regularHours: hours?.toString() ?? "",
     overtimeHours: "",
     vacationHours: "",
     sickHours: "",
@@ -123,7 +140,7 @@ export function blankPayRun(defaultBankAccountId: string, employees: EmployeeFor
 
 interface SavedPayRunLine {
   employeeId: string;
-  employee: { legalFirstName: string; legalLastName: string; preferredName: string | null };
+  employee: { legalFirstName: string; legalLastName: string; preferredName: string | null; provinceOfEmployment: string; compensationType: string; payRateCents: number };
   regularHours: number | null;
   overtimeHours: number | null;
   vacationHours: number | null;
@@ -157,6 +174,9 @@ function lineFromSaved(line: SavedPayRunLine): PayRunLineFormValue {
   return {
     employeeId: line.employeeId,
     employeeName: `${line.employee.preferredName || line.employee.legalFirstName} ${line.employee.legalLastName}`,
+    province: line.employee.provinceOfEmployment,
+    isHourly: line.employee.compensationType === "HOURLY",
+    hourlyRateCents: line.employee.compensationType === "HOURLY" ? line.employee.payRateCents : 0,
     include: true,
     regularHours: line.regularHours?.toString() ?? "",
     overtimeHours: line.overtimeHours?.toString() ?? "",

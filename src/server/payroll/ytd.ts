@@ -10,6 +10,10 @@ export interface PayrollYtd {
   cpp2Cents: number;
   eiCents: number;
   qpipCents: number;
+  employerCppCents: number;
+  employerCpp2Cents: number;
+  employerEiCents: number;
+  employerQpipCents: number;
   federalTaxCents: number;
   provincialTaxCents: number;
   netCents: number;
@@ -34,6 +38,10 @@ const EMPTY_YTD: PayrollYtd = {
   cpp2Cents: 0,
   eiCents: 0,
   qpipCents: 0,
+  employerCppCents: 0,
+  employerCpp2Cents: 0,
+  employerEiCents: 0,
+  employerQpipCents: 0,
   federalTaxCents: 0,
   provincialTaxCents: 0,
   netCents: 0,
@@ -92,6 +100,10 @@ export async function payrollYtd(
       cpp2Cents: true,
       eiCents: true,
       qpipCents: true,
+      employerCppCents: true,
+      employerCpp2Cents: true,
+      employerEiCents: true,
+      employerQpipCents: true,
       federalTaxCents: true,
       provincialTaxCents: true,
       netPayCents: true,
@@ -119,6 +131,10 @@ export async function payrollYtd(
       cpp2Cents: totals.cpp2Cents + line.cpp2Cents,
       eiCents: totals.eiCents + line.eiCents,
       qpipCents: totals.qpipCents + line.qpipCents,
+      employerCppCents: totals.employerCppCents + line.employerCppCents,
+      employerCpp2Cents: totals.employerCpp2Cents + line.employerCpp2Cents,
+      employerEiCents: totals.employerEiCents + line.employerEiCents,
+      employerQpipCents: totals.employerQpipCents + line.employerQpipCents,
       federalTaxCents: totals.federalTaxCents + line.federalTaxCents,
       provincialTaxCents: totals.provincialTaxCents + line.provincialTaxCents,
       netCents: totals.netCents + line.netPayCents,

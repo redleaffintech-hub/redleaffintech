@@ -33,7 +33,7 @@ import { nextNumber } from "@/server/documents/numbering";
 import type { PayFrequency } from "@/lib/hr-enums";
 import { computeCppAndEi, currentPayrollStatutoryRate, currentTaxBrackets, periodIncomeTaxCents, suggestOvertimePayCents } from "@/server/payroll/tax-engine";
 import { payrollYtd } from "@/server/payroll/ytd";
-import { defaultPeriodHours, impliedHours, medicalInsuranceCents } from "@/lib/payroll-hours";
+import { defaultPeriodHours, hourlyRegularPayCents, impliedHours, medicalInsuranceCents } from "@/lib/payroll-hours";
 
 export interface PayRunLineInput {
   employeeId: string;
@@ -218,8 +218,17 @@ async function resolveLines(tx: Tx, companyId: string, payDate: Date, lines: Pay
         ? suggestOvertimePayCents(employee, overtimeHours, line.otRateMultiplierMicro ?? undefined)
         : 0);
 
+    // Hourly employees: regular pay is hours x rate, exactly as overtime is hours x rate x multiplier.
+    // Hours default to the employee's standard period hours when nothing was entered (casual staff
+    // have none, so they must enter hours); a manually entered pay amount is always kept as-is.
+    const hourlyHours =
+      employee.compensationType === "HOURLY"
+        ? line.regularHours ?? (line.regularPayCents ? null : defaultPeriodHours(employee))
+        : null;
+    const regularPayCents = line.regularPayCents || (hourlyRegularPayCents(employee, hourlyHours) ?? 0);
+
     const earnings = {
-      regularPayCents: line.regularPayCents ?? 0,
+      regularPayCents,
       overtimePayCents,
       vacationPayCents: line.vacationPayCents ?? 0,
       sickPayCents: line.sickPayCents ?? 0,
@@ -233,7 +242,7 @@ async function resolveLines(tx: Tx, companyId: string, payDate: Date, lines: Pay
     // employee with standard hours on file gets a full period of regular hours
     // by default; vacation/sick/stat hours are derived from the hourly rate
     // when only the pay was entered.
-    const regularHours = line.regularHours ?? (earnings.regularPayCents > 0 ? defaultPeriodHours(employee) : null);
+    const regularHours = line.regularHours ?? hourlyHours ?? (earnings.regularPayCents > 0 ? defaultPeriodHours(employee) : null);
     const vacationHours = line.vacationHours ?? impliedHours(earnings.vacationPayCents, employee);
     const sickHours = line.sickHours ?? impliedHours(earnings.sickPayCents, employee);
     const statutoryHolidayHours = line.statutoryHolidayHours ?? impliedHours(earnings.statutoryHolidayPayCents, employee);

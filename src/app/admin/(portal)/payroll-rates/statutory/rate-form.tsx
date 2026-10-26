@@ -18,6 +18,8 @@ export interface StatutoryRateFormValues {
   qpipRate: string;
   qpipEmployerRate: string;
   qpipMaxInsurableEarnings: string;
+  qppRate: string;
+  qpp2Rate: string;
   effectiveFrom: string;
   effectiveTo: string;
 }
@@ -27,6 +29,7 @@ const BLANK: StatutoryRateFormValues = {
   cpp2Rate: "4", cpp2MaxPensionableEarnings: "",
   eiRate: "", eiRateQuebec: "", eiEmployerMultiplier: "1.4", eiMaxInsurableEarnings: "",
   qpipRate: "", qpipEmployerRate: "", qpipMaxInsurableEarnings: "",
+  qppRate: "", qpp2Rate: "4",
   effectiveFrom: "", effectiveTo: "",
 };
 
@@ -88,6 +91,13 @@ export function StatutoryRateForm({ csrfToken, initial = BLANK }: { csrfToken: s
           <input name="qpipMaxInsurableEarnings" type="text" inputMode="decimal" defaultValue={initial.qpipMaxInsurableEarnings} required className={`${adminInputClass} tnum`} />
         </AdminField>
         <div />
+
+        <AdminField label="QPP rate (%)" hint="Quebec employees contribute to the QPP instead of CPP — same exemption and YMPE, own rate (2026: 6.30%). Blank falls back to the CPP rate.">
+          <input name="qppRate" type="text" inputMode="decimal" defaultValue={initial.qppRate} className={`${adminInputClass} tnum`} />
+        </AdminField>
+        <AdminField label="QPP2 rate (%)" hint="Second additional contribution, same YAMPE as CPP2 (2026: 4%).">
+          <input name="qpp2Rate" type="text" inputMode="decimal" defaultValue={initial.qpp2Rate} className={`${adminInputClass} tnum`} />
+        </AdminField>
 
         <AdminField label="Effective date" required hint="When this year's rates start applying.">
           <input name="effectiveFrom" type="date" defaultValue={initial.effectiveFrom} required className={adminInputClass} />

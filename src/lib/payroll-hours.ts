@@ -10,13 +10,19 @@ export interface HoursEmployee {
   payRateCents: number;
   payFrequency: string;
   standardHoursPerWeek: number | null;
+  /** FULL_TIME | PART_TIME | CASUAL | SEASONAL | CONTRACT — casual staff have no scheduled hours. */
+  employeeType?: string;
 }
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
-/** Regular hours a full pay period covers for a salaried employee with standard hours on file; otherwise null (hourly staff enter hours). */
+/**
+ * Regular hours a full pay period covers when the employee has standard hours on file
+ * (salaried and hourly alike). Casual employees have no scheduled hours, so they get null
+ * and the hours are entered each pay run.
+ */
 export function defaultPeriodHours(employee: HoursEmployee): number | null {
-  if (employee.compensationType !== "SALARY" || !employee.standardHoursPerWeek) return null;
+  if (employee.employeeType === "CASUAL" || !employee.standardHoursPerWeek) return null;
   const periods = PAY_FREQUENCY_PERIODS_PER_YEAR[employee.payFrequency as PayFrequency] ?? 26;
   return round2((employee.standardHoursPerWeek * 52) / periods);
 }
@@ -26,6 +32,12 @@ export function hourlyRateCents(employee: HoursEmployee): number | null {
   if (employee.compensationType === "HOURLY") return employee.payRateCents;
   if (employee.standardHoursPerWeek) return Math.round(employee.payRateCents / (52 * employee.standardHoursPerWeek));
   return null;
+}
+
+/** Regular pay for a number of hours worked by an hourly employee, in cents; null for salaried staff. */
+export function hourlyRegularPayCents(employee: HoursEmployee, hours: number | null | undefined): number | null {
+  if (employee.compensationType !== "HOURLY" || !hours || hours <= 0) return null;
+  return Math.round(employee.payRateCents * hours);
 }
 
 /** Hours that a given pay amount represents at the employee's hourly rate (vacation/sick/stat pay entered without hours). */

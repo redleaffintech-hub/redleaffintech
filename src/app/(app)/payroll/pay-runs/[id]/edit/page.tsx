@@ -16,12 +16,12 @@ export default async function EditPayRunPage({ params }: { params: Promise<{ id:
   const [payRun, employees, bankAccounts] = await Promise.all([
     db.payRun.findFirst({
       where: { id, companyId: company.id },
-      include: { lines: { include: { employee: { select: { legalFirstName: true, legalLastName: true, preferredName: true } } } } },
+      include: { lines: { include: { employee: { select: { legalFirstName: true, legalLastName: true, preferredName: true, provinceOfEmployment: true, compensationType: true, payRateCents: true } } } } },
     }),
     db.employee.findMany({
       where: { companyId: company.id, employmentStatus: "ACTIVE" },
       orderBy: { legalFirstName: "asc" },
-      select: { id: true, legalFirstName: true, legalLastName: true, preferredName: true, compensationType: true, payRateCents: true, payFrequency: true, standardHoursPerWeek: true },
+      select: { id: true, legalFirstName: true, legalLastName: true, preferredName: true, compensationType: true, payRateCents: true, payFrequency: true, standardHoursPerWeek: true, employeeType: true, provinceOfEmployment: true },
     }),
     db.account.findMany({
       where: { companyId: company.id, isActive: true, subtype: { in: ["BANK", "CASH", "CREDIT_CARD"] } },

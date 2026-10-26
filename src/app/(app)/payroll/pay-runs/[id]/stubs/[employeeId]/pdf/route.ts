@@ -28,7 +28,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
 
   const stub = await loadPayStub(company.id, id, employeeId);
   if (!stub) return new NextResponse("Pay stub not found", { status: 404 });
-  const { line, employee, payRun, profile, ytd, earnings, deductions, totalDeductions, leaveSummary } = stub;
+  const { line, employee, payRun, profile, ytd, earnings, deductions, totalDeductions, employerContributions, leaveSummary } = stub;
 
   const currency = company.baseCurrency;
   const fmt = (cents: number) => ascii(formatMoney(cents, { currency }));
@@ -176,18 +176,19 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   }
 
   // Employer contributions (informational), beside the net-pay block.
-  if (line.employerCppCents > 0 || line.employerCpp2Cents > 0 || line.employerEiCents > 0 || line.employerQpipCents > 0) {
+  if (employerContributions.some((c) => c.currentCents > 0 || c.ytdCents > 0)) {
     let cy = blockTop;
+    const eCur = 215;
+    const eYtd = 315;
     text("EMPLOYER CONTRIBUTIONS (INFORMATIONAL)", LEFT, cy, bold, 8, muted);
     cy -= 13;
-    const items: [string, number][] = [
-      ["Employer CPP", line.employerCppCents],
-      ["Employer CPP2", line.employerCpp2Cents],
-      ["Employer EI", line.employerEiCents],
-      ...(line.employerQpipCents > 0 ? [["Employer QPIP", line.employerQpipCents] as [string, number]] : []),
-    ];
-    for (const [k, v] of items) {
-      text(`${k}: ${fmt(v)}`, LEFT, cy, font, 9);
+    textRight("Current", eCur, cy, bold, 8, muted);
+    textRight("Year to date", eYtd, cy, bold, 8, muted);
+    cy -= 12;
+    for (const c of employerContributions) {
+      text(c.label, LEFT, cy, font, 9);
+      textRight(fmt(c.currentCents), eCur, cy, font, 9);
+      textRight(fmt(c.ytdCents), eYtd, cy, font, 9);
       cy -= 12;
     }
     y = Math.min(y, cy);

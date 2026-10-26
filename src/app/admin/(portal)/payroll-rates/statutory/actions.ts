@@ -45,6 +45,8 @@ interface StatutoryRateInput {
   qpipRateMicro: number;
   qpipEmployerRateMicro: number;
   qpipMaxInsurableEarningsCents: number;
+  qppRateMicro: number;
+  qpp2RateMicro: number;
   effectiveFrom: Date;
   effectiveTo: Date | null;
 }
@@ -62,6 +64,8 @@ function readInput(formData: FormData): { input: StatutoryRateInput | null; erro
   const qpipRateMicro = percentToRateMicro(str(formData, "qpipRate"));
   const qpipEmployerRateMicro = percentToRateMicro(str(formData, "qpipEmployerRate"));
   const qpipMaxInsurableEarningsCents = cents(formData, "qpipMaxInsurableEarnings");
+  const qppRateMicro = percentToRateMicro(str(formData, "qppRate")) ?? 0;
+  const qpp2RateMicro = percentToRateMicro(str(formData, "qpp2Rate")) ?? 0;
   const effectiveFrom = date(formData, "effectiveFrom");
   const effectiveTo = date(formData, "effectiveTo");
 
@@ -89,6 +93,7 @@ function readInput(formData: FormData): { input: StatutoryRateInput | null; erro
       cpp2RateMicro, cpp2MaxPensionableEarningsCents,
       eiRateMicro, eiRateMicroQuebec, eiEmployerMultiplierMicro, eiMaxInsurableEarningsCents,
       qpipRateMicro, qpipEmployerRateMicro, qpipMaxInsurableEarningsCents,
+      qppRateMicro, qpp2RateMicro,
       effectiveFrom, effectiveTo,
     },
     error: null,

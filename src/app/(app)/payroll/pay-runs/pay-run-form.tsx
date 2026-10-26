@@ -130,6 +130,11 @@ export function PayRunForm({
     });
   }
 
+  // Quebec employees pay QPP instead of CPP — same fields, relabelled to match who is on this run.
+  const hasQuebec = form.lines.some((l) => l.province === "QC");
+  const hasOther = form.lines.some((l) => l.province !== "QC");
+  const pension = hasQuebec ? (hasOther ? "CPP/QPP" : "QPP") : "CPP";
+
   const [leaveNote, setLeaveNote] = useState<string | null>(null);
 
   /** Fill vacation/sick hours and pay from approved leave in the period; salaried regular hours/pay shrink to match. */
@@ -272,8 +277,8 @@ export function PayRunForm({
                 <th className="w-16 py-1.5 pr-2 text-right">Hours</th>
                 <th className="w-16 py-1.5 pr-2 text-right">OT hrs</th>
                 <th className="w-24 py-1.5 pr-2 text-right">Regular ($)</th>
-                <th className="w-20 py-1.5 pr-2 text-right">CPP ($)</th>
-                <th className="w-20 py-1.5 pr-2 text-right">CPP2 ($)</th>
+                <th className="w-20 py-1.5 pr-2 text-right">{pension} ($)</th>
+                <th className="w-20 py-1.5 pr-2 text-right">{pension}2 ($)</th>
                 <th className="w-20 py-1.5 pr-2 text-right">EI ($)</th>
                 <th className="w-24 py-1.5 pr-2 text-right">Fed tax ($)</th>
                 <th className="w-24 py-1.5 pr-2 text-right">Prov tax ($)</th>
@@ -298,7 +303,7 @@ export function PayRunForm({
                         />
                       </td>
                       <td className="py-1.5 pr-2 font-medium text-ink-900">{line.employeeName}</td>
-                      <Cell value={line.regularHours} onChange={(v) => setLine(index, { regularHours: v })} disabled={!line.include} />
+                      <Cell value={line.regularHours} onChange={(v) => setLine(index, line.isHourly ? { regularHours: v, regularPay: v ? fromCents(Math.round(line.hourlyRateCents * (Number(v) || 0))) : "" } : { regularHours: v })} disabled={!line.include} />
                       <Cell value={line.overtimeHours} onChange={(v) => setLine(index, { overtimeHours: v })} disabled={!line.include} />
                       <Cell value={line.regularPay} onChange={(v) => setLine(index, { regularPay: v })} disabled={!line.include} bold />
                       <Cell value={line.cpp} onChange={(v) => setLine(index, { cpp: v })} disabled={!line.include} />
@@ -336,8 +341,8 @@ export function PayRunForm({
                             <LabeledCell label="Retroactive pay" value={line.retroactivePay} onChange={(v) => setLine(index, { retroactivePay: v })} disabled={!line.include} />
                             <LabeledCell label="Stat holiday pay" value={line.statutoryHolidayPay} onChange={(v) => setLine(index, { statutoryHolidayPay: v })} disabled={!line.include} />
                             <LabeledCell label="Stat hrs" value={line.statutoryHolidayHours} onChange={(v) => setLine(index, { statutoryHolidayHours: v })} disabled={!line.include} />
-                            <LabeledCell label="Empr CPP" value={line.employerCpp} onChange={(v) => setLine(index, { employerCpp: v })} disabled={!line.include} />
-                            <LabeledCell label="Empr CPP2" value={line.employerCpp2} onChange={(v) => setLine(index, { employerCpp2: v })} disabled={!line.include} />
+                            <LabeledCell label={`Empr ${pension}`} value={line.employerCpp} onChange={(v) => setLine(index, { employerCpp: v })} disabled={!line.include} />
+                            <LabeledCell label={`Empr ${pension}2`} value={line.employerCpp2} onChange={(v) => setLine(index, { employerCpp2: v })} disabled={!line.include} />
                             <LabeledCell label="Empr EI" value={line.employerEi} onChange={(v) => setLine(index, { employerEi: v })} disabled={!line.include} />
                             <LabeledCell label="QPIP (QC only)" value={line.qpip} onChange={(v) => setLine(index, { qpip: v })} disabled={!line.include} />
                             <LabeledCell label="Empr QPIP" value={line.employerQpip} onChange={(v) => setLine(index, { employerQpip: v })} disabled={!line.include} />

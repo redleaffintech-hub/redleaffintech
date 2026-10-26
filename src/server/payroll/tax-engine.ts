@@ -45,6 +45,9 @@ export interface PayrollStatutoryRateRow {
   qpipRateMicro: number;
   qpipEmployerRateMicro: number;
   qpipMaxInsurableEarningsCents: number;
+  /** QPP — replaces CPP/CPP2 for Quebec employees (same exemption/YMPE/YAMPE, own rates). 0 = unset, falls back to CPP's. */
+  qppRateMicro: number;
+  qpp2RateMicro: number;
   effectiveFrom: Date;
   effectiveTo: Date | null;
 }
@@ -121,15 +124,22 @@ export function computeCppAndEi(input: CppEiInput): CppEiResult {
   const { rates } = input;
   const periodsPerYear = PAY_FREQUENCY_PERIODS_PER_YEAR[input.payFrequency] ?? 26;
 
+  // Quebec employees contribute to the QPP instead of the CPP: same exemption
+  // and ceilings, different rates. The result still lands in the cppCents /
+  // cpp2Cents fields (the screens relabel them QPP/QPP2 for Quebec).
+  const isQuebec = input.province === "QC";
+  const cppRateMicro = isQuebec && rates.qppRateMicro > 0 ? rates.qppRateMicro : rates.cppRateMicro;
+  const cpp2RateMicro = isQuebec && rates.qpp2RateMicro > 0 ? rates.qpp2RateMicro : rates.cpp2RateMicro;
+
   // CPP (base tier): per-period basic exemption, pensionable earnings above
   // it, capped at the annual maximum contribution.
   const perPeriodExemption = rates.cppBasicExemptionCents / periodsPerYear;
   const pensionableEarnings = Math.max(0, input.grossPayCents - perPeriodExemption);
   const maxAnnualCpp = applyRateMicro(
     rates.cppMaxPensionableEarningsCents - rates.cppBasicExemptionCents,
-    rates.cppRateMicro,
+    cppRateMicro,
   );
-  const rawCpp = applyRateMicro(pensionableEarnings, rates.cppRateMicro);
+  const rawCpp = applyRateMicro(pensionableEarnings, cppRateMicro);
   const cppCents = Math.max(0, Math.min(rawCpp, maxAnnualCpp - input.ytdCppCents));
 
   // CPP2 (second tier): applies only to pensionable earnings between the
@@ -140,9 +150,9 @@ export function computeCppAndEi(input: CppEiInput): CppEiResult {
   );
   const maxAnnualCpp2 = applyRateMicro(
     rates.cpp2MaxPensionableEarningsCents - rates.cppMaxPensionableEarningsCents,
-    rates.cpp2RateMicro,
+    cpp2RateMicro,
   );
-  const rawCpp2 = applyRateMicro(Math.max(0, cpp2Band), rates.cpp2RateMicro);
+  const rawCpp2 = applyRateMicro(Math.max(0, cpp2Band), cpp2RateMicro);
   const cpp2Cents = Math.max(0, Math.min(rawCpp2, maxAnnualCpp2 - input.ytdCpp2Cents));
 
   // EI: capped at the annual maximum insurable earnings. Quebec runs its own

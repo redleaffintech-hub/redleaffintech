@@ -23,7 +23,7 @@ export default async function PayRunDetailPage({ params }: { params: Promise<{ i
     where: { id, companyId: company.id },
     include: {
       lines: {
-        include: { employee: { select: { id: true, legalFirstName: true, legalLastName: true, preferredName: true } } },
+        include: { employee: { select: { id: true, legalFirstName: true, legalLastName: true, preferredName: true, provinceOfEmployment: true } } },
         orderBy: { employee: { legalFirstName: "asc" } },
       },
     },
@@ -31,6 +31,11 @@ export default async function PayRunDetailPage({ params }: { params: Promise<{ i
   if (!payRun) notFound();
 
   const bankAccount = await db.account.findUnique({ where: { id: payRun.bankAccountId }, select: { code: true, name: true } });
+
+  // Quebec employees pay QPP instead of CPP (same columns); label the headers to match the mix on this run.
+  const hasQuebec = payRun.lines.some((l) => l.employee.provinceOfEmployment === "QC");
+  const hasOther = payRun.lines.some((l) => l.employee.provinceOfEmployment !== "QC");
+  const pension = hasQuebec ? (hasOther ? "CPP/QPP" : "QPP") : "CPP";
 
   const totals = payRun.lines.reduce(
     (sum, line) => ({
@@ -107,16 +112,16 @@ export default async function PayRunDetailPage({ params }: { params: Promise<{ i
             <tr>
               <Th>Employee</Th>
               <Th align="right">Gross</Th>
-              <Th align="right">CPP</Th>
-              <Th align="right">CPP2</Th>
+              <Th align="right">{pension}</Th>
+              <Th align="right">{pension}2</Th>
               <Th align="right">EI</Th>
               <Th align="right">QPIP</Th>
               <Th align="right">Fed tax</Th>
               <Th align="right">Prov tax</Th>
               <Th align="right">Medical</Th>
               <Th align="right">Other</Th>
-              <Th align="right">Empr CPP</Th>
-              <Th align="right">Empr CPP2</Th>
+              <Th align="right">Empr {pension}</Th>
+              <Th align="right">Empr {pension}2</Th>
               <Th align="right">Empr EI</Th>
               <Th align="right">Empr QPIP</Th>
               <Th align="right">Net pay</Th>
