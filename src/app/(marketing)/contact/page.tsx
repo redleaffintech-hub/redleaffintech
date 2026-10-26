@@ -8,7 +8,7 @@ export const metadata = {
     "Talk to Red Leaf Fintech about plans, migrating an existing set of books, or an accounting practice enquiry.",
 };
 
-const CONTACT_EMAIL = process.env.CONTACT_EMAIL ?? "hello@redleaffintech.com";
+const CONTACT_EMAIL = process.env.CONTACT_EMAIL ?? "info@redleaffintech.com";
 
 export default async function ContactPage({ searchParams }: PageProps<"/contact">) {
   const params = await searchParams;

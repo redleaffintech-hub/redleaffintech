@@ -41,7 +41,7 @@ export async function submitContactAction(formData: FormData): Promise<ContactRe
   }
 
   const target = process.env.CONTACT_FORWARD_URL;
-  const fallbackEmail = process.env.CONTACT_EMAIL ?? "hello@redleaffintech.com";
+  const fallbackEmail = process.env.CONTACT_EMAIL ?? "info@redleaffintech.com";
 
   if (!target) {
     return {

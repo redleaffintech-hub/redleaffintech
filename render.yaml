@@ -30,7 +30,7 @@ services:
       - key: NPM_CONFIG_PRODUCTION
         value: "false"     # keep devDependencies — the build needs tailwind, tsx, the Netlify types
       - key: CONTACT_EMAIL
-        value: hello@redleaffintech.com
+        value: info@redleaffintech.com
       - key: DATABASE_URL
         sync: false        # Neon POOLED connection string
       - key: DATABASE_URL_UNPOOLED
