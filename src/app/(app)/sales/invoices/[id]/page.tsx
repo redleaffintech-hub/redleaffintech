@@ -9,6 +9,7 @@ import { formatMoney, formatQty, formatRate } from "@/lib/money";
 import { taxRegistrationLines } from "@/lib/tax-registration";
 import { Badge, Card, CardHeader, Money, PageHeader, StatusBadge } from "@/components/ui";
 import { InvoiceActions } from "./invoice-actions";
+import { UnallocateButton } from "@/components/unallocate-button";
 
 export default async function InvoiceDetailPage({ params }: PageProps<"/sales/invoices/[id]">) {
   const { company, role } = await requireCapability(CAPABILITIES.INVOICES);
@@ -111,6 +112,7 @@ export default async function InvoiceDetailPage({ params }: PageProps<"/sales/in
   // falls back to today's live company footer (documented compatibility path).
   const invoiceFooterText = invoice.footerText ?? companyProfile.invoiceFooter;
 
+  const canUnallocate = can(role, CAPABILITIES.PAYMENTS);
   const hasItemColumn = invoice.lines.some((line) => line.item);
 
   // Editable while nothing is owed against it: a draft is rewritten, a posted
@@ -388,7 +390,11 @@ export default async function InvoiceDetailPage({ params }: PageProps<"/sales/in
                   <li key={allocation.id} className="flex items-center gap-2 py-2 text-[0.8125rem]">
                     <span className="min-w-0 flex-1">
                       <span className="block font-medium text-ink-900">
-                        {allocation.payment?.number ?? allocation.creditNote?.number ?? "Write-off"}
+                        {allocation.payment ? (
+                          <Link href={`/sales/receipts/${allocation.payment.id}`} className="text-brand-700 hover:underline">{allocation.payment.number}</Link>
+                        ) : (
+                          allocation.creditNote?.number ?? "Write-off"
+                        )}
                       </span>
                       <span className="text-[0.75rem] text-muted-ink">
                         {allocation.kind === "WRITE_OFF" ? "Bad debt" : allocation.kind === "CREDIT" ? "Credit note applied" : allocation.payment?.method}
@@ -397,6 +403,9 @@ export default async function InvoiceDetailPage({ params }: PageProps<"/sales/in
                       </span>
                     </span>
                     <Money cents={allocation.amountCents} bold />
+                    {allocation.kind === "PAYMENT" && allocation.payment && canUnallocate && (
+                      <UnallocateButton allocationId={allocation.id} paymentNumber={allocation.payment.number} documentNumber={invoice.number} />
+                    )}
                   </li>
                 ))}
               </ul>

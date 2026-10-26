@@ -149,14 +149,17 @@ export function CatalogueRowActions({
   );
 }
 
-function ItemDialog({
+export function ItemDialog({
   item,
   options,
   onClose,
+  onCreated,
 }: {
   item: CatalogueItem;
   options: CatalogueOptions;
   onClose: () => void;
+  /** Called with the saved item after a create (used by "Add new" inside a document editor). */
+  onCreated?: (created: NonNullable<Awaited<ReturnType<typeof createItemAction>>["item"]>) => void;
 }) {
   const router = useRouter();
   const money = useMoney();
@@ -184,8 +187,10 @@ function ItemDialog({
           const failed = "error" in result ? result.error : null;
           if (failed) setError(failed);
           else {
+            const created = (result as { item?: Parameters<NonNullable<typeof onCreated>>[0] }).item;
+            if (created) onCreated?.(created);
             onClose();
-            router.refresh();
+            if (!onCreated) router.refresh();
           }
         }}
         className="space-y-4"

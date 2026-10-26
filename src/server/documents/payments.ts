@@ -321,3 +321,40 @@ export async function voidPayment(companyId: string, paymentId: string, userId?:
     return payment;
   });
 }
+
+/**
+ * Take one allocation back off an invoice or bill. The cash stays on the books
+ * as an UNAPPLIED receipt/payment (nothing is reversed in the ledger — only the
+ * subledger link changes), so the document reopens and the money can be applied
+ * elsewhere or the payment voided separately.
+ */
+export async function unallocatePayment(companyId: string, allocationId: string, userId?: string | null) {
+  return db.$transaction(async (tx) => {
+    const allocation = await tx.paymentAllocation.findUnique({
+      where: { id: allocationId },
+      include: { payment: true, invoice: { select: { companyId: true, number: true } }, bill: { select: { companyId: true, number: true } } },
+    });
+    const document = allocation?.invoice ?? allocation?.bill;
+    if (!allocation || !allocation.payment || !document || document.companyId !== companyId || allocation.payment.companyId !== companyId) {
+      throw new Error("That payment allocation does not exist in this company.");
+    }
+    if (allocation.kind !== "PAYMENT") throw new Error("Only a cash payment can be unallocated here. Credit notes are unapplied from the credit note.");
+    if (allocation.payment.status !== "POSTED") throw new Error(`Payment ${allocation.payment.number} is ${allocation.payment.status.toLowerCase()}.`);
+
+    await tx.paymentAllocation.delete({ where: { id: allocationId } });
+    await tx.payment.update({
+      where: { id: allocation.payment.id },
+      data: { appliedCents: { decrement: allocation.amountCents }, unappliedCents: { increment: allocation.amountCents } },
+    });
+    if (allocation.invoiceId) await refreshInvoiceStatus(tx, allocation.invoiceId);
+    if (allocation.billId) await refreshBillStatus(tx, allocation.billId);
+
+    await tx.auditLog.create({
+      data: {
+        companyId, userId, action: "UPDATE", entityType: allocation.invoiceId ? "Invoice" : "Bill", entityId: (allocation.invoiceId ?? allocation.billId)!,
+        summary: `Unallocated ${allocation.payment.number} (${(allocation.amountCents / 100).toFixed(2)}) from ${document.number}`,
+      },
+    });
+    return { paymentNumber: allocation.payment.number, documentNumber: document.number };
+  });
+}

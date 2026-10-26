@@ -9,7 +9,7 @@ import { CAPABILITIES } from "@/lib/permissions";
 import { recordAudit, requireCapability } from "@/server/auth/context";
 import { getSystemAccount } from "@/server/accounting/ledger";
 import { adjustStock } from "@/server/inventory/costing";
-import { SYSTEM_ACCOUNTS } from "@/lib/enums";
+import { ITEM_UNITS, SYSTEM_ACCOUNTS } from "@/lib/enums";
 
 /**
  * Products & services catalogue.
@@ -147,6 +147,26 @@ async function validate(
   };
 }
 
+/** The dropdown data the product/service dialog needs, for "Add new" from inside a document editor. */
+export async function catalogueOptionsAction() {
+  const { company } = await requireCapability(CAPABILITIES.COMPANY_SETTINGS);
+  const [accounts, taxCodes] = await Promise.all([
+    db.account.findMany({
+      where: { companyId: company.id, isActive: true, type: { in: ["REVENUE", "EXPENSE", "ASSET"] } },
+      select: { id: true, code: true, name: true, type: true },
+      orderBy: { code: "asc" },
+    }),
+    db.taxCode.findMany({ where: { companyId: company.id, isActive: true }, select: { id: true, code: true, name: true }, orderBy: { code: "asc" } }),
+  ]);
+  return {
+    incomeAccounts: accounts.filter((a) => a.type === "REVENUE"),
+    expenseAccounts: accounts.filter((a) => a.type === "EXPENSE" || a.type === "ASSET"),
+    taxCodes,
+    units: [...ITEM_UNITS],
+    currency: company.baseCurrency,
+  };
+}
+
 export async function createItemAction(formData: FormData) {
   const { company, user } = await requireCapability(CAPABILITIES.COMPANY_SETTINGS);
   const parsed = itemSchema.safeParse(Object.fromEntries(formData));
@@ -169,7 +189,10 @@ export async function createItemAction(formData: FormData) {
     item = await db.$transaction(async (tx) => {
       const created = await tx.serviceItem.create({
         data: { companyId: company.id, ...result.data } as never,
-        select: { id: true, code: true, name: true, type: true },
+        select: {
+          id: true, code: true, name: true, type: true, description: true, unit: true, unitPriceCents: true, discountPercentMicro: true,
+          incomeAccountId: true, expenseAccountId: true, taxCodeId: true, purchaseTaxCodeId: true,
+        },
       });
       if (opening) {
         const obe = await getSystemAccount(tx, company.id, SYSTEM_ACCOUNTS.OPENING_BALANCE_EQUITY);
@@ -195,7 +218,7 @@ export async function createItemAction(formData: FormData) {
 
   revalidatePath("/company/products-services");
   revalidatePath("/inventory");
-  return { ok: true, id: item.id };
+  return { ok: true, id: item.id, item };
 }
 
 export async function updateItemAction(itemId: string, formData: FormData) {

@@ -28,6 +28,8 @@ import {
 import { DocumentPreview, type PreviewCompany } from "@/components/document-preview";
 import { CustomerForm, type CustomerFormTaxCode } from "@/components/customer-form";
 import { VendorForm, type VendorFormTaxCode } from "@/components/vendor-form";
+import { ItemDialog, type CatalogueOptions } from "@/app/(app)/company/products-services/catalogue-client";
+import { catalogueOptionsAction } from "@/app/(app)/company/products-services/actions";
 import { addProvincialTaxCodesAction } from "@/app/(app)/tax/actions";
 import { resolveSuppressedKinds, type TaxPolicyCompany } from "@/server/tax/policy";
 
@@ -259,7 +261,7 @@ export function DocumentForm({
   parties,
   accounts,
   taxCodes: taxCodesProp,
-  items = [],
+  items: itemsProp = [],
   defaultTaxInclusive,
   defaultTermsDays,
   onSubmitAction,
@@ -333,6 +335,24 @@ export function DocumentForm({
   const [addCodesError, setAddCodesError] = useState<string | null>(null);
   const [, startAddCodes] = useTransition();
   const [partyList, setPartyList] = useState<PartyOption[]>(parties);
+
+  // Products/services added from inside this editor ("Add new" in the line dropdown), so a new
+  // item is selectable without leaving the page or losing the document being written.
+  const [createdItems, setCreatedItems] = useState<ItemOption[]>([]);
+  const items = useMemo(() => [...itemsProp, ...createdItems], [itemsProp, createdItems]);
+  const [newItemLine, setNewItemLine] = useState<string | null>(null);
+  const [itemOptions, setItemOptions] = useState<CatalogueOptions | null>(null);
+  const [itemOptionsError, setItemOptionsError] = useState<string | null>(null);
+
+  async function startNewItem(lineKey: string) {
+    setItemOptionsError(null);
+    try {
+      setItemOptions(itemOptions ?? (await catalogueOptionsAction()));
+      setNewItemLine(lineKey);
+    } catch {
+      setItemOptionsError("You do not have permission to add products or services.");
+    }
+  }
 
   /**
    * The accounts this kind of document may post to, and the default drawn from
@@ -651,8 +671,8 @@ export function DocumentForm({
    * document takes the expense account and purchase tax code; a sales document
    * takes the income account and sales tax code.
    */
-  function applyItem(key: string, itemId: string) {
-    const item = items.find((i) => i.id === itemId);
+  function applyItem(key: string, itemId: string, justCreated?: ItemOption) {
+    const item = justCreated ?? items.find((i) => i.id === itemId);
     if (!item) return updateLine(key, { itemId: "" });
 
     const isPurchase = config.accountSide === "EXPENSE";
@@ -948,7 +968,7 @@ export function DocumentForm({
             <table className={clsx("w-full text-[0.8125rem]", config.supportsFixedDiscount ? "min-w-[55rem]" : "min-w-[52rem]")}>
               <thead>
                 <tr className="border-b border-paper-200">
-                  {items.length > 0 && <Head w="9rem">Service</Head>}
+                  <Head w="9rem">Service</Head>
                   <Head>Description</Head>
                   <Head w="6rem" align="right">Qty</Head>
                   <Head w="7.5rem" align="right">Unit price</Head>
@@ -966,11 +986,11 @@ export function DocumentForm({
                   const computed = computedIndex === -1 ? undefined : preview.lines[computedIndex];
                   return (
                     <tr key={line.key} className="border-b border-paper-100 last:border-0">
-                      {items.length > 0 && (
+                      {(
                         <Cell>
                           <select
                             value={line.itemId ?? ""}
-                            onChange={(event) => applyItem(line.key, event.target.value)}
+                            onChange={(event) => (event.target.value === "__new__" ? void startNewItem(line.key) : applyItem(line.key, event.target.value))}
                             className={clsx(inputClass, "pr-7 text-[0.75rem]")}
                           >
                             <option value="">Custom line</option>
@@ -979,6 +999,7 @@ export function DocumentForm({
                                 {item.code} · {item.name}
                               </option>
                             ))}
+                            <option value="__new__">+ Add new product or service…</option>
                           </select>
                         </Cell>
                       )}
@@ -1194,6 +1215,8 @@ export function DocumentForm({
             </p>
           )}
 
+          {itemOptionsError && <p className="mt-3 text-[0.8125rem] text-negative">{itemOptionsError}</p>}
+
           {error && (
             <p className="mt-3 rounded-md border border-[color:var(--color-negative)]/25 bg-negative-soft px-3 py-2 text-[0.8125rem] text-negative">
               {error}
@@ -1231,6 +1254,28 @@ export function DocumentForm({
           </div>
         </section>
       </aside>
+
+      {newItemLine && itemOptions && (
+        <ItemDialog
+          item={{
+            id: "", type: kind === "BILL" ? "PRODUCT" : "SERVICE", code: "", name: "", description: "", unit: "hour", unitPriceCents: 0, discountPercentMicro: 0,
+            incomeAccountId: "", expenseAccountId: "", taxCodeId: "", purchaseTaxCodeId: "", isActive: true, trackInventory: false,
+            quantityOnHandMilli: 0, averageCostCents: 0,
+          }}
+          options={itemOptions}
+          onClose={() => setNewItemLine(null)}
+          onCreated={(created) => {
+            const option: ItemOption = {
+              id: created.id, code: created.code, name: created.name, description: created.description, unit: created.unit,
+              unitPriceCents: created.unitPriceCents, discountPercentMicro: created.discountPercentMicro,
+              incomeAccountId: created.incomeAccountId, expenseAccountId: created.expenseAccountId,
+              taxCodeId: created.taxCodeId, purchaseTaxCodeId: created.purchaseTaxCodeId,
+            };
+            setCreatedItems((current) => [...current, option]);
+            applyItem(newItemLine, created.id, option);
+          }}
+        />
+      )}
 
       {customerCreation && (
         <Modal

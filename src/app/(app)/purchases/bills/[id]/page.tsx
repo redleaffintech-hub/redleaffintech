@@ -7,6 +7,7 @@ import { formatDate, formatDateTime, daysBetween, today } from "@/lib/dates";
 import { formatMoney, formatQty } from "@/lib/money";
 import { Badge, Card, CardHeader, DefinitionList, Money, PageHeader, StatusBadge, Table, Td, Th, Tr } from "@/components/ui";
 import { BillActions } from "./bill-actions";
+import { UnallocateButton } from "@/components/unallocate-button";
 
 export default async function BillDetailPage({ params }: PageProps<"/purchases/bills/[id]">) {
   const { company, role } = await requireCapability(CAPABILITIES.BILLS);
@@ -41,6 +42,7 @@ export default async function BillDetailPage({ params }: PageProps<"/purchases/b
     }),
   ]);
 
+  const canUnallocate = can(role, CAPABILITIES.PAYMENTS);
   const overdueDays = daysBetween(bill.dueDate, today());
   const editable =
     bill.status !== "VOID" && bill.allocations.length === 0 && bill.amountPaidCents === 0;
@@ -208,10 +210,19 @@ export default async function BillDetailPage({ params }: PageProps<"/purchases/b
                 {bill.allocations.map((allocation) => (
                   <li key={allocation.id} className="flex items-center gap-2 py-2 text-[0.8125rem]">
                     <span className="min-w-0 flex-1">
-                      <span className="block font-medium text-ink-900">{allocation.payment?.number ?? "Credit"}</span>
+                      <span className="block font-medium text-ink-900">
+                        {allocation.payment ? (
+                          <Link href={`/purchases/payments/${allocation.payment.id}`} className="text-brand-700 hover:underline">{allocation.payment.number}</Link>
+                        ) : (
+                          "Credit"
+                        )}
+                      </span>
                       <span className="text-[0.75rem] text-muted-ink">{formatDate(allocation.date)}</span>
                     </span>
                     <Money cents={allocation.amountCents} bold />
+                    {allocation.kind === "PAYMENT" && allocation.payment && canUnallocate && (
+                      <UnallocateButton allocationId={allocation.id} paymentNumber={allocation.payment.number} documentNumber={bill.number} />
+                    )}
                   </li>
                 ))}
               </ul>

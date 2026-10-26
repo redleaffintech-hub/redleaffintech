@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { UnallocateButton } from "@/components/unallocate-button";
 import { db } from "@/lib/db";
 import { formatDate } from "@/lib/dates";
 import { Badge, Card, EmptyState, Money, PageHeader, Table, Td, Th, Tr } from "@/components/ui";
@@ -125,6 +126,7 @@ export async function PaymentDetailPage({
                   <tr>
                     <Th>Document</Th>
                     <Th width="9rem" align="right">Amount applied</Th>
+                    <Th width="7rem">{""}</Th>
                   </tr>
                 </thead>
                 <tbody>
@@ -147,6 +149,11 @@ export async function PaymentDetailPage({
                           )}
                         </Td>
                         <Td align="right"><Money cents={allocation.amountCents} /></Td>
+                        <Td align="right">
+                          {document && payment.status === "POSTED" && allocation.kind === "PAYMENT" && (
+                            <UnallocateButton allocationId={allocation.id} paymentNumber={payment.number} documentNumber={document.number} />
+                          )}
+                        </Td>
                       </Tr>
                     );
                   })}
