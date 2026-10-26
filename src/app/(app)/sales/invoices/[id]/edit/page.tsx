@@ -87,7 +87,7 @@ export default async function EditInvoicePage({ params }: { params: Promise<{ id
         title={`Edit invoice ${invoice.number}`}
         breadcrumb={[
           { label: "Sales", href: "/sales/invoices" },
-          { label: "Invoices", href: "/sales/invoices" },
+          { label: "Sales Invoice (AR Invoice)", href: "/sales/invoices" },
           { label: invoice.number, href: `/sales/invoices/${invoice.id}` },
           { label: "Edit" },
         ]}

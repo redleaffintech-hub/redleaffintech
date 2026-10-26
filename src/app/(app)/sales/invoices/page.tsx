@@ -12,7 +12,7 @@ import { DateRangeFilter, FilterBar } from "@/components/filter-bar";
 import { ExportCsvButton } from "@/components/export-csv-button";
 import { Icon } from "@/components/shell/icons";
 
-export const metadata = { title: "Invoices" };
+export const metadata = { title: "Sales Invoice (AR Invoice)" };
 
 export default async function InvoicesPage({ searchParams }: PageProps<"/sales/invoices">) {
   const { company } = await requireCapability(CAPABILITIES.INVOICES);
@@ -72,7 +72,7 @@ export default async function InvoicesPage({ searchParams }: PageProps<"/sales/i
   return (
     <>
       <PageHeader
-        title="Invoices"
+        title="Sales Invoice (AR Invoice)"
         description={
           outstandingCents > 0
             ? `${formatMoney(outstandingCents, { currency })} outstanding across ${countOf(["SENT", "PARTIALLY_PAID", "OVERDUE"])} open invoices.`

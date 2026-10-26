@@ -70,7 +70,7 @@ export async function PaymentDetailPage({
         title={`${isReceipt ? "Receipt" : "Payment"} ${payment.number}`}
         breadcrumb={[
           { label: isReceipt ? "Sales" : "Purchases", href: isReceipt ? "/sales/invoices" : "/purchases/bills" },
-          { label: isReceipt ? "Receipts" : "Payments", href: listHref },
+          { label: isReceipt ? "Record Collection" : "Record Payment", href: listHref },
           { label: payment.number },
         ]}
         description={

@@ -17,7 +17,7 @@ export default async function NewCreditNotePage() {
         title="New credit note"
         breadcrumb={[
           { label: "Sales", href: "/sales/invoices" },
-          { label: "Credit notes", href: "/sales/credit-notes" },
+          { label: "Credit Note", href: "/sales/credit-notes" },
           { label: "New" },
         ]}
         description="A credit note reverses revenue and the tax that went with it, rather than editing the original invoice. It posts as soon as you save, then sits against the customer until it is applied."

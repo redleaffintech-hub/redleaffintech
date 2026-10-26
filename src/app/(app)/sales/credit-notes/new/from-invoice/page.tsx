@@ -22,7 +22,7 @@ export default async function NewReturnFromInvoicePage({
         title={`Return goods from invoice ${options.invoice.number}`}
         breadcrumb={[
           { label: "Sales", href: "/sales/invoices" },
-          { label: "Credit notes", href: "/sales/credit-notes" },
+          { label: "Credit Note", href: "/sales/credit-notes" },
           { label: "New return" },
         ]}
         description={

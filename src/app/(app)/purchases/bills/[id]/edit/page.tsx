@@ -67,7 +67,7 @@ export default async function EditBillPage({ params }: { params: Promise<{ id: s
         title={`Edit bill ${bill.number}`}
         breadcrumb={[
           { label: "Purchases", href: "/purchases/bills" },
-          { label: "Bills", href: "/purchases/bills" },
+          { label: "Bills (AP Invoice)", href: "/purchases/bills" },
           { label: bill.number, href: `/purchases/bills/${bill.id}` },
           { label: "Edit" },
         ]}

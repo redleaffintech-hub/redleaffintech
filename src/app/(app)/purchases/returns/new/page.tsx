@@ -31,7 +31,7 @@ export default async function NewPurchaseReturnPage({
           title="Purchase return"
           breadcrumb={[
             { label: "Purchases", href: "/purchases/bills" },
-            { label: "Purchase returns", href: "/purchases/returns" },
+            { label: "Purchase Returns", href: "/purchases/returns" },
             { label: "New" },
           ]}
           description="Choose the posted bill you're returning goods against."
@@ -74,7 +74,7 @@ export default async function NewPurchaseReturnPage({
   if ("error" in options) {
     return (
       <>
-        <PageHeader title="Purchase return" breadcrumb={[{ label: "Purchases", href: "/purchases/bills" }, { label: "Purchase returns" }]} />
+        <PageHeader title="Purchase return" breadcrumb={[{ label: "Purchases", href: "/purchases/bills" }, { label: "Purchase Returns" }]} />
         <Card className="p-5">
           <p className="text-[0.8125rem] text-negative">{options.error}</p>
         </Card>
@@ -88,7 +88,7 @@ export default async function NewPurchaseReturnPage({
         title={`Return goods to ${options.bill.vendor.name}`}
         breadcrumb={[
           { label: "Purchases", href: "/purchases/bills" },
-          { label: "Purchase returns", href: "/purchases/returns" },
+          { label: "Purchase Returns", href: "/purchases/returns" },
           { label: "New" },
         ]}
         description={`Against bill ${options.bill.number}.`}

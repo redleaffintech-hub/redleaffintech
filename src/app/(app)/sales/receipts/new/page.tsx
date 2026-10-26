@@ -13,7 +13,7 @@ export default async function NewReceiptPage() {
         title="New receipt"
         breadcrumb={[
           { label: "Sales", href: "/sales/invoices" },
-          { label: "Receipts", href: "/sales/receipts" },
+          { label: "Record Collection", href: "/sales/receipts" },
           { label: "New" },
         ]}
         description="Record money received from a customer and apply it across as many open invoices as it covers."

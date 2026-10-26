@@ -3,7 +3,7 @@ import { CAPABILITIES } from "@/lib/permissions";
 import { PaymentListPage } from "@/components/payment-list";
 import { voidReceiptAction } from "./actions";
 
-export const metadata = { title: "Receipts" };
+export const metadata = { title: "Record Collection" };
 
 export default async function ReceiptsPage({ searchParams }: PageProps<"/sales/receipts">) {
   const { company } = await requireCapability(CAPABILITIES.PAYMENTS);

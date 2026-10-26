@@ -8,7 +8,7 @@ import { Card, EmptyState, LinkButton, Money, PageHeader, StatusBadge, Table, Td
 import { DateRangeFilter, FilterBar } from "@/components/filter-bar";
 import { Icon } from "@/components/shell/icons";
 
-export const metadata = { title: "Credit notes" };
+export const metadata = { title: "Credit Note" };
 
 export default async function CreditNotesPage({ searchParams }: PageProps<"/sales/credit-notes">) {
   const { company } = await requireCapability(CAPABILITIES.INVOICES);
@@ -40,8 +40,8 @@ export default async function CreditNotesPage({ searchParams }: PageProps<"/sale
   return (
     <>
       <PageHeader
-        title="Credit notes"
-        breadcrumb={[{ label: "Sales", href: "/sales/invoices" }, { label: "Credit notes" }]}
+        title="Credit Note"
+        breadcrumb={[{ label: "Sales", href: "/sales/invoices" }, { label: "Credit Note" }]}
         description={`${formatMoney(openCents, { currency })} of unapplied credit. A credit note reverses revenue and the tax that went with it, then sits against the party until it is applied.`}
         actions={
           <LinkButton href="/sales/credit-notes/new" variant="primary">

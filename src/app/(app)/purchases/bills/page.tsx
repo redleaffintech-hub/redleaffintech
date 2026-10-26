@@ -10,7 +10,7 @@ import { FilterBar } from "@/components/filter-bar";
 import { ExportCsvButton } from "@/components/export-csv-button";
 import { Icon } from "@/components/shell/icons";
 
-export const metadata = { title: "Bills" };
+export const metadata = { title: "Bills (AP Invoice)" };
 
 export default async function BillsPage({ searchParams }: PageProps<"/purchases/bills">) {
   const { company } = await requireCapability(CAPABILITIES.BILLS);
@@ -51,7 +51,7 @@ export default async function BillsPage({ searchParams }: PageProps<"/purchases/
   return (
     <>
       <PageHeader
-        title="Bills"
+        title="Bills (AP Invoice)"
         description={
           owingCents > 0
             ? `${formatMoney(owingCents, { currency })} owing across ${countOf(["OPEN", "PARTIALLY_PAID", "OVERDUE"])} open bills.`

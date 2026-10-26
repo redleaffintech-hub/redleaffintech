@@ -34,11 +34,11 @@ export const NAV_GROUPS: NavGroup[] = [
     module: "ACCOUNTING",
     icon: "receipt",
     items: [
-      { label: "Invoices", href: "/sales/invoices", capability: CAPABILITIES.INVOICES, badgeKey: "overdue" },
+      { label: "Sales Invoice (AR Invoice)", href: "/sales/invoices", capability: CAPABILITIES.INVOICES, badgeKey: "overdue" },
       { label: "Customers", href: "/sales/customers", capability: CAPABILITIES.INVOICES },
       { label: "Sales quotes", href: "/sales/quotes", capability: CAPABILITIES.INVOICES },
-      { label: "Credit notes", href: "/sales/credit-notes", capability: CAPABILITIES.INVOICES },
-      { label: "Receipts", href: "/sales/receipts", capability: CAPABILITIES.PAYMENTS },
+      { label: "Credit Note", href: "/sales/credit-notes", capability: CAPABILITIES.INVOICES },
+      { label: "Record Collection", href: "/sales/receipts", capability: CAPABILITIES.PAYMENTS },
     ],
   },
   {
@@ -46,17 +46,11 @@ export const NAV_GROUPS: NavGroup[] = [
     module: "ACCOUNTING",
     icon: "truck",
     items: [
-      { label: "Bills", href: "/purchases/bills", capability: CAPABILITIES.BILLS, badgeKey: "approvals" },
+      { label: "Bills (AP Invoice)", href: "/purchases/bills", capability: CAPABILITIES.BILLS, badgeKey: "approvals" },
       { label: "Purchase returns", href: "/purchases/returns", capability: CAPABILITIES.BILLS },
       { label: "Vendors", href: "/purchases/vendors", capability: CAPABILITIES.BILLS },
-      { label: "Payments", href: "/purchases/payments", capability: CAPABILITIES.PAYMENTS },
+      { label: "Record Payment", href: "/purchases/payments", capability: CAPABILITIES.PAYMENTS },
     ],
-  },
-  {
-    label: "Expenses",
-    module: "ACCOUNTING",
-    icon: "wallet",
-    items: [{ label: "All expenses", href: "/expenses", capability: CAPABILITIES.EXPENSES, exact: true }],
   },
   {
     // Shortened from "Bank Reconciliation" for the top nav trigger only — the
@@ -69,6 +63,7 @@ export const NAV_GROUPS: NavGroup[] = [
     icon: "bank",
     items: [
       { label: "Reconcile", href: "/banking/reconcile", capability: CAPABILITIES.BANKING },
+      { label: "Import bank statement", href: "/banking/import", capability: CAPABILITIES.BANKING },
       { label: "Review queue", href: "/banking", capability: CAPABILITIES.BANKING, exact: true, badgeKey: "bankQueue" },
       { label: "Accounts", href: "/banking/accounts", capability: CAPABILITIES.BANKING },
       { label: "Rules", href: "/banking/rules", capability: CAPABILITIES.BANKING },
@@ -80,6 +75,8 @@ export const NAV_GROUPS: NavGroup[] = [
     icon: "ledger",
     items: [
       { label: "Chart of accounts", href: "/accounting/chart-of-accounts", capability: CAPABILITIES.COA },
+      { label: "Expenses", href: "/expenses", capability: CAPABILITIES.EXPENSES },
+      { label: "Fixed assets", href: "/accounting/fixed-assets", capability: CAPABILITIES.JOURNALS },
       { label: "Journal entries", href: "/accounting/journals", capability: CAPABILITIES.JOURNALS },
       { label: "Trial balance", href: "/accounting/trial-balance", capability: CAPABILITIES.REPORTS },
       { label: "General ledger", href: "/accounting/general-ledger", capability: CAPABILITIES.REPORTS },

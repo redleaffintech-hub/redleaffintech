@@ -14,7 +14,7 @@ export default async function NewBillPage() {
     <>
       <PageHeader
         title="New bill"
-        breadcrumb={[{ label: "Purchases", href: "/purchases/bills" }, { label: "Bills", href: "/purchases/bills" }, { label: "New" }]}
+        breadcrumb={[{ label: "Purchases", href: "/purchases/bills" }, { label: "Bills (AP Invoice)", href: "/purchases/bills" }, { label: "New" }]}
         description="Recoverable GST/HST is split out as an input tax credit; non-recoverable PST stays with the expense. The journal preview shows exactly where each part lands."
       />
 

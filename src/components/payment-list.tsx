@@ -51,10 +51,10 @@ export async function PaymentListPage({
   return (
     <>
       <PageHeader
-        title={isReceipt ? "Customer receipts" : "Vendor payments"}
+        title={isReceipt ? "Record Collection" : "Record Payment"}
         breadcrumb={[
           { label: isReceipt ? "Sales" : "Purchases", href: isReceipt ? "/sales/invoices" : "/purchases/bills" },
-          { label: isReceipt ? "Receipts" : "Payments" },
+          { label: isReceipt ? "Record Collection" : "Record Payment" },
         ]}
         description={
           isReceipt

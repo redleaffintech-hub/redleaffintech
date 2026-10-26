@@ -53,7 +53,7 @@ export default async function BillDetailPage({ params }: PageProps<"/purchases/b
     <>
       <PageHeader
         title={`Bill ${bill.number}`}
-        breadcrumb={[{ label: "Purchases", href: "/purchases/bills" }, { label: "Bills", href: "/purchases/bills" }, { label: bill.number }]}
+        breadcrumb={[{ label: "Purchases", href: "/purchases/bills" }, { label: "Bills (AP Invoice)", href: "/purchases/bills" }, { label: bill.number }]}
         description={
           <span className="flex flex-wrap items-center gap-2">
             <StatusBadge status={bill.status} />

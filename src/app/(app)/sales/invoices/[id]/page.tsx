@@ -124,7 +124,7 @@ export default async function InvoiceDetailPage({ params }: PageProps<"/sales/in
     <>
       <PageHeader
         title={`Invoice ${invoice.number}`}
-        breadcrumb={[{ label: "Sales", href: "/sales/invoices" }, { label: "Invoices", href: "/sales/invoices" }, { label: invoice.number }]}
+        breadcrumb={[{ label: "Sales", href: "/sales/invoices" }, { label: "Sales Invoice (AR Invoice)", href: "/sales/invoices" }, { label: invoice.number }]}
         description={
           <span className="flex flex-wrap items-center gap-2">
             <StatusBadge status={invoice.status} />

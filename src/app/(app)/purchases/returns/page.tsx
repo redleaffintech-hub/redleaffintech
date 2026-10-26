@@ -8,7 +8,7 @@ import { Card, EmptyState, LinkButton, Money, PageHeader, StatusBadge, Table, Td
 import { DateRangeFilter } from "@/components/filter-bar";
 import { Icon } from "@/components/shell/icons";
 
-export const metadata = { title: "Purchase returns" };
+export const metadata = { title: "Purchase Returns" };
 
 export default async function PurchaseReturnsPage({ searchParams }: { searchParams: Promise<{ from?: string; to?: string }> }) {
   const { company } = await requireCapability(CAPABILITIES.BILLS);
@@ -33,8 +33,8 @@ export default async function PurchaseReturnsPage({ searchParams }: { searchPara
   return (
     <>
       <PageHeader
-        title="Purchase returns"
-        breadcrumb={[{ label: "Purchases", href: "/purchases/bills" }, { label: "Purchase returns" }]}
+        title="Purchase Returns"
+        breadcrumb={[{ label: "Purchases", href: "/purchases/bills" }, { label: "Purchase Returns" }]}
         description={`${formatMoney(totalCents, { currency })} returned to vendors. Reduces stock at the original receipt cost and credits accounts payable.`}
         actions={
           <LinkButton href="/purchases/returns/new" variant="primary">

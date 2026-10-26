@@ -13,7 +13,7 @@ export default async function NewPaymentPage() {
         title="New payment"
         breadcrumb={[
           { label: "Purchases", href: "/purchases/bills" },
-          { label: "Payments", href: "/purchases/payments" },
+          { label: "Record Payment", href: "/purchases/payments" },
           { label: "New" },
         ]}
         description="Record money paid to a vendor and apply it across as many open bills as it covers."

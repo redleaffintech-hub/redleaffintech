@@ -34,7 +34,7 @@ export default async function NewInvoicePage({
         title="New invoice"
         breadcrumb={[
           { label: "Sales", href: "/sales/invoices" },
-          { label: "Invoices", href: "/sales/invoices" },
+          { label: "Sales Invoice (AR Invoice)", href: "/sales/invoices" },
           { label: "New" },
         ]}
         description="Tax is calculated from the code in force on the invoice date, for the province the invoice ships to. The journal preview on the right is produced by the same engine that will post it."

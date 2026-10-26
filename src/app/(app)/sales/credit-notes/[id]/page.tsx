@@ -43,7 +43,7 @@ export default async function CreditNoteDetailPage({ params }: { params: Promise
         title={`Credit note ${credit.number}`}
         breadcrumb={[
           { label: "Sales", href: "/sales/invoices" },
-          { label: "Credit notes", href: "/sales/credit-notes" },
+          { label: "Credit Note", href: "/sales/credit-notes" },
           { label: credit.number },
         ]}
         description={credit.type === "VENDOR" ? "Vendor credit" : "Customer credit"}
