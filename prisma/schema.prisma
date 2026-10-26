@@ -236,6 +236,9 @@ model Company {
   bankReconciliationMatches BankReconciliationMatch[]
   taxEntries                TaxEntry[]
   attachments               Attachment[]
+  fixedAssetCategories      FixedAssetCategory[]
+  fixedAssets               FixedAsset[]
+  depreciationRuns          DepreciationRun[]
   auditLogs                 AuditLog[]
   notifications             Notification[]
   projects                  Project[]
@@ -669,7 +672,7 @@ model FiscalPeriod {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model Customer {
-  id                  String   @id @default(cuid())
+  id                  String    @id @default(cuid())
   companyId           String
   name                String
   displayName         String?
@@ -681,7 +684,7 @@ model Customer {
   city                String?
   province            String?
   postalCode          String?
-  country             String   @default("CA")
+  country             String    @default("CA")
   /// Default ship-to, used to seed an invoice and to pick the place-of-supply
   /// tax code. Null means "same as the billing address above".
   shipToLine1         String?
@@ -691,10 +694,10 @@ model Customer {
   shipToPostalCode    String?
   shipToCountry       String?
   taxCodeId           String?
-  paymentTermsDays    Int      @default(15)
+  paymentTermsDays    Int       @default(15)
   notes               String?
-  isActive            Boolean  @default(true)
-  openingBalanceCents Int      @default(0)
+  isActive            Boolean   @default(true)
+  openingBalanceCents Int       @default(0)
   /// The opening balance is carried by a real, posted invoice (Dr A/R, Cr Opening
   /// Balance Equity) so aging, statements and payment allocation all work on it
   /// unchanged. These point at it so an edit can void and re-issue it.
@@ -706,14 +709,14 @@ model Customer {
   /// exemption is an explicitly unresolved policy question (see
   /// src/server/tax/policy.ts) and is NOT inferred from these two flags.
   /// Default false preserves every legacy customer's current behavior.
-  gstExempt           Boolean  @default(false)
-  pstExempt           Boolean  @default(false)
+  gstExempt           Boolean   @default(false)
+  pstExempt           Boolean   @default(false)
   /// Human-readable customer code (issue 9), independent of the internal
   /// cuid `id`. Null until allocated (inline-created customers on old rows,
   /// pre-backfill). Company-scoped uniqueness only, never reused.
   displayCode         String?
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
   company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   taxCode  TaxCode?  @relation(fields: [taxCodeId], references: [id])
@@ -732,7 +735,7 @@ model Customer {
 }
 
 model Vendor {
-  id                  String   @id @default(cuid())
+  id                  String    @id @default(cuid())
   companyId           String
   name                String
   displayName         String?
@@ -742,18 +745,18 @@ model Vendor {
   city                String?
   province            String?
   postalCode          String?
-  country             String   @default("CA")
+  country             String    @default("CA")
   taxCodeId           String?
-  paymentTermsDays    Int      @default(30)
+  paymentTermsDays    Int       @default(30)
   businessNumber      String?
   notes               String?
-  isActive            Boolean  @default(true)
-  openingBalanceCents Int      @default(0)
+  isActive            Boolean   @default(true)
+  openingBalanceCents Int       @default(0)
   /// Carried by a real, posted bill (Dr Opening Balance Equity, Cr A/P) — see Customer.
   openingBalanceDate  DateTime?
   openingBalanceDocId String?
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
   company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   taxCode  TaxCode?  @relation(fields: [taxCodeId], references: [id])
@@ -1958,20 +1961,20 @@ model PayRunLine {
   /// them as separate lines. grossPayCents is always the sum of these seven
   /// fields, recomputed server-side, never trusted from the client — same
   /// rule as netPayCents below.
-  regularPayCents          Int @default(0)
-  overtimePayCents         Int @default(0)
-  vacationPayCents         Int @default(0)
-  sickPayCents             Int @default(0)
-  bonusCents               Int @default(0)
-  retroactivePayCents      Int @default(0)
-  statutoryHolidayPayCents Int @default(0)
+  regularPayCents          Int    @default(0)
+  overtimePayCents         Int    @default(0)
+  vacationPayCents         Int    @default(0)
+  sickPayCents             Int    @default(0)
+  bonusCents               Int    @default(0)
+  retroactivePayCents      Int    @default(0)
+  statutoryHolidayPayCents Int    @default(0)
   grossPayCents            Int
   /// Unpaid leave already carved out of regularPayCents (salaried employees):
   /// regular pay is stored net of it, and the pay stub shows it as its own
   /// negative line. Also the record that stops the same leave being deducted in
   /// a second pay run.
   unpaidLeaveHours         Float?
-  unpaidLeaveCents         Int @default(0)
+  unpaidLeaveCents         Int    @default(0)
 
   /// Overrides the employee's defaultOvertimeRateMultiplierMicro for this
   /// line only. Null defers to the employee's default.
@@ -2471,4 +2474,117 @@ model UserToken {
 
   @@index([userId, purpose])
   @@index([expiresAt])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Fixed assets
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A class of asset (Leasehold improvements, Office furniture, Computer equipment...)
+/// carrying the depreciation policy and the three GL accounts every asset in it uses.
+model FixedAssetCategory {
+  id                               String   @id @default(cuid())
+  companyId                        String
+  name                             String
+  /// Cost lives here (a FIXED_ASSET account).
+  assetAccountId                   String
+  /// Contra-asset (ACCUMULATED_DEPRECIATION).
+  accumulatedDepreciationAccountId String
+  /// P&L expense (DEPRECIATION).
+  depreciationExpenseAccountId     String
+  /// STRAIGHT_LINE | DECLINING_BALANCE
+  method                           String   @default("STRAIGHT_LINE")
+  /// Straight-line life, in months.
+  usefulLifeMonths                 Int      @default(60)
+  /// Declining-balance annual rate, percent x 1e6 (30% -> 30_000_000)... see rateMicro convention.
+  decliningRateMicro               Int      @default(0)
+  /// Residual (salvage) value as a percent of cost, x 1e6.
+  residualPercentMicro             Int      @default(0)
+  isActive                         Boolean  @default(true)
+  createdAt                        DateTime @default(now())
+  updatedAt                        DateTime @updatedAt
+
+  company Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  assets  FixedAsset[]
+
+  @@unique([companyId, name])
+}
+
+model FixedAsset {
+  id                      String    @id @default(cuid())
+  companyId               String
+  categoryId              String
+  number                  String
+  name                    String
+  description             String?
+  location                String?
+  serialNumber            String?
+  vendorName              String?
+  /// Optional link to the AP bill the asset was purchased on (informational).
+  billId                  String?
+  acquisitionDate         DateTime
+  /// Depreciation runs from the month containing this date (pro-rated by days in that first month).
+  inServiceDate           DateTime
+  costCents               Int
+  residualCents           Int       @default(0)
+  /// Snapshot of the category policy at creation, so changing the category later never rewrites history.
+  method                  String
+  usefulLifeMonths        Int
+  decliningRateMicro      Int       @default(0)
+  /// Accumulated depreciation already taken before this system (migrated assets); depreciation resumes after openingAsOf.
+  openingAccumulatedCents Int       @default(0)
+  openingAsOf             DateTime?
+  /// ACTIVE | DISPOSED
+  status                  String    @default("ACTIVE")
+  disposalDate            DateTime?
+  disposalProceedsCents   Int       @default(0)
+  disposalJournalEntryId  String?
+  createdById             String?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  company       Company                  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  category      FixedAssetCategory       @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  depreciations FixedAssetDepreciation[]
+
+  @@unique([companyId, number])
+  @@index([companyId, status])
+}
+
+/// One month's depreciation for one asset. The unique key is what makes a month impossible to post twice.
+model FixedAssetDepreciation {
+  id          String   @id @default(cuid())
+  companyId   String
+  assetId     String
+  runId       String
+  /// Last day of the month this charge belongs to.
+  periodEnd   DateTime
+  amountCents Int
+  createdAt   DateTime @default(now())
+
+  asset FixedAsset      @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  run   DepreciationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([assetId, periodEnd])
+  @@index([companyId, periodEnd])
+  @@index([runId])
+}
+
+/// A monthly depreciation run: one balanced journal entry covering every asset charged that month.
+model DepreciationRun {
+  id             String   @id @default(cuid())
+  companyId      String
+  /// Last day of the month being depreciated.
+  periodEnd      DateTime
+  /// POSTED | REVERSED
+  status         String   @default("POSTED")
+  totalCents     Int
+  journalEntryId String?
+  createdById    String?
+  createdAt      DateTime @default(now())
+
+  company Company                  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  items   FixedAssetDepreciation[]
+
+  @@index([companyId, periodEnd])
 }
