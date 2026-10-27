@@ -70,6 +70,9 @@ function defaultTaxStatuses(province: string) {
     gstHstStatus: "APPLICABLE" as const,
     qstStatus: qst ? ("APPLICABLE" as const) : ("NOT_APPLICABLE" as const),
     pstStatus: pst ? ("APPLICABLE" as const) : ("NOT_APPLICABLE" as const),
+    bcPstStatus: province === "BC" ? ("APPLICABLE" as const) : ("NOT_APPLICABLE" as const),
+    mbRstStatus: province === "MB" ? ("APPLICABLE" as const) : ("NOT_APPLICABLE" as const),
+    skPstStatus: province === "SK" ? ("APPLICABLE" as const) : ("NOT_APPLICABLE" as const),
   };
 }
 

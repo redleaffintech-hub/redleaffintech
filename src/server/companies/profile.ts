@@ -28,7 +28,7 @@ export const getCompanyProfile = cache(async (companyId: string) => {
       bcPstNumber: true, mbRstNumber: true, skPstNumber: true,
       email: true, phone: true, website: true, logoUrl: true,
       invoiceFooter: true, quoteFooter: true, creditNoteFooter: true,
-      gstHstStatus: true, qstStatus: true, pstStatus: true,
+      gstHstStatus: true, qstStatus: true, pstStatus: true, bcPstStatus: true, mbRstStatus: true, skPstStatus: true,
       fiscalYearStartMonth: true,
     },
   });

@@ -19,7 +19,18 @@ export interface TaxPolicyCompany {
   gstHstStatus: string;
   qstStatus: string;
   pstStatus: string;
+  /** Per-province overrides; "UNSET"/absent falls back to pstStatus. */
+  bcPstStatus?: string;
+  mbRstStatus?: string;
+  skPstStatus?: string;
 }
+
+/** Province-specific PST/RST registrations and the component kind each governs. */
+const PROVINCIAL_STATUS = [
+  { field: "bcPstStatus", kind: "PST", province: "BC" },
+  { field: "mbRstStatus", kind: "RST", province: "MB" },
+  { field: "skPstStatus", kind: "PST", province: "SK" },
+] as const;
 
 export interface TaxPolicyCustomer {
   gstExempt: boolean;
@@ -47,7 +58,18 @@ export function resolveSuppressedKinds(
   if (SUPPRESSING_STATUSES.has(company.qstStatus)) {
     suppressed.add("QST");
   }
-  if (SUPPRESSING_STATUSES.has(company.pstStatus)) {
+  // PST/RST is decided per province. A province whose own status is unset
+  // follows the legacy single pstStatus. The generic kind is only dropped when
+  // no province has been explicitly set to a charging status, so a province
+  // switched to Applicable is never suppressed by the fallback.
+  let explicitCharging = false;
+  for (const { field, kind, province } of PROVINCIAL_STATUS) {
+    const own = company[field];
+    const effective = own && own !== "UNSET" ? own : company.pstStatus;
+    if (own && own !== "UNSET" && !SUPPRESSING_STATUSES.has(own)) explicitCharging = true;
+    if (SUPPRESSING_STATUSES.has(effective)) suppressed.add(`${kind}:${province}`);
+  }
+  if (SUPPRESSING_STATUSES.has(company.pstStatus) && !explicitCharging) {
     suppressed.add("PST");
     suppressed.add("RST");
   }

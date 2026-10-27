@@ -6,12 +6,15 @@ import clsx from "clsx";
 import { Button, Card, CardHeader, Field, inputClass } from "@/components/ui";
 import type { CurrencyOption } from "@/lib/currency";
 import { PROVINCES } from "@/lib/enums";
-import { PST_REGISTRATIONS } from "@/lib/tax-registration";
+import { PST_REGISTRATIONS, type PstField } from "@/lib/tax-registration";
 import { FILING_FREQUENCY_LABELS } from "@/lib/tax-filing";
 import { saveCompanyProfileAction, saveCustomerCodeAction, saveNumberingAction } from "./actions";
 import { FiscalYearField } from "./fiscal-year-field";
 
 type TaxStatus = "APPLICABLE" | "EXEMPT" | "NOT_APPLICABLE";
+
+/** The form field carrying each province's own collection status. */
+const STATUS_FIELD = { bcPstNumber: "bcPstStatus", mbRstNumber: "mbRstStatus", skPstNumber: "skPstStatus" } as const;
 
 interface CompanyProfile {
   name: string;
@@ -28,7 +31,9 @@ interface CompanyProfile {
   filingYear: number;
   gstHstStatus: TaxStatus;
   qstStatus: TaxStatus;
-  pstStatus: TaxStatus;
+  bcPstStatus: TaxStatus;
+  mbRstStatus: TaxStatus;
+  skPstStatus: TaxStatus;
   baseCurrency: string;
   province: string;
   addressLine1: string;
@@ -116,7 +121,11 @@ export function CompanyProfileForm({
   const [currency, setCurrency] = useState(company.baseCurrency);
   const [gstHstStatus, setGstHstStatus] = useState<TaxStatus>(company.gstHstStatus);
   const [qstStatus, setQstStatus] = useState<TaxStatus>(company.qstStatus);
-  const [pstStatus, setPstStatus] = useState<TaxStatus>(company.pstStatus);
+  const [provinceStatus, setProvinceStatus] = useState<Record<PstField, TaxStatus>>({
+    bcPstNumber: company.bcPstStatus,
+    mbRstNumber: company.mbRstStatus,
+    skPstNumber: company.skPstStatus,
+  });
 
   // Relabelling a ledger is only worth warning about once something has been
   // posted into it; a file being set up can be corrected freely.
@@ -199,34 +208,36 @@ export function CompanyProfileForm({
             numberPlaceholder="1234567890 TQ0001"
           />
           <div className="space-y-2">
-            <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_9rem]">
-              <p className="text-[0.75rem] leading-5 text-muted-ink sm:self-end">
-                PST/RST registrations are kept per province — fill in only the provinces the company is registered in.
-              </p>
-              <Field label="Collection status">
-                <select
-                  name="pstStatus"
-                  value={pstStatus}
-                  onChange={(event) => setPstStatus(event.target.value as TaxStatus)}
-                  className={clsx(inputClass, "pr-8")}
-                >
-                  {TAX_STATUS_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-              </Field>
-            </div>
+            <p className="text-[0.75rem] leading-5 text-muted-ink">
+              PST/RST registrations are kept per province — fill in only the provinces the company is registered in. Each province has its own collection status.
+            </p>
             <div className="grid gap-3 sm:grid-cols-3">
               {PST_REGISTRATIONS.map((registration) => (
-                <Field key={registration.field} label={registration.label} hint="Optional">
-                  <input
-                    name={registration.field}
-                    defaultValue={company[registration.field]}
-                    maxLength={30}
-                    className={clsx(inputClass, "tnum")}
-                    placeholder={registration.placeholder}
-                  />
-                </Field>
+                <div key={registration.field} className="space-y-2">
+                  <Field label={registration.label} hint="Optional">
+                    <input
+                      name={registration.field}
+                      defaultValue={company[registration.field]}
+                      maxLength={30}
+                      className={clsx(inputClass, "tnum")}
+                      placeholder={registration.placeholder}
+                    />
+                  </Field>
+                  <Field label="Collection status">
+                    <select
+                      name={STATUS_FIELD[registration.field]}
+                      value={provinceStatus[registration.field]}
+                      onChange={(event) =>
+                        setProvinceStatus((current) => ({ ...current, [registration.field]: event.target.value as TaxStatus }))
+                      }
+                      className={clsx(inputClass, "pr-8")}
+                    >
+                      {TAX_STATUS_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </Field>
+                </div>
               ))}
             </div>
             {company.pstNumber && (

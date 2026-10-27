@@ -12,7 +12,8 @@ import { RangePicker, PrintButton } from "@/components/filter-bar";
 import { ExportCsvButton } from "@/components/export-csv-button";
 import { DocumentList, PartyStatement } from "@/components/party-views";
 import { Icon } from "@/components/shell/icons";
-import { CustomerReceipts } from "./customer-receipts";
+import { PartyPayments } from "@/components/party-payments";
+import { applyReceiptAction, openInvoicesForCustomerAction } from "@/app/(app)/sales/receipts/actions";
 
 export default async function CustomerDetailPage({ params, searchParams }: PageProps<"/sales/customers/[id]">) {
   const { company } = await requireCapability(CAPABILITIES.INVOICES);
@@ -41,6 +42,12 @@ export default async function CustomerDetailPage({ params, searchParams }: PageP
       where: { companyId: company.id, customerId: customer.id, status: "POSTED" },
       orderBy: { date: "desc" },
       take: 10,
+      include: {
+        allocations: {
+          where: { kind: "PAYMENT" },
+          select: { id: true, amountCents: true, invoice: { select: { number: true } } },
+        },
+      },
     }),
     getCompanyProfile(company.id),
     db.invoice.findFirst({
@@ -247,8 +254,13 @@ export default async function CustomerDetailPage({ params, searchParams }: PageP
 
           <Card>
             <CardHeader title="Recent receipts" />
-            <CustomerReceipts
-              customerId={customer.id}
+            <PartyPayments
+              partyId={customer.id}
+              emptyText="No payments received yet."
+              applyLabel="Apply payment"
+              documentWord="invoice"
+              applyAction={applyReceiptAction}
+              openDocumentsAction={openInvoicesForCustomerAction}
               payments={payments.map((p) => ({
                 id: p.id,
                 number: p.number,
@@ -256,6 +268,9 @@ export default async function CustomerDetailPage({ params, searchParams }: PageP
                 method: p.method,
                 amountCents: p.amountCents,
                 unappliedCents: p.unappliedCents,
+                allocations: p.allocations
+                  .filter((a) => a.invoice)
+                  .map((a) => ({ id: a.id, documentNumber: a.invoice!.number, amountCents: a.amountCents })),
               }))}
             />
           </Card>

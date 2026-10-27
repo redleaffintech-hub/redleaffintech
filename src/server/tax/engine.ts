@@ -91,7 +91,8 @@ function combinedFactorMicro(components: TaxComponentSpec[]): bigint {
  * Calculate tax for a single line.
  *
  * @param amountCents  tax-exclusive net when `inclusive` is false, gross when true
- * @param suppressedKinds  TaxComponent kinds (GST/HST/PST/QST/RST) to drop before
+ * @param suppressedKinds  TaxComponent kinds (GST/HST/PST/QST/RST) — or a
+ *   province-qualified kind such as "PST:BC" — to drop before
  *   calculating — the company-collection-status × customer-exemption policy from
  *   issues 1/5 (15 Sep 2026 review), resolved by src/server/tax/policy.ts. This
  *   never touches the TaxCode/TaxComponent rows themselves (combined codes like
@@ -115,7 +116,7 @@ export function calculateTax(
   assertEffective(taxCode, transactionDate);
 
   const components = taxCode.components
-    .filter((c) => !suppressedKinds?.has(c.kind))
+    .filter((c) => !suppressedKinds?.has(c.kind) && !suppressedKinds?.has(`${c.kind}:${taxCode.jurisdiction}`))
     .sort((a, b) => a.sortOrder - b.sortOrder);
 
   if (components.length === 0) {

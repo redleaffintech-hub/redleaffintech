@@ -175,13 +175,14 @@ function provincialComponent(rate: RegionalTaxRate): TaxComponentTemplate | null
       recoverableKey: SA.QST_RECOVERABLE,
     };
   }
-  // PST and RST: provincial sales tax is not recoverable by the purchaser.
+  // PST and RST: treated as an input tax credit, posted to its own recoverable account.
   return {
     name: rate.provincialType,
     kind: rate.provincialType as "PST" | "RST",
     rateMicro: rate.provincialRateMicro,
-    isRecoverable: false,
+    isRecoverable: true,
     liabilityKey: SA.PST_PAYABLE,
+    recoverableKey: SA.PST_RECOVERABLE,
   };
 }
 

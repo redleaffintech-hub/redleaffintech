@@ -78,7 +78,7 @@ export async function createEstimateInTx(tx: Tx, input: EstimateInput) {
   if (!customer) throw new Error("Customer not found in this company.");
   const company = await tx.company.findUniqueOrThrow({
     where: { id: input.companyId },
-    select: { gstHstStatus: true, qstStatus: true, pstStatus: true, quoteFooter: true },
+    select: { gstHstStatus: true, qstStatus: true, pstStatus: true, bcPstStatus: true, mbRstStatus: true, skPstStatus: true, quoteFooter: true },
   });
 
   for (const line of input.lines) assertValidDiscount(line);
@@ -145,7 +145,7 @@ export async function updateEstimate(input: EstimateUpdateInput) {
     if (!customer) throw new Error("Customer not found in this company.");
     const company = await tx.company.findUniqueOrThrow({
       where: { id: input.companyId },
-      select: { gstHstStatus: true, qstStatus: true, pstStatus: true },
+      select: { gstHstStatus: true, qstStatus: true, pstStatus: true, bcPstStatus: true, mbRstStatus: true, skPstStatus: true },
     });
 
     for (const line of input.lines) assertValidDiscount(line);

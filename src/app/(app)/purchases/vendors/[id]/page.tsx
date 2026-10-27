@@ -11,6 +11,8 @@ import { RangePicker, PrintButton } from "@/components/filter-bar";
 import { ExportCsvButton } from "@/components/export-csv-button";
 import { DocumentList, PartyStatement } from "@/components/party-views";
 import { Icon } from "@/components/shell/icons";
+import { PartyPayments } from "@/components/party-payments";
+import { applyPaymentAction, openBillsForVendorAction } from "@/app/(app)/purchases/payments/actions";
 
 export default async function VendorDetailPage({ params, searchParams }: PageProps<"/purchases/vendors/[id]">) {
   const { company } = await requireCapability(CAPABILITIES.BILLS);
@@ -31,7 +33,17 @@ export default async function VendorDetailPage({ params, searchParams }: PagePro
   const [statement, bills, payments, expenses] = await Promise.all([
     partyStatement(company.id, { vendorId: vendor.id }, from, to),
     db.bill.findMany({ where: { companyId: company.id, vendorId: vendor.id }, orderBy: { issueDate: "desc" }, take: 25 }),
-    db.payment.findMany({ where: { companyId: company.id, vendorId: vendor.id, status: "POSTED" }, orderBy: { date: "desc" }, take: 10 }),
+    db.payment.findMany({
+      where: { companyId: company.id, vendorId: vendor.id, status: "POSTED" },
+      orderBy: { date: "desc" },
+      take: 10,
+      include: {
+        allocations: {
+          where: { kind: "PAYMENT" },
+          select: { id: true, amountCents: true, bill: { select: { number: true } } },
+        },
+      },
+    }),
     db.expense.findMany({ where: { companyId: company.id, vendorId: vendor.id }, orderBy: { date: "desc" }, take: 8 }),
   ]);
 
@@ -140,24 +152,26 @@ export default async function VendorDetailPage({ params, searchParams }: PagePro
           </Card>
 
           <Card>
-            <CardHeader title="Recent payments" />
-            {payments.length === 0 ? (
-              <p className="mt-2 text-[0.8125rem] text-muted-ink">No payments made yet.</p>
-            ) : (
-              <ul className="mt-3 divide-y divide-paper-200">
-                {payments.map((payment) => (
-                  <li key={payment.id} className="flex items-center gap-2 py-2 text-[0.8125rem]">
-                    <span className="min-w-0 flex-1">
-                      <span className="block font-medium text-ink-900">{payment.number}</span>
-                      <span className="text-[0.75rem] text-muted-ink">
-                        {formatDate(payment.date)} · {payment.method}
-                      </span>
-                    </span>
-                    <Money cents={payment.amountCents} bold />
-                  </li>
-                ))}
-              </ul>
-            )}
+            <CardHeader title="Recent payments" subtitle="Apply or unapply against bills" />
+            <PartyPayments
+              partyId={vendor.id}
+              emptyText="No payments made yet."
+              applyLabel="Apply payment"
+              documentWord="bill"
+              applyAction={applyPaymentAction}
+              openDocumentsAction={openBillsForVendorAction}
+              payments={payments.map((p) => ({
+                id: p.id,
+                number: p.number,
+                date: p.date.toISOString(),
+                method: p.method,
+                amountCents: p.amountCents,
+                unappliedCents: p.unappliedCents,
+                allocations: p.allocations
+                  .filter((a) => a.bill)
+                  .map((a) => ({ id: a.id, documentNumber: a.bill!.number, amountCents: a.amountCents })),
+              }))}
+            />
           </Card>
 
           {expenses.length > 0 && (

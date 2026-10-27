@@ -238,9 +238,9 @@ export function ExpenseForm({
               </div>
             </dl>
             <p className="mt-3 rounded-md bg-paper-100 px-3 py-2 text-[0.75rem] leading-5 text-muted-ink">
-              Recoverable tax is debited to the input tax credit account and claimed on your next return.
-              Non-recoverable provincial tax is capitalised into the expense, because it is a real cost to the
-              business.
+              Recoverable tax (GST/HST/QST and provincial PST/RST) is debited to its input tax credit account and
+              claimed on your next return. Any component set as non-recoverable is capitalised into the expense,
+              because it is a real cost to the business.
             </p>
           </>
         ) : (

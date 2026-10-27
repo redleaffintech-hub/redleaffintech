@@ -48,6 +48,17 @@ export default async function BillDetailPage({ params }: PageProps<"/purchases/b
     bill.status !== "VOID" && bill.allocations.length === 0 && bill.amountPaidCents === 0;
   const recoverableCents = taxEntries.reduce((s, t) => s + t.recoverableCents, 0);
   const nonRecoverableCents = taxEntries.reduce((s, t) => s + t.taxCents - t.recoverableCents, 0);
+  // One line per tax component (GST, BC PST, …), so each shows on its own.
+  const treatmentByKind = new Map<string, { kind: string; jurisdiction: string; recoverable: number; nonRecoverable: number }>();
+  for (const t of taxEntries) {
+    if (t.taxCents === 0) continue;
+    const key = `${t.kind}|${t.jurisdiction}`;
+    const row = treatmentByKind.get(key) ?? { kind: t.kind, jurisdiction: t.jurisdiction, recoverable: 0, nonRecoverable: 0 };
+    row.recoverable += t.recoverableCents;
+    row.nonRecoverable += t.taxCents - t.recoverableCents;
+    treatmentByKind.set(key, row);
+  }
+  const treatmentRows = [...treatmentByKind.values()];
 
   return (
     <>
@@ -133,18 +144,25 @@ export default async function BillDetailPage({ params }: PageProps<"/purchases/b
             <div className="mt-5 rounded-lg bg-paper-100 p-3.5">
               <p className="text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-muted-ink">Tax treatment</p>
               <ul className="mt-1.5 space-y-1 text-[0.8125rem] text-ink-700">
-                {recoverableCents > 0 && (
-                  <li className="flex items-center justify-between">
-                    <span>Recoverable as an input tax credit</span>
-                    <Money cents={recoverableCents} bold />
-                  </li>
-                )}
-                {nonRecoverableCents > 0 && (
-                  <li className="flex items-center justify-between">
-                    <span>Non-recoverable — capitalised into the expense</span>
-                    <Money cents={nonRecoverableCents} bold />
-                  </li>
-                )}
+                {treatmentRows.map((row) => {
+                  const label = row.jurisdiction && row.jurisdiction !== "CA" && row.jurisdiction !== "FED" ? `${row.jurisdiction} ${row.kind}` : row.kind;
+                  return (
+                    <li key={`${row.kind}|${row.jurisdiction}`} className="space-y-1">
+                      {row.recoverable > 0 && (
+                        <div className="flex items-center justify-between">
+                          <span>{label} — recoverable as an input tax credit</span>
+                          <Money cents={row.recoverable} bold />
+                        </div>
+                      )}
+                      {row.nonRecoverable > 0 && (
+                        <div className="flex items-center justify-between">
+                          <span>{label} — non-recoverable, capitalised into the expense</span>
+                          <Money cents={row.nonRecoverable} bold />
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           )}

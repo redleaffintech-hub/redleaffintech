@@ -329,32 +329,51 @@ export async function voidPayment(companyId: string, paymentId: string, userId?:
  * elsewhere or the payment voided separately.
  */
 export async function unallocatePayment(companyId: string, allocationId: string, userId?: string | null) {
+  return db.$transaction((tx) => unallocateInTx(tx, companyId, allocationId, userId));
+}
+
+/**
+ * Take EVERY cash allocation of one payment back off its invoices/bills in a
+ * single transaction (all or nothing). The whole amount returns to unapplied.
+ */
+export async function unallocateWholePayment(companyId: string, paymentId: string, userId?: string | null) {
   return db.$transaction(async (tx) => {
-    const allocation = await tx.paymentAllocation.findUnique({
-      where: { id: allocationId },
-      include: { payment: true, invoice: { select: { companyId: true, number: true } }, bill: { select: { companyId: true, number: true } } },
+    const payment = await tx.payment.findFirst({
+      where: { id: paymentId, companyId },
+      select: { number: true, allocations: { where: { kind: "PAYMENT" }, select: { id: true } } },
     });
-    const document = allocation?.invoice ?? allocation?.bill;
-    if (!allocation || !allocation.payment || !document || document.companyId !== companyId || allocation.payment.companyId !== companyId) {
-      throw new Error("That payment allocation does not exist in this company.");
-    }
-    if (allocation.kind !== "PAYMENT") throw new Error("Only a cash payment can be unallocated here. Credit notes are unapplied from the credit note.");
-    if (allocation.payment.status !== "POSTED") throw new Error(`Payment ${allocation.payment.number} is ${allocation.payment.status.toLowerCase()}.`);
-
-    await tx.paymentAllocation.delete({ where: { id: allocationId } });
-    await tx.payment.update({
-      where: { id: allocation.payment.id },
-      data: { appliedCents: { decrement: allocation.amountCents }, unappliedCents: { increment: allocation.amountCents } },
-    });
-    if (allocation.invoiceId) await refreshInvoiceStatus(tx, allocation.invoiceId);
-    if (allocation.billId) await refreshBillStatus(tx, allocation.billId);
-
-    await tx.auditLog.create({
-      data: {
-        companyId, userId, action: "UPDATE", entityType: allocation.invoiceId ? "Invoice" : "Bill", entityId: (allocation.invoiceId ?? allocation.billId)!,
-        summary: `Unallocated ${allocation.payment.number} (${(allocation.amountCents / 100).toFixed(2)}) from ${document.number}`,
-      },
-    });
-    return { paymentNumber: allocation.payment.number, documentNumber: document.number };
+    if (!payment) throw new Error("Payment not found in this company.");
+    if (payment.allocations.length === 0) throw new Error(`${payment.number} has nothing applied.`);
+    for (const allocation of payment.allocations) await unallocateInTx(tx, companyId, allocation.id, userId);
+    return { paymentNumber: payment.number, count: payment.allocations.length };
   });
+}
+
+async function unallocateInTx(tx: Tx, companyId: string, allocationId: string, userId?: string | null) {
+  const allocation = await tx.paymentAllocation.findUnique({
+    where: { id: allocationId },
+    include: { payment: true, invoice: { select: { companyId: true, number: true } }, bill: { select: { companyId: true, number: true } } },
+  });
+  const document = allocation?.invoice ?? allocation?.bill;
+  if (!allocation || !allocation.payment || !document || document.companyId !== companyId || allocation.payment.companyId !== companyId) {
+    throw new Error("That payment allocation does not exist in this company.");
+  }
+  if (allocation.kind !== "PAYMENT") throw new Error("Only a cash payment can be unallocated here. Credit notes are unapplied from the credit note.");
+  if (allocation.payment.status !== "POSTED") throw new Error(`Payment ${allocation.payment.number} is ${allocation.payment.status.toLowerCase()}.`);
+
+  await tx.paymentAllocation.delete({ where: { id: allocationId } });
+  await tx.payment.update({
+    where: { id: allocation.payment.id },
+    data: { appliedCents: { decrement: allocation.amountCents }, unappliedCents: { increment: allocation.amountCents } },
+  });
+  if (allocation.invoiceId) await refreshInvoiceStatus(tx, allocation.invoiceId);
+  if (allocation.billId) await refreshBillStatus(tx, allocation.billId);
+
+  await tx.auditLog.create({
+    data: {
+      companyId, userId, action: "UPDATE", entityType: allocation.invoiceId ? "Invoice" : "Bill", entityId: (allocation.invoiceId ?? allocation.billId)!,
+      summary: `Unallocated ${allocation.payment.number} (${(allocation.amountCents / 100).toFixed(2)}) from ${document.number}`,
+    },
+  });
+  return { paymentNumber: allocation.payment.number, documentNumber: document.number };
 }

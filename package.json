@@ -12,6 +12,7 @@
     "plans:seed": "node --conditions=react-server --import tsx scripts/seed-plans.ts",
     "admin:create": "node --conditions=react-server --import tsx scripts/create-platform-admin.ts",
     "verify": "node --conditions=react-server --import tsx scripts/verify.ts",
+    "backfill:pst-recoverable": "node --conditions=react-server --import tsx scripts/backfill-pst-recoverable.ts",
     "backfill:inventory-accounts": "node --conditions=react-server --import tsx scripts/backfill-inventory-accounts.ts",
     "backfill:company-modules": "node --conditions=react-server --import tsx scripts/backfill-company-modules.ts",
     "backfill:customer-codes": "node --conditions=react-server --import tsx scripts/backfill-customer-codes.ts",

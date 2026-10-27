@@ -325,6 +325,9 @@ export async function invoiceFormOptions() {
       gstHstStatus: profile.gstHstStatus,
       qstStatus: profile.qstStatus,
       pstStatus: profile.pstStatus,
+      bcPstStatus: profile.bcPstStatus,
+      mbRstStatus: profile.mbRstStatus,
+      skPstStatus: profile.skPstStatus,
     },
     /** The plain list the new-customer dialog offers as a default code. */
     salesTaxCodes: taxCodes.map((code) => ({ id: code.id, code: code.code, name: code.name })),

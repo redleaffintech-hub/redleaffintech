@@ -115,6 +115,7 @@ export async function taxControlReconciliation(companyId: string, range: DateRan
     SYSTEM_ACCOUNTS.QST_PAYABLE,
     SYSTEM_ACCOUNTS.GST_HST_RECOVERABLE,
     SYSTEM_ACCOUNTS.QST_RECOVERABLE,
+    SYSTEM_ACCOUNTS.PST_RECOVERABLE,
   ];
   const accounts = await db.account.findMany({
     where: { companyId, systemKey: { in: keys } },

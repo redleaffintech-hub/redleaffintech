@@ -210,6 +210,41 @@ async function taxPolicyChecks() {
     "UNSET behaves exactly like APPLICABLE",
   );
 
+  // Per-province PST/RST collection status (27 Oct 2026 review, item 2).
+  const base = { gstHstStatus: "APPLICABLE", qstStatus: "APPLICABLE", pstStatus: "APPLICABLE" };
+  const bcOff = resolveSuppressedKinds({ ...base, bcPstStatus: "NOT_APPLICABLE", mbRstStatus: "APPLICABLE", skPstStatus: "APPLICABLE" }, noExempt);
+  check(
+    "Tax policy: BC PST Not-applicable suppresses BC only, not MB RST or SK PST",
+    bcOff.has("PST:BC") && !bcOff.has("RST:MB") && !bcOff.has("PST:SK") && !bcOff.has("PST") && !bcOff.has("RST"),
+    `suppressed: ${[...bcOff].join(", ")}`,
+  );
+  const legacyOff = resolveSuppressedKinds({ ...base, pstStatus: "EXEMPT" }, noExempt);
+  check(
+    "Tax policy: unset province statuses follow the legacy PST/RST status",
+    legacyOff.has("PST:BC") && legacyOff.has("RST:MB") && legacyOff.has("PST:SK") && legacyOff.has("PST"),
+    `suppressed: ${[...legacyOff].join(", ")}`,
+  );
+  const skOn = resolveSuppressedKinds({ ...base, pstStatus: "NOT_APPLICABLE", skPstStatus: "APPLICABLE" }, noExempt);
+  check(
+    "Tax policy: a province explicitly Applicable is not suppressed by the legacy fallback",
+    !skOn.has("PST:SK") && skOn.has("PST:BC") && skOn.has("RST:MB") && !skOn.has("PST"),
+    `suppressed: ${[...skOn].join(", ")}`,
+  );
+  const pstIts = { id: "tpi", code: "GST-PST-BC", name: "x", jurisdiction: "BC", isZeroRated: false, isExempt: false, effectiveFrom: new Date("2013-04-01"), effectiveTo: null,
+    components: [
+      { id: "i1", name: "GST", kind: "GST", rateMicro: 50_000, isRecoverable: true, compoundOnPrevious: false, liabilityAccountId: "a", recoverableAccountId: "b", sortOrder: 0 },
+      { id: "i2", name: "PST", kind: "PST", rateMicro: 70_000, isRecoverable: true, compoundOnPrevious: false, liabilityAccountId: "a", recoverableAccountId: "p", sortOrder: 1 },
+    ] };
+  const itc = calculateTax(pstIts, 320_000, false, new Date("2026-02-01"));
+  const split = itc.components.filter((c) => c.isRecoverable && c.recoverableAccountId).reduce((n, c) => n + c.taxCents, 0);
+  check("Tax: BC PST set as an input tax credit is recoverable to its own account (BILL-1012: 160.00 GST + 224.00 PST)",
+    itc.components[0].taxCents === 16_000 && itc.components[1].taxCents === 22_400 && split === 38_400 && itc.components[1].recoverableAccountId === "p",
+    `${itc.components.map((c) => `${c.name} ${money(c.taxCents)}`).join(", ")}`);
+  const bcPstDropped = calculateTax(pstIts, 320_000, false, new Date("2026-02-01"), bcOff);
+  check("Tax: BC PST suppression drops only the PST component of a GST+PST code",
+    bcPstDropped.components.length === 1 && bcPstDropped.components[0].kind === "GST",
+    `${bcPstDropped.components.map((c) => c.kind).join(", ")}`);
+
   // End-to-end through calculateTax: a suppressed GST component drops out of
   // the total entirely, and the full amount is available to be untaxed.
   const bc = {

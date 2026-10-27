@@ -134,7 +134,7 @@ export default async function TaxCentrePage({ searchParams }: PageProps<"/tax">)
                   currency={currency}
                   line="108"
                   label="Input tax credits (ITCs)"
-                  hint="Recoverable tax paid on bills and expenses. Non-recoverable PST is excluded."
+                  hint="Recoverable tax (including PST/RST set as an input tax credit) paid on bills and expenses."
                   value={result.line108ItcCents}
                 />
                 <ReturnLine

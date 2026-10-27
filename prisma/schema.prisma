@@ -191,6 +191,11 @@ model Company {
   gstHstStatus String @default("UNSET") // APPLICABLE | EXEMPT | NOT_APPLICABLE | UNSET
   qstStatus    String @default("UNSET")
   pstStatus    String @default("UNSET")
+  /// Per-province PST/RST collection status. "UNSET" falls back to pstStatus
+  /// (the legacy single status) so pre-existing companies calculate exactly as before.
+  bcPstStatus  String @default("UNSET")
+  mbRstStatus  String @default("UNSET")
+  skPstStatus  String @default("UNSET")
 
   // Customer display-code numbering (issue 9) — separate from the internal
   // cuid `Customer.id`, which is never shown to a customer. Zero-padded,

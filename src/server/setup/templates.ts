@@ -49,6 +49,14 @@ export const CANADIAN_SERVICE_COA: AccountTemplate[] = [
     systemKey: SA.QST_RECOVERABLE,
   },
   {
+    code: "1320",
+    name: "PST/RST Recoverable (ITC)",
+    type: "ASSET",
+    subtype: "TAX_RECOVERABLE",
+    systemKey: SA.PST_RECOVERABLE,
+    description: "Provincial sales tax (BC PST, MB RST, SK PST) paid on purchases and treated as an input tax credit.",
+  },
+  {
     code: "1450",
     name: "Inventory Asset",
     type: "ASSET",
@@ -271,14 +279,19 @@ function hst(rateMicro: number): TaxComponentTemplate {
   };
 }
 
-/** Provincial sales tax is generally NOT recoverable by the purchaser. */
+/**
+ * Provincial sales tax is treated as an input tax credit: it posts to its own
+ * PST/RST Recoverable account rather than being capitalised into the expense.
+ * (Recoverability is per-component, so a company can flip it on the tax code.)
+ */
 function pst(kind: "PST" | "RST", rateMicro: number): TaxComponentTemplate {
   return {
     name: kind,
     kind,
     rateMicro,
-    isRecoverable: false,
+    isRecoverable: true,
     liabilityKey: SA.PST_PAYABLE,
+    recoverableKey: SA.PST_RECOVERABLE,
   };
 }
 

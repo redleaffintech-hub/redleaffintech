@@ -178,7 +178,7 @@ export async function createInvoiceInTx(tx: Tx, input: InvoiceInput) {
   if (!customer) throw new Error("Customer not found in this company.");
   const company = await tx.company.findUniqueOrThrow({
     where: { id: input.companyId },
-    select: { gstHstStatus: true, qstStatus: true, pstStatus: true, invoiceFooter: true },
+    select: { gstHstStatus: true, qstStatus: true, pstStatus: true, bcPstStatus: true, mbRstStatus: true, skPstStatus: true, invoiceFooter: true },
   });
 
   for (const line of input.lines) assertValidDiscount(line);
@@ -255,7 +255,7 @@ export async function updateInvoice(input: InvoiceUpdateInput) {
     if (!customer) throw new Error("Customer not found in this company.");
     const company = await tx.company.findUniqueOrThrow({
       where: { id: input.companyId },
-      select: { gstHstStatus: true, qstStatus: true, pstStatus: true },
+      select: { gstHstStatus: true, qstStatus: true, pstStatus: true, bcPstStatus: true, mbRstStatus: true, skPstStatus: true },
     });
 
     for (const line of input.lines) assertValidDiscount(line);
@@ -375,7 +375,7 @@ export async function postInvoiceInTx(
 
   const company = await tx.company.findUniqueOrThrow({
     where: { id: companyId },
-    select: { gstHstStatus: true, qstStatus: true, pstStatus: true },
+    select: { gstHstStatus: true, qstStatus: true, pstStatus: true, bcPstStatus: true, mbRstStatus: true, skPstStatus: true },
   });
   const suppressedKinds = resolveSuppressedKinds(company, invoice.customer);
 

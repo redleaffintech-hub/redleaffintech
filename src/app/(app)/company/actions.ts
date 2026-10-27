@@ -34,7 +34,9 @@ const profileSchema = z.object({
   gstHstFilingFrequency: z.string().trim().max(12).optional(),
   gstHstStatus: taxStatus,
   qstStatus: taxStatus,
-  pstStatus: taxStatus,
+  bcPstStatus: taxStatus,
+  mbRstStatus: taxStatus,
+  skPstStatus: taxStatus,
   baseCurrency: z.string().trim().min(3).max(3),
   /** Set by the form once the user has acknowledged a currency relabel. */
   confirmCurrencyChange: z.string().optional(),
@@ -81,9 +83,24 @@ export async function saveCompanyProfileAction(formData: FormData) {
   }
   const pst = normalizeAllPst(input);
   if (!pst.ok) return { error: pst.error };
-  if (input.pstStatus === "APPLICABLE" && !input.pstNumber && !pst.values.bcPstNumber && !pst.values.mbRstNumber && !pst.values.skPstNumber) {
-    return { error: "Enter at least one provincial PST/RST number, or set PST/RST to Exempt or Not applicable." };
+  // Each province is decided on its own: Applicable needs that province's number.
+  const provincial = [
+    { label: "BC PST", status: input.bcPstStatus, number: pst.values.bcPstNumber },
+    { label: "Manitoba RST", status: input.mbRstStatus, number: pst.values.mbRstNumber },
+    { label: "Saskatchewan PST", status: input.skPstStatus, number: pst.values.skPstNumber },
+  ];
+  for (const p of provincial) {
+    if (p.status === "APPLICABLE" && !p.number) {
+      return { error: `Enter a ${p.label} number, or set ${p.label} to Exempt or Not applicable.` };
+    }
   }
+  // The legacy single status mirrors the provinces so anything still reading it
+  // (and non-BC/MB/SK PST codes) behaves sensibly.
+  const legacyPstStatus = provincial.some((p) => p.status === "APPLICABLE")
+    ? "APPLICABLE"
+    : provincial.some((p) => p.status === "EXEMPT")
+      ? "EXEMPT"
+      : "NOT_APPLICABLE";
 
   // GST/HST filing frequency for the current year: set once at setup, then final.
   const filingYear = currentFilingYear();
@@ -139,7 +156,10 @@ export async function saveCompanyProfileAction(formData: FormData) {
       ...pst.values,
       gstHstStatus: input.gstHstStatus,
       qstStatus: input.qstStatus,
-      pstStatus: input.pstStatus,
+      pstStatus: legacyPstStatus,
+      bcPstStatus: input.bcPstStatus,
+      mbRstStatus: input.mbRstStatus,
+      skPstStatus: input.skPstStatus,
       baseCurrency,
       province: input.province.toUpperCase(),
       addressLine1: input.addressLine1 || null,

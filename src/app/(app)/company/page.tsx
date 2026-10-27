@@ -55,7 +55,9 @@ export default async function CompanyPage() {
                 filingYear,
                 gstHstStatus: record.gstHstStatus === "UNSET" ? "APPLICABLE" : (record.gstHstStatus as "APPLICABLE" | "EXEMPT" | "NOT_APPLICABLE"),
                 qstStatus: record.qstStatus === "UNSET" ? "APPLICABLE" : (record.qstStatus as "APPLICABLE" | "EXEMPT" | "NOT_APPLICABLE"),
-                pstStatus: record.pstStatus === "UNSET" ? "APPLICABLE" : (record.pstStatus as "APPLICABLE" | "EXEMPT" | "NOT_APPLICABLE"),
+                bcPstStatus: provinceStatus(record.bcPstStatus, record.pstStatus, record.bcPstNumber),
+                mbRstStatus: provinceStatus(record.mbRstStatus, record.pstStatus, record.mbRstNumber),
+                skPstStatus: provinceStatus(record.skPstStatus, record.pstStatus, record.skPstNumber),
                 baseCurrency: record.baseCurrency || DEFAULT_CURRENCY,
                 province: record.province,
                 addressLine1: record.addressLine1 ?? "",
@@ -85,10 +87,10 @@ export default async function CompanyPage() {
                   { label: "Business number", value: record.businessNumber ?? "—" },
                   { label: "GST/HST", value: taxStatusLine(record.gstHstStatus, record.gstNumber) },
                   { label: "QST", value: taxStatusLine(record.qstStatus, record.qstNumber) },
-                  { label: "PST/RST", value: taxStatusLine(record.pstStatus, record.pstNumber) },
-                  { label: "BC PST", value: record.bcPstNumber ?? "—" },
-                  { label: "Manitoba RST/PST", value: record.mbRstNumber ?? "—" },
-                  { label: "Saskatchewan PST", value: record.skPstNumber ?? "—" },
+                  ...(record.pstNumber ? [{ label: "PST/RST (other)", value: taxStatusLine(record.pstStatus, record.pstNumber) }] : []),
+                  { label: "BC PST", value: taxStatusLine(provinceStatus(record.bcPstStatus, record.pstStatus, record.bcPstNumber), record.bcPstNumber) },
+                  { label: "Manitoba RST/PST", value: taxStatusLine(provinceStatus(record.mbRstStatus, record.pstStatus, record.mbRstNumber), record.mbRstNumber) },
+                  { label: "Saskatchewan PST", value: taxStatusLine(provinceStatus(record.skPstStatus, record.pstStatus, record.skPstNumber), record.skPstNumber) },
                   { label: `${filingYear} GST/HST filing`, value: filing ? FILING_FREQUENCY_LABELS[filing.frequency as FilingFrequency] ?? filing.frequency : "Not set" },
                   { label: "Base currency", value: currencyLabel(record.baseCurrency || DEFAULT_CURRENCY) },
                   { label: "Address", value: [record.addressLine1, record.city, record.postalCode].filter(Boolean).join(", ") || "—" },
@@ -165,6 +167,17 @@ export default async function CompanyPage() {
       </div>
     </>
   );
+}
+
+/**
+ * What a province's status dropdown should show. A province with its own saved
+ * status shows it; otherwise it follows the legacy single status, and a province
+ * the company has no registration for defaults to Not applicable.
+ */
+function provinceStatus(own: string, legacy: string, number: string | null): "APPLICABLE" | "EXEMPT" | "NOT_APPLICABLE" {
+  if (own !== "UNSET") return own as "APPLICABLE" | "EXEMPT" | "NOT_APPLICABLE";
+  if (!number) return "NOT_APPLICABLE";
+  return legacy === "UNSET" ? "APPLICABLE" : (legacy as "APPLICABLE" | "EXEMPT" | "NOT_APPLICABLE");
 }
 
 function taxStatusLine(status: string, number: string | null): string {
