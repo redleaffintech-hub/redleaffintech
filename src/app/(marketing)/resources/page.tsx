@@ -67,7 +67,7 @@ const FAQ = [
   },
   {
     q: "How do I get help?",
-    a: "Every plan includes support; Business and Firm plans get priority handling. Use the contact form and tell us the company and the screen you are on.",
+    a: "Every plan includes email support. Use the contact form and tell us the company and the screen you are on.",
   },
 ];
 

@@ -28,21 +28,6 @@ The marketing site is at `/`; the application lives under `/dashboard`. Anyone
 holding a session cookie is bounced from `/` to `/dashboard` by `src/proxy.ts`
 (Next 16's renamed middleware).
 
-### Demo logins
-
-`npm run seed` builds two companies. Every password is `demo1234`.
-
-| Email | Role | Sees |
-| --- | --- | --- |
-| `owner@northbridge.ca` | PRIMARY | Everything, including company settings and tax setup |
-| `books@northbridge.ca` | SECONDARY | Day-to-day bookkeeping; **no** tax settings |
-| `review@northbridge.ca` | REVIEWER | Read-only |
-| `accountant@cedarvale.ca` | ACCOUNTANT | The `/firm` multi-client workspace |
-
-To list these on the sign-in page with the password pre-filled, set
-`DEMO_ACCOUNTS=1`. **Never set it in production** — it enumerates every user in
-the database, which is why it is off by default.
-
 ---
 
 ## Environment
@@ -57,7 +42,6 @@ See `.env.example` for the annotated template.
 | `NEXT_PUBLIC_SITE_URL` | no | Canonical origin for `sitemap.xml` and `robots.txt`. |
 | `CONTACT_EMAIL` | no | Published on `/contact`, and the fallback when the form has nowhere to post. |
 | `CONTACT_FORWARD_URL` | no | Where `/contact` submissions are POSTed. While unset, the form tells the visitor to email `CONTACT_EMAIL` rather than pretending the message was delivered. |
-| `DEMO_ACCOUNTS` | no | `1` lists seeded logins on `/login`. Production: leave unset. |
 
 `vercel env pull` writes to **`.env.local`**, and a stale `.env` may still sit
 beside it. `scripts/load-env.ts` loads `.env.local` first for exactly this

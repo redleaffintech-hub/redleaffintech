@@ -6,7 +6,7 @@ Use one Render Free Node web service and Neon Free PostgreSQL. The app retains N
 
 1. Push this revision to your repository and create a Render Blueprint using render.yaml. Select the Free service plan.
 2. Use your existing Neon database to preserve users and books. Confirm its plan and usage in Neon first. Set DATABASE_URL to its pooled URL and DATABASE_URL_UNPOOLED to its direct URL. Do not copy connection strings into source control.
-3. Set SESSION_SECRET to the existing production value and NEXT_PUBLIC_SITE_URL to the chosen HTTPS origin. Set any other existing production variables, including MFA encryption or contact forwarding settings, to the same values as the old host. Leave DEMO_ACCOUNTS unset.
+3. Set SESSION_SECRET to the existing production value and NEXT_PUBLIC_SITE_URL to the chosen HTTPS origin. Set any other existing production variables, including MFA encryption or contact forwarding settings, to the same values as the old host.
 4. The Blueprint installs dependencies, applies pending database migrations, builds the standalone server and starts it. Review pending migrations and back up the database before deployment. Do not run the demo seed against live books.
 5. Before switching DNS, test the Render URL: health, homepage, login, company selection, existing reports, and a reversible draft invoice. Check static assets and logout. Validate accounting writes with a separate test company/database.
 6. Switch the domain only after those checks pass. Keep the previous deployment available for rollback; do not run incompatible schema changes during the transition.

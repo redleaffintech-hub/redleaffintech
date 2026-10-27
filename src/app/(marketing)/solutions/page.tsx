@@ -19,7 +19,7 @@ const SOLUTIONS = [
       "Bank rules learn how you categorise",
       "Statements your accountant will recognise",
     ],
-    plan: "Starter or Professional",
+    plan: "Basic",
   },
   {
     icon: "briefcase",
@@ -32,7 +32,7 @@ const SOLUTIONS = [
       "Period close and locked history",
       "A complete audit trail of who changed what",
     ],
-    plan: "Professional",
+    plan: "Basic + Payroll",
   },
   {
     icon: "chart",
@@ -45,7 +45,7 @@ const SOLUTIONS = [
       "Separate ledgers, numbering and tax registrations",
       "One subscription covering the group",
     ],
-    plan: "Business",
+    plan: "Basic + add-ons",
   },
   {
     icon: "users",
@@ -58,7 +58,7 @@ const SOLUTIONS = [
       "Add a client, or request access to an existing company",
       "Keep your own company on the same account",
     ],
-    plan: "Firm",
+    plan: "Basic, with a practice workspace on request",
   },
 ];
 
@@ -121,7 +121,7 @@ export default function SolutionsPage() {
         />
         <div className="mt-8 flex justify-center">
           <Cta href="/pricing?cycle=ANNUAL" variant="secondary">
-            Compare the Firm plan
+            See pricing
             <Icon name="chevron" className="h-4 w-4" />
           </Cta>
         </div>

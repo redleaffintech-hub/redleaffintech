@@ -1,5 +1,10 @@
 /**
- * The founding plan catalogue.
+ * The plan catalogue: one Basic plan plus Payroll and Inventory add-ons
+ * (27 Oct 2026 fee structure). The four earlier tiers (Starter, Professional,
+ * Business, Firm) are no longer seeded; existing subscriptions on them keep
+ * their plan rows and agreed prices.
+ *
+ * Originally: the founding plan catalogue.
  *
  * These are the four plans that used to be the hard-coded `PLANS` array in
  * `src/lib/plans.ts`. They live here now for one purpose only: seeding a
@@ -37,13 +42,14 @@ export interface SeedPlan {
 
 export const SEED_PLANS: SeedPlan[] = [
   {
-    code: "STARTER",
-    name: "Starter",
-    description: "Everything a small Canadian business needs to keep a clean set of books.",
-    forWhom: "A sole proprietor or small business doing their own books.",
+    code: "BASIC",
+    name: "Basic",
+    description: "The full Canadian accounting product. Add Payroll and Inventory when you need them.",
+    forWhom: "Any Canadian business keeping its own books.",
     currency: "CAD",
-    monthlyEquivalentCents: { MONTHLY: 1900, QUARTERLY: 1750, ANNUAL: 1583 },
-    seats: 2,
+    // Billed $19.99 monthly or $199.99 annually (~$16.67/month).
+    monthlyEquivalentCents: { MONTHLY: 1999, ANNUAL: 1667 },
+    seats: 3,
     companies: 1,
     storageGb: 5,
     modules: ["ACCOUNTING"],
@@ -51,78 +57,49 @@ export const SEED_PLANS: SeedPlan[] = [
     includes: [
       "Invoicing, sales quotes and expenses",
       "Bank import, rules and reconciliation",
-      "GST/HST return working paper",
+      "GST/HST, PST, RST and QST tax engine",
       "Balance sheet, P&L and cash flow",
+      "Bill approvals, budgets and period close",
     ],
+    popular: true,
+    sortOrder: 10,
+  },
+];
+
+export interface SeedAddon {
+  code: string;
+  name: string;
+  description: string;
+  moduleId: ModuleId;
+  monthlyCents: number;
+  annualCents: number;
+  sortOrder: number;
+}
+
+export const SEED_ADDONS: SeedAddon[] = [
+  {
+    code: "PAYROLL",
+    name: "Payroll",
+    description: "Pay runs posting straight to the ledger, with pay stubs and leave tracking.",
+    moduleId: "PAYROLL",
+    monthlyCents: 1499,
+    annualCents: 14999,
     sortOrder: 10,
   },
   {
-    code: "PROFESSIONAL",
-    name: "Professional",
-    description: "The full accounting product with approvals, budgets and role-based access.",
-    forWhom: "A growing incorporated business with a bookkeeper.",
-    currency: "CAD",
-    monthlyEquivalentCents: { MONTHLY: 4900, QUARTERLY: 4500, ANNUAL: 4083 },
-    seats: 5,
-    companies: 2,
-    storageGb: 25,
-    modules: ["ACCOUNTING"],
-    support: "Email and chat support",
-    includes: [
-      "Everything in Starter",
-      "Bill approvals and period close",
-      "Budgets and the full report pack",
-      "Projects, recurring documents and credit notes",
-      "Role-based access for your team",
-    ],
-    popular: true,
+    code: "INVENTORY",
+    name: "Inventory",
+    description: "Stock on hand at weighted-average cost, with cost of goods sold posted as it sells.",
+    moduleId: "INVENTORY",
+    monthlyCents: 2999,
+    annualCents: 29999,
     sortOrder: 20,
-  },
-  {
-    code: "BUSINESS",
-    name: "Business",
-    description: "Multi-entity accounting for an organisation running several companies.",
-    forWhom: "A larger organisation running several entities.",
-    currency: "CAD",
-    monthlyEquivalentCents: { MONTHLY: 9900, QUARTERLY: 9100, ANNUAL: 8250 },
-    seats: 15,
-    companies: 10,
-    storageGb: 100,
-    modules: ["ACCOUNTING"],
-    support: "Priority support",
-    includes: [
-      "Everything in Professional",
-      "Up to 10 companies on one subscription",
-      "Consolidated multi-entity switching",
-      "Full audit trail and export",
-      "Onboarding assistance",
-    ],
-    sortOrder: 30,
-  },
-  {
-    code: "FIRM",
-    name: "Firm",
-    description: "A practice workspace across an entire portfolio of client files.",
-    forWhom: "An accounting practice carrying a portfolio of client files.",
-    currency: "CAD",
-    monthlyEquivalentCents: { MONTHLY: 14900, QUARTERLY: 13700, ANNUAL: 12417 },
-    seats: 25,
-    companies: 50,
-    storageGb: 250,
-    modules: ["ACCOUNTING"],
-    support: "Priority support and a named contact",
-    includes: [
-      "Everything in Business",
-      "Firm workspace across every client",
-      "Close checklist and review queue",
-      "Client health dashboard",
-      "Add clients without a second login",
-    ],
-    sortOrder: 40,
   },
 ];
 
 /** The seed quotes a per-month rate; the amount actually billed follows from it. */
 export function seedCycleAmountCents(plan: SeedPlan, cycle: BillingCycle): number {
+  // Annual is a stated price ($199.99), not 12 x the rounded monthly equivalent.
+  if (plan.code === "BASIC" && cycle === "ANNUAL") return 19_999;
   return plan.monthlyEquivalentCents[cycle] * CYCLE_MONTHS[cycle];
 }

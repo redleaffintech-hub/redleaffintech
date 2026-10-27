@@ -1,34 +1,14 @@
 import Image from "next/image";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { db } from "@/lib/db";
 import { getCurrentUser } from "@/server/auth/context";
 import { Icon } from "@/components/shell/icons";
 import { LoginForm } from "./login-form";
-import type { CompanyRole } from "@/lib/enums";
 
 export const metadata = { title: "Sign in" };
 
-/**
- * The seeded demo accounts are only ever listed when DEMO_ACCOUNTS=1 — this is
- * a public sign-in page and enumerating users would leak every customer's
- * name, email and company.
- */
-const SHOW_DEMO_ACCOUNTS = process.env.DEMO_ACCOUNTS === "1";
-
 export default async function LoginPage() {
   if (await getCurrentUser()) redirect("/dashboard");
-
-  const demoUsers = SHOW_DEMO_ACCOUNTS
-    ? await db.user.findMany({
-        orderBy: { createdAt: "asc" },
-        select: {
-          email: true,
-          name: true,
-          companyUsers: { select: { role: true, company: { select: { name: true } } } },
-        },
-      })
-    : [];
 
   return (
     <div className="grid min-h-dvh lg:grid-cols-[1.1fr_1fr]">
@@ -99,17 +79,7 @@ export default async function LoginPage() {
           <h2 className="text-[1.5rem] font-semibold tracking-[-0.02em] text-ink-950">Sign in</h2>
           <p className="mt-1 text-[0.875rem] text-muted-ink">Welcome back. Pick up where the books left off.</p>
 
-          <LoginForm
-            demoAccounts={demoUsers.map((u) => ({
-              email: u.email,
-              name: u.name,
-              description:
-                u.companyUsers.length > 1
-                  ? `${u.companyUsers.length} companies · ${u.companyUsers[0].role.toLowerCase()}`
-                  : (u.companyUsers[0]?.company.name ?? "No company"),
-              role: (u.companyUsers[0]?.role ?? "PRIMARY") as CompanyRole,
-            }))}
-          />
+          <LoginForm />
 
           <p className="mt-8 border-t border-paper-300 pt-6 text-[0.8125rem] text-muted-ink">
             New to Red Leaf?{" "}

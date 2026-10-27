@@ -216,7 +216,7 @@ export default function HomePage() {
         />
         <ol className="mx-auto mt-12 grid max-w-5xl gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {[
-            { step: "01", title: "Choose a plan", body: "Monthly, quarterly or annual — the price updates as you switch." },
+            { step: "01", title: "Choose a plan", body: "Monthly or annual — the price updates as you switch." },
             { step: "02", title: "Subscribe", body: "Tell us about the business and confirm the subscription." },
             { step: "03", title: "Account created", body: "Chart of accounts, tax codes and fiscal periods provisioned for your province." },
             { step: "04", title: "Start posting", body: "You land in Red Leaf Accounting as Primary Admin, ready to invoice." },

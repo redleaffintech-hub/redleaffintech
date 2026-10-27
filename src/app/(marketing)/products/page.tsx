@@ -153,7 +153,7 @@ export default function ProductsPage() {
 
       <CtaBand
         title="Start with the product that is ready today"
-        description="Red Leaf Accounting is live, provisioned for your province, and priced from four plans."
+        description="Red Leaf Accounting is live, provisioned for your province, and priced from $19.99 a month, with Payroll and Inventory add-ons."
         primary={{ href: "/pricing", label: "Choose a plan" }}
         secondary={{ href: "/solutions", label: "See it by use case" }}
       />

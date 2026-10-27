@@ -53,7 +53,6 @@ const EMPTY: PlanFormValues = {
   sortOrder: 50,
   prices: {
     MONTHLY: { cycleAmountCents: 0, monthlyEquivalentCents: 0 },
-    QUARTERLY: { cycleAmountCents: 0, monthlyEquivalentCents: 0 },
     ANNUAL: { cycleAmountCents: 0, monthlyEquivalentCents: 0 },
   },
 };

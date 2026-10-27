@@ -29,6 +29,7 @@ import {
   type BillingCycle,
   type ModuleId,
   type PlanPriceView,
+  type PublicAddon,
   type PublicPlan,
 } from "@/lib/plans";
 
@@ -169,6 +170,23 @@ export const publicPlans = cache(async (): Promise<PublicPlan[]> => loadPublishe
  * excluded because a draft has no published price to charge.
  */
 export const sellablePlans = cache(async (): Promise<PublicPlan[]> => loadPublished());
+
+/** The add-ons offered on the public pricing page. */
+export const publicAddons = cache(async (): Promise<PublicAddon[]> => {
+  const rows = await db.planAddon.findMany({ where: { isActive: true }, orderBy: { sortOrder: "asc" } });
+  return rows.map((row) => ({
+    code: row.code,
+    name: row.name,
+    description: row.description,
+    moduleId: row.moduleId as ModuleId,
+    currency: row.currency,
+    sortOrder: row.sortOrder,
+    prices: {
+      MONTHLY: { cycleAmountCents: row.monthlyCents, monthlyEquivalentCents: row.monthlyCents },
+      ANNUAL: { cycleAmountCents: row.annualCents, monthlyEquivalentCents: Math.round(row.annualCents / 12) },
+    },
+  }));
+});
 
 export async function publicPlanByCode(code: string): Promise<PublicPlan | undefined> {
   const plans = await publicPlans();

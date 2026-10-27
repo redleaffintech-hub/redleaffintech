@@ -9,27 +9,34 @@ import {
   BILLING_CYCLES,
   CYCLE_LABELS,
   CYCLE_MONTHS,
+  addonCycleCents,
   cyclePriceCents,
   cycleSavingPercent,
   monthlyEquivalentCents,
   type BillingCycle,
+  type PublicAddon,
   type PublicPlan,
 } from "@/lib/plans";
 
+const money = (cents: number, currency: string) => formatMoney(cents, { currency }).replace(/\.00$/, "");
+
 /**
- * The plans arrive as a prop rather than being imported: they are read from the
- * published catalogue by the server component that renders this, so what a
+ * The plan and add-ons arrive as props rather than being imported: they are
+ * read from the catalogue by the server component that renders this, so what a
  * visitor sees is whatever an administrator last published — never a figure
  * compiled into the bundle.
  */
 export function PricingTable({
   plans,
+  addons = [],
   initialCycle = "MONTHLY",
 }: {
   plans: PublicPlan[];
+  addons?: PublicAddon[];
   initialCycle?: BillingCycle;
 }) {
   const [cycle, setCycle] = useState<BillingCycle>(initialCycle);
+  const [selected, setSelected] = useState<string[]>([]);
 
   if (plans.length === 0) {
     return (
@@ -43,35 +50,110 @@ export function PricingTable({
     );
   }
 
+  const plan = plans[0];
+  const chosen = addons.filter((addon) => selected.includes(addon.code));
+  const totalCents = cyclePriceCents(plan, cycle) + chosen.reduce((sum, addon) => sum + addonCycleCents(addon, cycle), 0);
+  const months = CYCLE_MONTHS[cycle];
+  const signupHref = `/signup?plan=${plan.code}&cycle=${cycle}${chosen.length ? `&addons=${chosen.map((a) => a.code).join(",")}` : ""}`;
+
   return (
     <>
-      <CycleToggle plans={plans} cycle={cycle} onChange={setCycle} />
+      <CycleToggle plan={plan} cycle={cycle} onChange={setCycle} />
 
-      <div
-        className={clsx(
-          "mt-10 grid gap-5 md:grid-cols-2",
-          plans.length >= 4 ? "xl:grid-cols-4" : "xl:grid-cols-3",
-        )}
-      >
-        {plans.map((plan) => (
-          <PlanCard key={plan.id} plan={plan} cycle={cycle} />
-        ))}
+      <div className="mx-auto mt-10 grid max-w-5xl gap-5 lg:grid-cols-[1fr_1.1fr] lg:items-start">
+        <div className="relative flex flex-col rounded-(--radius-card) border border-brand-500 bg-white p-6 shadow-[0_2px_4px_rgba(47,109,156,0.12),0_16px_40px_-24px_rgba(47,109,156,0.4)]">
+          <h3 className="font-display text-[1.125rem] font-semibold text-ink-950">{plan.name}</h3>
+          <p className="mt-2 text-[0.8125rem] leading-6 text-muted-ink">{plan.forWhom}</p>
+
+          <p className="mt-4 flex items-baseline gap-1.5">
+            <span className="tnum font-display text-[2rem] font-semibold leading-none tracking-[-0.02em] text-ink-950">
+              {money(cyclePriceCents(plan, cycle), plan.currency)}
+            </span>
+            <span className="text-[0.8125rem] text-muted-ink">/ {months === 1 ? "month" : "year"}</span>
+          </p>
+          {months > 1 && (
+            <p className="tnum mt-1.5 text-[0.75rem] text-muted-ink">
+              about {money(monthlyEquivalentCents(plan, cycle), plan.currency)} / month, billed annually
+            </p>
+          )}
+
+          <dl className="mt-5 grid gap-1.5 border-y border-paper-300 py-4 text-[0.8125rem]">
+            <Line label="Users" value={`${plan.seats} included`} />
+            <Line label="Companies" value={plan.companies === 1 ? "1 company" : `up to ${plan.companies}`} />
+            <Line label="Storage" value={`${plan.storageGb} GB`} />
+            <Line label="Support" value={plan.support} />
+          </dl>
+
+          <ul className="mt-5 grid gap-2.5">
+            {plan.includes.map((line) => (
+              <li key={line} className="flex gap-2">
+                <Icon name="check" className="mt-0.5 h-4 w-4 shrink-0 text-positive" />
+                <span className="text-[0.8125rem] leading-6 text-ink-700">{line}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <div className="rounded-(--radius-card) border border-paper-300 bg-white p-6">
+          <h3 className="font-display text-[1.125rem] font-semibold text-ink-950">Add-ons</h3>
+          <p className="mt-1 text-[0.8125rem] text-muted-ink">Add only what you need, and change it any time.</p>
+
+          <ul className="mt-4 grid gap-3">
+            {addons.map((addon) => {
+              const on = selected.includes(addon.code);
+              return (
+                <li key={addon.code}>
+                  <label
+                    className={clsx(
+                      "flex cursor-pointer items-start gap-3 rounded-lg border p-4 transition-colors",
+                      on ? "border-brand-500 bg-brand-soft" : "border-paper-300 hover:bg-paper-100",
+                    )}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={on}
+                      onChange={() =>
+                        setSelected((current) => (on ? current.filter((c) => c !== addon.code) : [...current, addon.code]))
+                      }
+                      className="mt-1 h-4 w-4 accent-[var(--color-brand-600)]"
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-[0.9375rem] font-semibold text-ink-900">{addon.name}</span>
+                      <span className="mt-0.5 block text-[0.8125rem] leading-5 text-muted-ink">{addon.description}</span>
+                    </span>
+                    <span className="tnum shrink-0 text-right text-[0.875rem] font-semibold text-ink-900">
+                      +{money(addonCycleCents(addon, cycle), addon.currency)}
+                      <span className="block text-[0.6875rem] font-normal text-muted-ink">/ {months === 1 ? "month" : "year"}</span>
+                    </span>
+                  </label>
+                </li>
+              );
+            })}
+          </ul>
+
+          <div className="mt-5 flex items-baseline justify-between border-t border-paper-300 pt-4">
+            <span className="text-[0.875rem] text-ink-700">
+              Your total{chosen.length > 0 ? ` (${plan.name} + ${chosen.map((a) => a.name).join(" + ")})` : ""}
+            </span>
+            <span className="tnum font-display text-[1.5rem] font-semibold text-ink-950">
+              {money(totalCents, plan.currency)}
+              <span className="ml-1 text-[0.8125rem] font-normal text-muted-ink">/ {months === 1 ? "month" : "year"}</span>
+            </span>
+          </div>
+
+          <Link
+            href={signupHref}
+            className="mt-5 inline-flex w-full items-center justify-center rounded-lg bg-brand-600 px-4 py-2.5 text-[0.875rem] font-medium text-white transition-colors hover:bg-brand-700"
+          >
+            Subscribe
+          </Link>
+        </div>
       </div>
-
-      <ComparisonTable plans={plans} cycle={cycle} />
     </>
   );
 }
 
-function CycleToggle({
-  plans,
-  cycle,
-  onChange,
-}: {
-  plans: PublicPlan[];
-  cycle: BillingCycle;
-  onChange: (next: BillingCycle) => void;
-}) {
+function CycleToggle({ plan, cycle, onChange }: { plan: PublicPlan; cycle: BillingCycle; onChange: (next: BillingCycle) => void }) {
   return (
     <div className="flex flex-col items-center gap-3">
       <div
@@ -81,7 +163,7 @@ function CycleToggle({
       >
         {BILLING_CYCLES.map((option) => {
           const active = option === cycle;
-          const saving = cycleSavingPercent(plans[0], option);
+          const saving = cycleSavingPercent(plan, option);
           return (
             <button
               key={option}
@@ -116,160 +198,11 @@ function CycleToggle({
   );
 }
 
-function PlanCard({ plan, cycle }: { plan: PublicPlan; cycle: BillingCycle }) {
-  const perMonth = monthlyEquivalentCents(plan, cycle);
-  const billed = cyclePriceCents(plan, cycle);
-  const months = CYCLE_MONTHS[cycle];
-
-  return (
-    <div
-      className={clsx(
-        "relative flex flex-col rounded-(--radius-card) border bg-white p-6",
-        plan.popular
-          ? "border-brand-500 shadow-[0_2px_4px_rgba(47,109,156,0.12),0_16px_40px_-24px_rgba(47,109,156,0.4)]"
-          : "border-paper-300 shadow-[0_1px_2px_rgba(38,50,56,0.04)]",
-      )}
-    >
-      {plan.popular && (
-        <span className="absolute -top-3 left-6 rounded-full bg-brand-600 px-2.5 py-1 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-white">
-          Most popular
-        </span>
-      )}
-
-      <h3 className="font-display text-[1.125rem] font-semibold text-ink-950">{plan.name}</h3>
-      <p className="mt-2 min-h-[3rem] text-[0.8125rem] leading-6 text-muted-ink">{plan.forWhom}</p>
-
-      {plan.contactOnly && billed === 0 ? (
-        <p className="mt-4 flex items-baseline gap-1.5">
-          <span className="font-display text-[1.5rem] font-semibold leading-none tracking-[-0.02em] text-ink-950">
-            Let&rsquo;s talk
-          </span>
-        </p>
-      ) : (
-        <>
-          <p className="mt-4 flex items-baseline gap-1.5">
-            <span className="tnum font-display text-[2rem] font-semibold leading-none tracking-[-0.02em] text-ink-950">
-              {formatMoney(perMonth, { showCurrency: true, currency: plan.currency }).replace(/\.00$/, "")}
-            </span>
-            <span className="text-[0.8125rem] text-muted-ink">/ month</span>
-          </p>
-          <p className="tnum mt-1.5 text-[0.75rem] text-muted-ink">
-            {months === 1
-              ? "billed monthly"
-              : `${formatMoney(billed, { currency: plan.currency }).replace(/\.00$/, "")} billed every ${months} months`}
-          </p>
-        </>
-      )}
-
-      <dl className="mt-5 grid gap-1.5 border-y border-paper-300 py-4 text-[0.8125rem]">
-        <Line label="Users" value={`${plan.seats} included`} />
-        <Line label="Companies" value={plan.companies === 1 ? "1 company" : `up to ${plan.companies}`} />
-        <Line label="Storage" value={`${plan.storageGb} GB`} />
-        <Line label="Support" value={plan.support} />
-      </dl>
-
-      <ul className="mt-5 grid flex-1 gap-2.5">
-        {plan.includes.map((line) => (
-          <li key={line} className="flex gap-2">
-            <Icon name="check" className="mt-0.5 h-4 w-4 shrink-0 text-positive" />
-            <span className="text-[0.8125rem] leading-6 text-ink-700">{line}</span>
-          </li>
-        ))}
-      </ul>
-
-      <Link
-        href={`/signup?plan=${plan.code}&cycle=${cycle}`}
-        className={clsx(
-          "mt-6 inline-flex items-center justify-center rounded-lg px-4 py-2.5 text-[0.875rem] font-medium transition-colors",
-          plan.popular
-            ? "bg-brand-600 text-white hover:bg-brand-700"
-            : "border border-paper-400 bg-white text-ink-800 hover:border-ink-300 hover:bg-paper-100",
-        )}
-      >
-        {plan.contactOnly ? "Talk to sales" : "Subscribe"}
-      </Link>
-    </div>
-  );
-}
-
 function Line({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-baseline justify-between gap-3">
       <dt className="text-muted-ink">{label}</dt>
       <dd className="text-right font-medium text-ink-900">{value}</dd>
-    </div>
-  );
-}
-
-/** `true`/`false` render as a tick or a dash; a string renders verbatim. */
-const COMPARISON_ROWS: { label: string; value: (plan: PublicPlan) => string | boolean }[] = [
-  { label: "Users included", value: (p) => String(p.seats) },
-  { label: "Companies / entities", value: (p) => String(p.companies) },
-  { label: "Document storage", value: (p) => `${p.storageGb} GB` },
-  { label: "Double-entry ledger", value: () => true },
-  { label: "GST/HST, PST, QST engine", value: () => true },
-  { label: "Bank import & reconciliation", value: () => true },
-  { label: "Financial statement pack", value: () => true },
-  { label: "Bill approvals & period close", value: (p) => p.code !== "STARTER" },
-  { label: "Budgets & budget vs actual", value: (p) => p.code !== "STARTER" },
-  { label: "Multi-company switching", value: (p) => p.companies > 1 },
-  { label: "Firm workspace & review queue", value: (p) => p.code === "FIRM" },
-  { label: "Audit trail", value: () => true },
-  { label: "Support", value: (p) => p.support },
-];
-
-function ComparisonTable({ plans, cycle }: { plans: PublicPlan[]; cycle: BillingCycle }) {
-  return (
-    <div className="mt-16 overflow-x-auto rounded-(--radius-card) border border-paper-300 bg-white">
-      <table className="w-full min-w-[46rem] border-collapse text-[0.8125rem]">
-        <caption className="sr-only">Feature comparison across Red Leaf plans</caption>
-        <thead>
-          <tr className="border-b border-paper-300 bg-paper-100">
-            <th scope="col" className="px-4 py-3 text-left font-semibold text-ink-900">
-              Compare plans
-            </th>
-            {plans.map((plan) => (
-              <th key={plan.id} scope="col" className="px-4 py-3 text-center font-semibold text-ink-900">
-                {plan.name}
-                <span className="tnum mt-0.5 block text-[0.75rem] font-normal text-muted-ink">
-                  {formatMoney(monthlyEquivalentCents(plan, cycle), { currency: plan.currency }).replace(/\.00$/, "")}/mo
-                </span>
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {COMPARISON_ROWS.map((row) => (
-            <tr key={row.label} className="border-b border-paper-200 last:border-0">
-              <th scope="row" className="px-4 py-2.5 text-left font-normal text-ink-700">
-                {row.label}
-              </th>
-              {plans.map((plan) => {
-                const value = row.value(plan);
-                return (
-                  <td key={plan.id} className="px-4 py-2.5 text-center text-ink-900">
-                    {value === true ? (
-                      <>
-                        <Icon name="check" className="mx-auto h-4 w-4 text-positive" />
-                        <span className="sr-only">Included</span>
-                      </>
-                    ) : value === false ? (
-                      <>
-                        <span aria-hidden className="text-ink-300">
-                          &mdash;
-                        </span>
-                        <span className="sr-only">Not included</span>
-                      </>
-                    ) : (
-                      value
-                    )}
-                  </td>
-                );
-              })}
-            </tr>
-          ))}
-        </tbody>
-      </table>
     </div>
   );
 }

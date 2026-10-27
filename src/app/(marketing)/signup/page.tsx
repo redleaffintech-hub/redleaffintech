@@ -4,14 +4,14 @@ import { formatMoney } from "@/lib/money";
 import {
   CYCLE_LABELS,
   CYCLE_MONTHS,
+  addonCycleCents,
   cyclePriceCents,
-  monthlyEquivalentCents,
   planByCode,
   isValidCycle,
   type BillingCycle,
 } from "@/lib/plans";
 import { Container, Cta, Eyebrow, Section } from "@/components/marketing/ui";
-import { publicPlans } from "@/server/plans/catalogue";
+import { publicAddons, publicPlans } from "@/server/plans/catalogue";
 
 export const metadata = {
   title: "Subscribe",
@@ -26,7 +26,10 @@ export default async function SignupPage({ searchParams }: PageProps<"/signup">)
   const params = await searchParams;
   const first = (value: string | string[] | undefined) => (Array.isArray(value) ? value[0] : value);
 
-  const plan = planByCode(await publicPlans(), first(params.plan));
+  const [plans, allAddons] = await Promise.all([publicPlans(), publicAddons()]);
+  const plan = planByCode(plans, first(params.plan));
+  const wantedAddons = (first(params.addons) ?? "").toUpperCase().split(",");
+  const addons = allAddons.filter((addon) => wantedAddons.includes(addon.code));
   const rawCycle = (first(params.cycle) ?? "").toUpperCase();
   const cycle: BillingCycle = isValidCycle(rawCycle) ? rawCycle : "MONTHLY";
 
@@ -63,17 +66,19 @@ export default async function SignupPage({ searchParams }: PageProps<"/signup">)
 
                 <dl className="mt-6 grid gap-2.5 border-y border-paper-300 py-5 text-[0.875rem]">
                   <Row label="Billing" value={CYCLE_LABELS[cycle]} />
+                  {addons.map((addon) => (
+                    <Row
+                      key={addon.code}
+                      label={`Add-on: ${addon.name}`}
+                      value={formatMoney(addonCycleCents(addon, cycle), { currency: addon.currency })}
+                    />
+                  ))}
                   <Row
-                    label="Price"
-                    value={`${formatMoney(monthlyEquivalentCents(plan, cycle), { currency: plan.currency }).replace(/\.00$/, "")} / month`}
-                  />
-                  <Row
-                    label="Charged"
-                    value={
-                      CYCLE_MONTHS[cycle] === 1
-                        ? "monthly"
-                        : `${formatMoney(cyclePriceCents(plan, cycle), { currency: plan.currency }).replace(/\.00$/, "")} every ${CYCLE_MONTHS[cycle]} months`
-                    }
+                    label="Total"
+                    value={`${formatMoney(
+                      cyclePriceCents(plan, cycle) + addons.reduce((sum, addon) => sum + addonCycleCents(addon, cycle), 0),
+                      { currency: plan.currency },
+                    )} ${CYCLE_MONTHS[cycle] === 1 ? "per month" : "per year"}`}
                   />
                   <Row label="Users included" value={String(plan.seats)} />
                   <Row label="Companies" value={String(plan.companies)} />
@@ -91,8 +96,7 @@ export default async function SignupPage({ searchParams }: PageProps<"/signup">)
             ) : (
               <>
                 <p className="mt-4 text-[0.9375rem] leading-7 text-muted-ink">
-                  No plan selected yet. Have a look at the four plans and pick the one that matches how many
-                  people and companies you bring.
+                  No plan selected yet. Have a look at the Basic plan and the Payroll and Inventory add-ons.
                 </p>
                 <div className="mt-6">
                   <Cta href="/pricing">

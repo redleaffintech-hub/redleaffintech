@@ -15,26 +15,23 @@
  * Prices are integer minor units of the plan's currency, per `./money.ts`.
  */
 
-export const BILLING_CYCLES = ["MONTHLY", "QUARTERLY", "ANNUAL"] as const;
+export const BILLING_CYCLES = ["MONTHLY", "ANNUAL"] as const;
 export type BillingCycle = (typeof BILLING_CYCLES)[number];
 
 export const CYCLE_LABELS: Record<BillingCycle, string> = {
   MONTHLY: "Monthly",
-  QUARTERLY: "Quarterly",
   ANNUAL: "Annual",
 };
 
 /** How many months one invoice covers. */
 export const CYCLE_MONTHS: Record<BillingCycle, number> = {
   MONTHLY: 1,
-  QUARTERLY: 3,
   ANNUAL: 12,
 };
 
 /** "billed every 3 months" — the phrasing used wherever the real charge is shown. */
 export const CYCLE_BILLED_AS: Record<BillingCycle, string> = {
   MONTHLY: "billed monthly",
-  QUARTERLY: "billed every 3 months",
   ANNUAL: "billed annually",
 };
 
@@ -141,7 +138,7 @@ export const PLAN_STATUS_LABELS: Record<PlanStatus, string> = {
  * identifier, not a definition — the seats and the price behind it come from
  * the database like every other plan's.
  */
-export const DEFAULT_PLAN_CODE = "PROFESSIONAL";
+export const DEFAULT_PLAN_CODE = "BASIC";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The shape everything reads
@@ -210,4 +207,24 @@ export function planByCode(plans: PublicPlan[], code: string | null | undefined)
   if (!code) return undefined;
   const wanted = code.toUpperCase();
   return plans.find((plan) => plan.code === wanted);
+}
+
+/**
+ * A priced add-on to the Basic plan (Payroll, Inventory). Unlike a plan it is not
+ * versioned: it is a flat per-cycle price on top of whichever plan the company is
+ * on, and it unlocks one product module.
+ */
+export interface PublicAddon {
+  code: string;
+  name: string;
+  description: string | null;
+  moduleId: ModuleId;
+  currency: string;
+  sortOrder: number;
+  prices: Record<BillingCycle, PlanPriceView>;
+}
+
+/** What one invoice of an add-on costs for a cycle. */
+export function addonCycleCents(addon: PublicAddon, cycle: BillingCycle): number {
+  return addon.prices[cycle]?.cycleAmountCents ?? 0;
 }

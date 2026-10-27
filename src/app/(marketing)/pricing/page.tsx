@@ -1,7 +1,7 @@
 import { PricingTable } from "@/components/marketing/pricing-table";
 import { Container, CtaBand, Eyebrow, Section, SectionHeading } from "@/components/marketing/ui";
 import { isValidCycle, type BillingCycle } from "@/lib/plans";
-import { publicPlans } from "@/server/plans/catalogue";
+import { publicAddons, publicPlans } from "@/server/plans/catalogue";
 
 /**
  * Plans come from the published catalogue, so this page is cached rather than
@@ -14,13 +14,13 @@ export const revalidate = 300;
 export const metadata = {
   title: "Pricing",
   description:
-    "Red Leaf Fintech pricing — Starter, Professional, Business and Firm plans, billed monthly, quarterly or annually. All prices in CAD.",
+    "Red Leaf Fintech pricing — Basic at $19.99 a month or $199.99 a year, with Payroll and Inventory add-ons. All prices in CAD.",
 };
 
 const FAQ = [
   {
-    q: "Can I change plans later?",
-    a: "Yes. Upgrade or downgrade whenever you like; the seat and company limits move with the plan. A downgrade is blocked only while more people have access than the smaller plan allows.",
+    q: "Can I add Payroll or Inventory later?",
+    a: "Yes. Start with Basic and add Payroll or Inventory whenever you need them, or remove them again. Each add-on is priced separately, monthly or annually.",
   },
   {
     q: "What counts as a company?",
@@ -32,7 +32,7 @@ const FAQ = [
   },
   {
     q: "Do you support accounting firms?",
-    a: "Yes — the Firm plan gives a practice one login across every client file, with a client dashboard, a review queue and a close checklist. An accountant can keep their own company alongside their clients'.",
+    a: "Yes. An accountant can hold their own company alongside their clients' files. Contact us and we will set up a practice workspace for your portfolio.",
   },
   {
     q: "Which taxes are handled?",
@@ -48,7 +48,7 @@ export default async function PricingPage({ searchParams }: PageProps<"/pricing"
   const params = await searchParams;
   const raw = Array.isArray(params.cycle) ? params.cycle[0] : params.cycle;
   const initialCycle: BillingCycle = isValidCycle(raw?.toUpperCase()) ? (raw!.toUpperCase() as BillingCycle) : "MONTHLY";
-  const plans = await publicPlans();
+  const [plans, addons] = await Promise.all([publicPlans(), publicAddons()]);
 
   return (
     <>
@@ -56,17 +56,17 @@ export default async function PricingPage({ searchParams }: PageProps<"/pricing"
         <Container className="py-14 text-center sm:py-20">
           <Eyebrow>Pricing</Eyebrow>
           <h1 className="font-display mx-auto mt-3 max-w-3xl text-[2.125rem] font-semibold leading-[1.12] tracking-[-0.03em] text-ink-950 sm:text-[2.75rem]">
-            Straightforward plans, priced per business
+            One plan, with the add-ons you need
           </h1>
           <p className="mx-auto mt-5 max-w-2xl text-[1.0625rem] leading-8 text-muted-ink">
-            Every plan includes the full double-entry ledger and the Canadian tax engine. What changes is how
-            many people and companies you bring, and how much support you want.
+            Basic includes the full double-entry ledger and the Canadian tax engine. Add Payroll or Inventory
+            when your business needs them.
           </p>
         </Container>
       </div>
 
       <Section tone="canvas">
-        <PricingTable plans={plans} initialCycle={initialCycle} />
+        <PricingTable plans={plans} addons={addons} initialCycle={initialCycle} />
       </Section>
 
       <Section tone="white">
@@ -82,8 +82,8 @@ export default async function PricingPage({ searchParams }: PageProps<"/pricing"
       </Section>
 
       <CtaBand
-        title="Not sure which plan fits?"
-        description="Tell us how many entities you run and who needs access, and we will point you at the right one."
+        title="Not sure what you need?"
+        description="Tell us how many entities you run and who needs access, and we will point you at the right setup."
         primary={{ href: "/contact", label: "Contact us" }}
         secondary={{ href: "/products/accounting", label: "Explore the product" }}
       />

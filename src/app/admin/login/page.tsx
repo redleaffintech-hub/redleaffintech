@@ -10,9 +10,7 @@ export const metadata = { title: "Sign in" };
  *
  * Nothing on this page hints at who holds an account, how many administrators
  * there are, or that the console exists for any particular organisation beyond
- * Red Leaf itself. There is no demo-account list here — the accounting app's
- * `/login` has one behind `DEMO_ACCOUNTS`, and that would be an outright
- * disclosure on this side.
+ * Red Leaf itself. There is no account list here.
  */
 export default async function AdminLoginPage() {
   const actor = await getAdminActor();

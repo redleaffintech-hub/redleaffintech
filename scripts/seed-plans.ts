@@ -21,7 +21,7 @@
 import "./load-env"; // must precede any import that reads process.env
 import { db } from "../src/lib/db";
 import { BILLING_CYCLES, CYCLE_MONTHS, type BillingCycle } from "../src/lib/plans";
-import { SEED_PLANS, seedCycleAmountCents } from "../src/server/plans/seed-data";
+import { SEED_ADDONS, SEED_PLANS, seedCycleAmountCents } from "../src/server/plans/seed-data";
 import { planShapeFromRow, serializeSnapshot, PLAN_INCLUDE } from "../src/server/plans/catalogue";
 
 async function seedPlans() {
@@ -102,6 +102,33 @@ async function seedPlans() {
   return { created, skipped };
 }
 
+/** Create the Payroll / Inventory add-ons. An existing add-on keeps whatever price an admin set. */
+async function seedAddons() {
+  for (const addon of SEED_ADDONS) {
+    const existing = await db.planAddon.findUnique({ where: { code: addon.code }, select: { id: true } });
+    if (existing) {
+      console.log(`  · add-on ${addon.code} already exists — left untouched`);
+      continue;
+    }
+    await db.planAddon.create({ data: { ...addon, currency: "CAD" } });
+    console.log(`  ✓ add-on ${addon.code} created`);
+  }
+}
+
+/**
+ * The 27 Oct 2026 fee structure replaced the four tiers with Basic + add-ons.
+ * The old plans are taken OFF the public pricing page (isPublic=false) but not
+ * archived: they stay published and sellable-by-admin so every existing
+ * subscription keeps its seat allowance and agreed price.
+ */
+async function hideLegacyTiers() {
+  const result = await db.plan.updateMany({
+    where: { code: { in: ["STARTER", "PROFESSIONAL", "BUSINESS", "FIRM"] }, isPublic: true },
+    data: { isPublic: false },
+  });
+  console.log(`  ✓ ${result.count} legacy tier(s) hidden from the public pricing page`);
+}
+
 /**
  * Give existing subscriptions their plan link and price snapshot.
  *
@@ -163,6 +190,12 @@ async function linkSubscriptions() {
 async function main() {
   console.log("Seeding the plan catalogue…");
   const { created, skipped } = await seedPlans();
+
+  console.log("\nSeeding add-ons…");
+  await seedAddons();
+
+  console.log("\nRetiring the legacy tiers from the pricing page…");
+  await hideLegacyTiers();
 
   console.log("\nLinking existing subscriptions…");
   const { linked, orphaned } = await linkSubscriptions();

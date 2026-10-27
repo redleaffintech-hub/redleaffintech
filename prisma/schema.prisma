@@ -2319,6 +2319,27 @@ model PlanPrice {
   @@unique([planId, cycle])
 }
 
+/// A priced add-on to the base plan (Payroll, Inventory). Flat price per billing
+/// cycle on top of the plan; unlocks one product module (see MODULES in
+/// src/lib/plans.ts). Deliberately not versioned like Plan.
+model PlanAddon {
+  id          String  @id @default(cuid())
+  code        String  @unique
+  name        String
+  description String?
+  moduleId    String
+  currency    String  @default("CAD")
+  sortOrder   Int     @default(0)
+  isActive    Boolean @default(true)
+
+  monthlyCents Int
+  /// What one ANNUAL invoice charges.
+  annualCents  Int
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+}
+
 /// A bullet on the plan card. Ordered, free text, no semantics.
 model PlanFeature {
   id        String @id @default(cuid())
