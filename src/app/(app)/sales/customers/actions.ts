@@ -222,7 +222,7 @@ export async function updateCustomerAction(customerId: string, payload: string) 
   }
 
   const customer = await db.customer.update({
-    where: { id: customerId },
+    where: { id: customerId, companyId: company.id },
     data: {
       name: input.name,
       email: input.email || null,

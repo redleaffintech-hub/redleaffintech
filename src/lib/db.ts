@@ -1,5 +1,6 @@
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@/generated/prisma/client";
+import { createEncryptionHandler, type DataModel } from "@/server/security/encrypted-db";
 
 /**
  * Prisma 7 connects through a driver adapter (§29 — PostgreSQL).
@@ -9,8 +10,6 @@ import { PrismaClient } from "@/generated/prisma/client";
  * number of instances is how a serverless app exhausts a Postgres connection
  * limit. Neon's pooled connection string does the real multiplexing.
  */
-const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
-
 function createClient() {
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) {
@@ -41,9 +40,31 @@ function createClient() {
   });
 }
 
-export const db = globalForPrisma.prisma ?? createClient();
+/**
+ * `rawDb` is the plain client: it sees ciphertext exactly as stored. Only the
+ * encryption backfill/rotation script should touch it. Everything else uses `db`,
+ * which encrypts client personal data on write and decrypts on read (§ field
+ * encryption — see src/server/security).
+ */
+function createEncryptedClient() {
+  const raw = createClient();
+  const dm = (raw as unknown as { _runtimeDataModel: DataModel })._runtimeDataModel;
+  const handler = createEncryptionHandler(dm, raw);
+  const extended = raw.$extends({
+    name: "field-encryption",
+    query: { $allModels: { $allOperations: handler as never } },
+  });
+  return { raw, extended };
+}
 
-if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = db;
+const globalForClients = globalThis as unknown as { clients?: ReturnType<typeof createEncryptedClient> };
+const clients = globalForClients.clients ?? createEncryptedClient();
+if (process.env.NODE_ENV !== "production") globalForClients.clients = clients;
+
+// The extension changes no model types, so `db` is typed as the plain client —
+// that keeps `Tx` (and every helper that takes one) assignable from a transaction.
+export const db = clients.extended as unknown as PrismaClient;
+export const rawDb: PrismaClient = clients.raw;
 
 /** The interactive-transaction client type, for functions that must run inside a tx. */
 export type Tx = Omit<

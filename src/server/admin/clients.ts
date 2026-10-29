@@ -68,8 +68,6 @@ function clientWhere(filters: ClientFilters) {
     where.OR = [
       { name: { contains: q, mode: "insensitive" } },
       { legalName: { contains: q, mode: "insensitive" } },
-      { email: { contains: q, mode: "insensitive" } },
-      { businessNumber: { contains: q, mode: "insensitive" } },
       { users: { some: { user: { email: { contains: q, mode: "insensitive" } } } } },
       { users: { some: { user: { name: { contains: q, mode: "insensitive" } } } } },
     ];

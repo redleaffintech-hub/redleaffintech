@@ -267,7 +267,7 @@ export async function updateEmployeeAction(formData: FormData) {
       : Math.round(input.defaultOvertimeRateMultiplier * 1_000_000);
 
   const updated = await db.employee.update({
-    where: { id },
+    where: { id, companyId: company.id },
     data: {
       legalFirstName: input.legalFirstName,
       legalLastName: input.legalLastName,

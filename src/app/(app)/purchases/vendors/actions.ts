@@ -186,7 +186,7 @@ export async function updateVendorAction(vendorId: string, payload: string) {
   }
 
   const vendor = await db.vendor.update({
-    where: { id: vendorId },
+    where: { id: vendorId, companyId: company.id },
     data: {
       name: input.name,
       email: input.email || null,

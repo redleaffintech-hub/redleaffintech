@@ -19,7 +19,7 @@ export default async function CustomersPage({ searchParams }: PageProps<"/sales/
     where: {
       companyId: company.id,
       ...(filter === "ACTIVE" ? { isActive: true } : filter === "ARCHIVED" ? { isActive: false } : {}),
-      ...(query ? { OR: [{ name: contains(query) }, { email: contains(query) }, { displayCode: contains(query) }] } : {}),
+      ...(query ? { OR: [{ name: contains(query) }, { displayCode: contains(query) }] } : {}),
     },
     include: {
       taxCode: { select: { code: true } },
@@ -59,7 +59,7 @@ export default async function CustomersPage({ searchParams }: PageProps<"/sales/
       />
 
       <FilterBar
-        searchPlaceholder="Search name or email…"
+        searchPlaceholder="Search name or code…"
         tabs={[
           { label: "All", value: "" },
           { label: "Active", value: "ACTIVE", count: customers.filter((c) => c.isActive).length },

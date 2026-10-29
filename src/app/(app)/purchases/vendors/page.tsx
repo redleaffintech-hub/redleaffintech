@@ -19,7 +19,7 @@ export default async function VendorsPage({ searchParams }: PageProps<"/purchase
     where: {
       companyId: company.id,
       ...(filter === "ACTIVE" ? { isActive: true } : filter === "ARCHIVED" ? { isActive: false } : {}),
-      ...(query ? { OR: [{ name: contains(query) }, { email: contains(query) }] } : {}),
+      ...(query ? { OR: [{ name: contains(query) }, { displayName: contains(query) }] } : {}),
     },
     include: {
       taxCode: { select: { code: true } },
@@ -60,7 +60,7 @@ export default async function VendorsPage({ searchParams }: PageProps<"/purchase
       />
 
       <FilterBar
-        searchPlaceholder="Search name or email…"
+        searchPlaceholder="Search name…"
         tabs={[
           { label: "All", value: "" },
           { label: "Active", value: "ACTIVE", count: vendors.filter((v) => v.isActive).length },
