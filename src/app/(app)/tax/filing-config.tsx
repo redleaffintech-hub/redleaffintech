@@ -28,72 +28,84 @@ function YearRow({ row, canEdit, currentYear }: { row: FilingYearRow; canEdit: b
 
   if (!row.editable || !canEdit) {
     return (
-      <tr className="border-t border-paper-200">
-        <td className="py-2 pr-3 font-medium text-ink-900">{row.year}</td>
-        <td className="py-2 pr-3 text-ink-700">
+      <li className="border-t border-paper-200 py-3">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[0.9375rem] font-semibold text-ink-900">{row.year}</span>
+          <Badge tone="neutral">{row.editable ? "View only" : row.lockLabel}</Badge>
+        </div>
+        <p className="mt-1 text-[0.8125rem] text-ink-700">
           {row.applicable === null ? "Not configured" : row.applicable ? "Applicable" : "Not applicable"}
-        </td>
-        <td className="py-2 pr-3 text-ink-900">{row.frequency ? FILING_FREQUENCY_LABELS[row.frequency] : "—"}</td>
-        <td className="py-2"><Badge tone="neutral">{row.editable ? "View only" : row.lockLabel}</Badge></td>
-      </tr>
+          {row.frequency ? ` · ${FILING_FREQUENCY_LABELS[row.frequency]}` : ""}
+        </p>
+      </li>
     );
   }
 
+  // Stacked, not a table: this card lives in a 20rem sidebar, where table columns squeeze
+  // each select until its text is clipped and the choices cannot be read or picked.
+  const selectClass = clsx(inputClass, "mt-1 block w-full min-w-0 pr-8 font-normal normal-case tracking-normal");
+  const labelClass = "block text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-muted-ink";
+
   return (
-    <tr className="border-t border-paper-200 align-top">
-      <td className="py-2 pr-3 font-medium text-ink-900">{row.year}</td>
-      <td className="py-2 pr-3">
-        <select
-          value={applicable ? "YES" : "NO"}
-          onChange={(event) => setApplicable(event.target.value === "YES")}
-          className={clsx(inputClass, "pr-8")}
-          aria-label={`GST/HST status for ${row.year}`}
-        >
-          <option value="YES">Applicable</option>
-          <option value="NO">Not applicable</option>
-        </select>
-      </td>
-      <td className="py-2 pr-3">
-        <select
-          value={applicable ? frequency : "EXEMPT"}
-          disabled={!applicable}
-          onChange={(event) => setFrequency(event.target.value)}
-          className={clsx(inputClass, "pr-8")}
-          aria-label={`Filing frequency for ${row.year}`}
-        >
-          {applicable ? (
-            <>
-              <option value="">Choose…</option>
-              <option value="MONTHLY">Monthly</option>
-              <option value="QUARTERLY">Quarterly</option>
-              <option value="ANNUAL">Annually</option>
-            </>
-          ) : (
-            <option value="EXEMPT">Exempt</option>
-          )}
-        </select>
-        {error && <p className="mt-1 text-[0.75rem] text-negative">{error}</p>}
-      </td>
-      <td className="py-2">
-        <Button
-          variant="primary"
-          disabled={saving}
-          onClick={async () => {
-            setSaving(true);
-            setError(null);
-            const result = await saveFilingYearAction(row.year, applicable, applicable ? frequency : "EXEMPT");
-            setSaving(false);
-            if (result && "error" in result && result.error) return setError(result.error);
-            setSaved(true);
-            setTimeout(() => setSaved(false), 2000);
-            router.refresh();
-          }}
-        >
-          {saving ? "Saving…" : saved ? "Saved" : "Save"}
-        </Button>
-        <p className="mt-1 text-[0.6875rem] text-muted-ink">{row.year === currentYear ? "Current year" : "Editable"}</p>
-      </td>
-    </tr>
+    <li className="border-t border-paper-200 py-3">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-[0.9375rem] font-semibold text-ink-900">{row.year}</span>
+        <span className="text-[0.6875rem] text-muted-ink">{row.year === currentYear ? "Current year" : "Editable"}</span>
+      </div>
+      <div className="mt-2 grid gap-2">
+        <label className={labelClass}>
+          GST/HST
+          <select
+            value={applicable ? "YES" : "NO"}
+            onChange={(event) => setApplicable(event.target.value === "YES")}
+            className={selectClass}
+            aria-label={`GST/HST status for ${row.year}`}
+          >
+            <option value="YES">Applicable</option>
+            <option value="NO">Not applicable</option>
+          </select>
+        </label>
+        <label className={labelClass}>
+          Filing frequency
+          <select
+            value={applicable ? frequency : "EXEMPT"}
+            disabled={!applicable}
+            onChange={(event) => setFrequency(event.target.value)}
+            className={selectClass}
+            aria-label={`Filing frequency for ${row.year}`}
+          >
+            {applicable ? (
+              <>
+                <option value="">Choose…</option>
+                <option value="MONTHLY">Monthly</option>
+                <option value="QUARTERLY">Quarterly</option>
+                <option value="ANNUAL">Annually</option>
+              </>
+            ) : (
+              <option value="EXEMPT">Exempt</option>
+            )}
+          </select>
+        </label>
+      </div>
+      {error && <p className="mt-1 text-[0.75rem] text-negative">{error}</p>}
+      <Button
+        variant="primary"
+        className="mt-2 w-full"
+        disabled={saving}
+        onClick={async () => {
+          setSaving(true);
+          setError(null);
+          const result = await saveFilingYearAction(row.year, applicable, applicable ? frequency : "EXEMPT");
+          setSaving(false);
+          if (result && "error" in result && result.error) return setError(result.error);
+          setSaved(true);
+          setTimeout(() => setSaved(false), 2000);
+          router.refresh();
+        }}
+      >
+        {saving ? "Saving…" : saved ? "Saved" : "Save"}
+      </Button>
+    </li>
   );
 }
 
@@ -104,23 +116,11 @@ export function FilingConfigCard({ rows, canEdit, currentYear }: { rows: FilingY
         title="GST/HST filing frequency by year"
         subtitle={`Each calendar year (Jan 1 – Dec 31) has its own frequency. The current year and future years can be changed; past years are final.`}
       />
-      <div className="thin-scroll mt-3 overflow-x-auto">
-        <table className="w-full text-[0.8125rem]">
-          <thead>
-            <tr className="text-left text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-muted-ink">
-              <th className="pb-2 pr-3">Year</th>
-              <th className="pb-2 pr-3">GST/HST</th>
-              <th className="pb-2 pr-3">Frequency</th>
-              <th className="pb-2" />
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => (
-              <YearRow key={`${row.year}-${row.frequency}-${row.applicable}`} row={row} canEdit={canEdit} currentYear={currentYear} />
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <ul className="mt-3">
+        {rows.map((row) => (
+          <YearRow key={`${row.year}-${row.frequency}-${row.applicable}`} row={row} canEdit={canEdit} currentYear={currentYear} />
+        ))}
+      </ul>
     </Card>
   );
 }
