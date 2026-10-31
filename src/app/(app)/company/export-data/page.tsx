@@ -23,7 +23,6 @@ export default async function ExportDataPage() {
       <PageHeader
         title="Export data"
         breadcrumb={[{ label: "Company", href: "/company" }, { label: "Export data" }]}
-        description="Take your books with you. Choose the reports and lists you want and download them as Excel files, laid out the same way QuickBooks exports them."
       />
       <Card className="p-5">
         <h2 className="text-[1rem] font-semibold text-ink-900">Which reports and lists do you want to export?</h2>

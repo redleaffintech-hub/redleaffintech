@@ -13,6 +13,7 @@ import { resolveAssignment } from "@/server/plans/catalogue";
 import { provincialTaxCodeTemplates } from "@/server/tax/regional-rates";
 import { createDefaultLeaveTypes } from "@/server/hr/leave";
 import { DEFAULT_CURRENCY, normalizeCurrency } from "@/lib/currency";
+import { PROVINCES } from "@/lib/enums";
 import {
   BASE_TAX_CODES,
   CANADIAN_SERVICE_COA,
@@ -266,7 +267,24 @@ export async function createTaxCodes(tx: Tx, companyId: string, province: string
   // rates (falls back to the static table if none is configured yet); the base
   // codes (GST-only, zero-rated, exempt, out of scope) are unchanged.
   const provincial = await provincialTaxCodeTemplates(province);
-  const templates = [...provincial, ...BASE_TAX_CODES];
+
+  // Every other province's codes too. A company sells into other provinces and has to
+  // charge the destination's rate; making the user import each province by hand before
+  // they can book an invoice is a gap, not a feature. They come after the home
+  // province and the base codes, so the default and the top of every list are unchanged.
+  const have = new Set([...provincial, ...BASE_TAX_CODES].map((t) => t.code));
+  const elsewhere: TaxCodeTemplate[] = [];
+  for (const other of PROVINCES) {
+    if (other.code === province) continue;
+    for (const template of await provincialTaxCodeTemplates(other.code)) {
+      if (!have.has(template.code)) {
+        have.add(template.code);
+        elsewhere.push(template);
+      }
+    }
+  }
+
+  const templates = [...provincial, ...BASE_TAX_CODES, ...elsewhere];
   const created = [];
   for (const [index, template] of templates.entries()) {
     // The company's own province leads the list, and is what a new document
