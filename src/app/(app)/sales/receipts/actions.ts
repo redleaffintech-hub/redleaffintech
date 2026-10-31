@@ -81,6 +81,7 @@ export async function createReceiptAction(payload: string) {
     revalidatePath("/sales/receipts");
     revalidatePath("/sales/invoices");
     revalidatePath("/");
+    revalidatePath("/reports", "layout");
     return { redirectTo: `/sales/receipts/${payment.id}` };
   } catch (error) {
     return { error: (error as Error).message };
@@ -95,6 +96,7 @@ export async function voidReceiptAction(paymentId: string) {
     revalidatePath("/sales/receipts");
     revalidatePath("/sales/invoices");
     revalidatePath("/");
+    revalidatePath("/reports", "layout");
     return { ok: true as const };
   } catch (error) {
     return { error: (error as Error).message };
@@ -131,6 +133,7 @@ export async function applyReceiptAction(paymentId: string, payload: string) {
     // cheap for a low-frequency action like this.
     revalidatePath("/sales/customers", "layout");
     revalidatePath("/");
+    revalidatePath("/reports", "layout");
     return { ok: true as const };
   } catch (error) {
     return { error: (error as Error).message };

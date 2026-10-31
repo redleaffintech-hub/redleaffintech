@@ -5,6 +5,7 @@ import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES, can } from "@/lib/permissions";
 import { ACCOUNT_SUBTYPES, ACCOUNT_TYPES, NORMAL_BALANCE, type AccountType } from "@/lib/enums";
 import { today } from "@/lib/dates";
+import { MAX_ACCOUNTS_PER_COMPANY } from "@/lib/coa-limit";
 import { Badge, Card, LinkButton, Money, PageHeader, Table, Td, Th, Tr } from "@/components/ui";
 import { FilterBar } from "@/components/filter-bar";
 import { ExportCsvButton } from "@/components/export-csv-button";
@@ -31,7 +32,7 @@ export default async function ChartOfAccountsPage({ searchParams }: PageProps<"/
   const typeFilter = typeof params.type === "string" ? params.type : "";
   const query = typeof params.q === "string" ? params.q : "";
 
-  const [accounts, balances] = await Promise.all([
+  const [accounts, balances, totalAccounts] = await Promise.all([
     db.account.findMany({
       where: {
         companyId: company.id,
@@ -46,6 +47,7 @@ export default async function ChartOfAccountsPage({ searchParams }: PageProps<"/
       _sum: { debitCents: true, creditCents: true },
       _count: true,
     }),
+    db.account.count({ where: { companyId: company.id } }),
   ]);
 
   const balanceById = new Map(
@@ -107,7 +109,10 @@ export default async function ChartOfAccountsPage({ searchParams }: PageProps<"/
           <>
             <ExportCsvButton report="chart-of-accounts" />
             <LinkButton href="/accounting/chart-of-accounts/opening-balances">Opening balances</LinkButton>
-            <NewAccountButton />
+            <Badge tone={totalAccounts >= MAX_ACCOUNTS_PER_COMPANY ? "caution" : "neutral"}>
+              {totalAccounts} of {MAX_ACCOUNTS_PER_COMPANY} accounts
+            </Badge>
+            <NewAccountButton limitReached={totalAccounts >= MAX_ACCOUNTS_PER_COMPANY} />
           </>
         }
       />

@@ -38,11 +38,18 @@ const BLANK: EditableAccount = {
   isSystem: false,
 };
 
-export function NewAccountButton() {
+export function NewAccountButton({ limitReached = false }: { limitReached?: boolean }) {
   const [open, setOpen] = useState(false);
   return (
     <>
-      <Button variant="primary" onClick={() => setOpen(true)}>Add account</Button>
+      <Button
+        variant="primary"
+        onClick={() => setOpen(true)}
+        disabled={limitReached}
+        title={limitReached ? "This chart has reached the 500-account limit" : undefined}
+      >
+        Add account
+      </Button>
       {open && <AccountDialog account={BLANK} onClose={() => setOpen(false)} />}
     </>
   );

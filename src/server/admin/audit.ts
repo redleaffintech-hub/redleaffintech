@@ -152,6 +152,8 @@ export const AUDIT_ACTIONS = {
   SUBSCRIPTION_PERIOD_CHANGED: "SUBSCRIPTION_PERIOD_CHANGED",
   SUBSCRIPTION_CANCELLED: "SUBSCRIPTION_CANCELLED",
   SUBSCRIPTION_NOTE_ADDED: "SUBSCRIPTION_NOTE_ADDED",
+  SEAT_REQUEST_APPROVED: "SEAT_REQUEST_APPROVED",
+  SEAT_REQUEST_REJECTED: "SEAT_REQUEST_REJECTED",
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];
@@ -196,6 +198,8 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   SUBSCRIPTION_PERIOD_CHANGED: "Period changed",
   SUBSCRIPTION_CANCELLED: "Subscription cancelled",
   SUBSCRIPTION_NOTE_ADDED: "Note added",
+  SEAT_REQUEST_APPROVED: "Extra users approved",
+  SEAT_REQUEST_REJECTED: "Extra users rejected",
 };
 
 /** Which actions read as a security event rather than routine administration. */

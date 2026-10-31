@@ -10,6 +10,7 @@ import { COMPANY_ROLES, PROVINCES } from "@/lib/enums";
 import { CAPABILITIES } from "@/lib/permissions";
 import { assignmentFromPlan, sellablePlanByCode } from "@/server/plans/catalogue";
 import { hashPassword } from "@/server/auth/password";
+import { assertSeatAvailable, SeatLimitError } from "@/server/seats/limits";
 import { recordAudit, requireCapability } from "@/server/auth/context";
 import { configureFilingYear, currentFilingYear } from "@/server/tax/filing-years";
 import { normalizeAllPst } from "@/lib/tax-registration";
@@ -475,37 +476,36 @@ export async function inviteUserAction(formData: FormData) {
   const input = parsed.data;
   const email = input.email.toLowerCase();
 
-  const subscription = await db.subscription.findUnique({ where: { companyId: company.id } });
-  const activeSeats = await db.companyUser.count({
-    where: { companyId: company.id, status: { in: ["ACTIVE", "INVITED"] } },
-  });
-  if (subscription && activeSeats >= subscription.seats) {
-    return { error: `All ${subscription.seats} seats on the ${subscription.plan.toLowerCase()} plan are in use.` };
-  }
-
-  let target = await db.user.findUnique({ where: { email } });
-  if (target) {
-    const existing = await db.companyUser.findFirst({ where: { companyId: company.id, userId: target.id } });
+  // An existing person (typically an accountant who already looks after other
+  // companies) is attached by email — never duplicated — and keeps one login.
+  // Hashed outside the transaction: bcrypt is deliberately slow.
+  const existingUser = await db.user.findUnique({ where: { email } });
+  if (existingUser) {
+    const existing = await db.companyUser.findFirst({ where: { companyId: company.id, userId: existingUser.id } });
     if (existing) return { error: `${email} already has access to this company.` };
-  } else {
-    target = await db.user.create({
-      data: {
-        email,
-        name: input.name,
-        passwordHash: await hashPassword(input.temporaryPassword),
-      },
-    });
   }
+  const passwordHash = existingUser ? null : await hashPassword(input.temporaryPassword);
 
-  await db.companyUser.create({
-    data: {
-      companyId: company.id,
-      userId: target.id,
-      role: input.role,
-      status: "INVITED",
-      invitedAt: new Date(),
-    },
-  });
+  let target: { id: string };
+  try {
+    target = await db.$transaction(async (tx) => {
+      // Limit check and insert share one transaction and the subscription row lock,
+      // so two simultaneous invites cannot both take the last seat.
+      await assertSeatAvailable(tx, company.id);
+      const person = existingUser ?? (await tx.user.create({ data: { email, name: input.name, passwordHash: passwordHash! } }));
+      // Granting access IS the company's act of authorisation, and there is no
+      // acceptance step in this build — so it is live straight away. (INVITED would
+      // hide the company from the person's company switcher until someone pressed
+      // Activate.)
+      await tx.companyUser.create({
+        data: { companyId: company.id, userId: person.id, role: input.role, status: "ACTIVE", invitedAt: new Date(), acceptedAt: new Date() },
+      });
+      return person;
+    });
+  } catch (error) {
+    if (error instanceof SeatLimitError) return { error: error.message };
+    throw error;
+  }
 
   await recordAudit({
     companyId: company.id,
@@ -573,10 +573,19 @@ export async function setMembershipStatusAction(membershipId: string, status: st
     if (primaries === 0) return { error: "This is the last active primary user." };
   }
 
-  await db.companyUser.update({
-    where: { id: membershipId },
-    data: { status, acceptedAt: status === "ACTIVE" ? (membership.acceptedAt ?? new Date()) : membership.acceptedAt },
-  });
+  try {
+    await db.$transaction(async (tx) => {
+      // Restoring a suspended person takes a seat again, so it obeys the same limit as inviting.
+      if (status === "ACTIVE" && membership.status === "SUSPENDED") await assertSeatAvailable(tx, company.id);
+      await tx.companyUser.update({
+        where: { id: membershipId },
+        data: { status, acceptedAt: status === "ACTIVE" ? (membership.acceptedAt ?? new Date()) : membership.acceptedAt },
+      });
+    });
+  } catch (error) {
+    if (error instanceof SeatLimitError) return { error: error.message };
+    throw error;
+  }
 
   await recordAudit({
     companyId: company.id,
@@ -636,8 +645,10 @@ export async function changePlanAction(plan: string) {
 
   // A negotiated seat allowance set by Red Leaf support outranks the plan's, and
   // a self-serve plan change must not quietly take those extra seats away.
-  const seats =
-    existing?.seatsOverridden && existing.seats > catalogue.seats ? existing.seats : catalogue.seats;
+  // Users granted by approved "additional users" requests are paid for and stay
+  // on top of whatever the new plan includes.
+  const planSeats = catalogue.seats + (existing?.extraSeats ?? 0);
+  const seats = existing?.seatsOverridden && existing.seats > planSeats ? existing.seats : planSeats;
 
   const inUse = await db.companyUser.count({
     where: { companyId: company.id, status: { in: ["ACTIVE", "INVITED"] } },

@@ -167,7 +167,10 @@ export async function assignPlan(actor: AdminActor, input: AssignPlanInput) {
   const status = input.status ?? "TRIALING";
   if (!isSubscriptionStatus(status)) throw new SubscriptionError("That is not a subscription status.");
 
-  const seats = input.seatOverride ?? assignment.seats;
+  // Paid extra users from approved requests ride along with a plan change.
+  const extraSeats =
+    (await db.subscription.findUnique({ where: { companyId: input.companyId }, select: { extraSeats: true } }))?.extraSeats ?? 0;
+  const seats = input.seatOverride ?? assignment.seats + extraSeats;
   if (!Number.isInteger(seats) || seats < 1) {
     throw new SubscriptionError("Seat allowance must be a whole number of at least 1.");
   }

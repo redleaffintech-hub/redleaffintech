@@ -5,6 +5,7 @@ import { COMPANY_ROLES, ROLE_LABELS, type CompanyRole } from "@/lib/enums";
 import { formatDate, relativeTime } from "@/lib/dates";
 import { Badge, Card, CardHeader, PageHeader, Table, Td, Th, Tr, type Tone } from "@/components/ui";
 import { InviteUserForm, MembershipActions } from "./user-admin";
+import { SeatRequestCard } from "./seat-request-card";
 
 export const metadata = { title: "Users & access" };
 
@@ -36,13 +37,14 @@ const CAPABILITY_LABELS: Record<string, string> = {
 export default async function CompanyUsersPage() {
   const { company, user } = await requireCapability(CAPABILITIES.USERS);
 
-  const [memberships, subscription] = await Promise.all([
+  const [memberships, subscription, seatRequests] = await Promise.all([
     db.companyUser.findMany({
       where: { companyId: company.id },
       include: { user: { select: { id: true, name: true, email: true, lastLoginAt: true, mfaEnabled: true } } },
       orderBy: [{ status: "asc" }, { createdAt: "asc" }],
     }),
     db.subscription.findUnique({ where: { companyId: company.id } }),
+    db.userSeatRequest.findMany({ where: { companyId: company.id }, orderBy: { createdAt: "desc" }, take: 10 }),
   ]);
 
   const seatsUsed = memberships.filter((m) => m.status !== "SUSPENDED").length;
@@ -165,6 +167,20 @@ export default async function CompanyUsersPage() {
 
         <div className="space-y-4">
           <InviteUserForm seatsLeft={Math.max(0, seats - seatsUsed)} />
+
+          <SeatRequestCard
+            limit={seats}
+            used={seatsUsed}
+            unitPriceCents={subscription?.extraSeatPriceCents ?? 499}
+            requests={seatRequests.map((r) => ({
+              id: r.id,
+              extraUsers: r.extraUsers,
+              totalCents: r.totalCents,
+              status: r.status,
+              createdAt: r.createdAt.toISOString(),
+              decisionNote: r.decisionNote,
+            }))}
+          />
 
           <Card>
             <CardHeader title="External accountants" />

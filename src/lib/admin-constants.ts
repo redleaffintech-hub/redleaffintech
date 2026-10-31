@@ -32,6 +32,7 @@ export const ADMIN_NAV: AdminNavItem[] = [
   { label: "Clients", href: "/admin/clients", description: "Client companies and their files" },
   { label: "Users", href: "/admin/users", description: "People, and the companies they belong to" },
   { label: "Subscriptions", href: "/admin/subscriptions", description: "Plans, trials, seats and billing state" },
+  { label: "User requests", href: "/admin/user-requests", description: "Companies asking for more than their included users" },
   { label: "Plans & pricing", href: "/admin/plans", description: "The catalogue the public site sells" },
   {
     label: "Regional tax rates",

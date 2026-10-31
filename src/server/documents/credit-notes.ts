@@ -179,7 +179,7 @@ export async function applyCreditNote(
         invoiceId: a.invoiceId,
         kind: "CREDIT",
         amountCents: a.amountCents,
-        date: new Date(),
+        date: toUtcDay(new Date()),
       })),
     });
 

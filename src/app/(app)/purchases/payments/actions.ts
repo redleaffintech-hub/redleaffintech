@@ -81,6 +81,7 @@ export async function createPaymentAction(payload: string) {
     revalidatePath("/purchases/payments");
     revalidatePath("/purchases/bills");
     revalidatePath("/");
+    revalidatePath("/reports", "layout");
     return { redirectTo: `/purchases/payments/${payment.id}` };
   } catch (error) {
     return { error: (error as Error).message };
@@ -95,6 +96,7 @@ export async function voidPaymentAction(paymentId: string) {
     revalidatePath("/purchases/payments");
     revalidatePath("/purchases/bills");
     revalidatePath("/");
+    revalidatePath("/reports", "layout");
     return { ok: true as const };
   } catch (error) {
     return { error: (error as Error).message };
@@ -127,6 +129,7 @@ export async function applyPaymentAction(paymentId: string, payload: string) {
     revalidatePath("/purchases/payments");
     revalidatePath("/purchases/bills");
     revalidatePath("/");
+    revalidatePath("/reports", "layout");
     return { ok: true as const };
   } catch (error) {
     return { error: (error as Error).message };

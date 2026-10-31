@@ -132,6 +132,8 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: "Profile & preferences", href: "/company", capability: CAPABILITIES.COMPANY_SETTINGS, exact: true },
       { label: "Companies", href: "/company/companies", capability: CAPABILITIES.COMPANY_SETTINGS },
       { label: "Products & services", href: "/company/products-services", capability: CAPABILITIES.COMPANY_SETTINGS },
+      { label: "Opening balances", href: "/company/opening-balances", capability: CAPABILITIES.COMPANY_SETTINGS },
+      { label: "Export data", href: "/company/export-data", capability: CAPABILITIES.REPORTS },
       { label: "Users & access", href: "/company/users", capability: CAPABILITIES.USERS },
       { label: "Audit log", href: "/company/audit", capability: CAPABILITIES.AUDIT },
       { label: "Subscription", href: "/company/subscription", capability: CAPABILITIES.SUBSCRIPTION },

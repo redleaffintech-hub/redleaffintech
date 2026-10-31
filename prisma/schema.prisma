@@ -114,7 +114,7 @@ model FirmUser {
 
 /// The financial & legal boundary. Every tenant-owned row carries companyId.
 model Company {
-  id                   String    @id @default(cuid())
+  id                   String            @id @default(cuid())
   name                 String
   legalName            String?
   businessNumber       String?
@@ -126,8 +126,8 @@ model Company {
   bcPstNumber          String?
   mbRstNumber          String?
   skPstNumber          String?
-  province             String    @default("ON")
-  country              String    @default("CA")
+  province             String            @default("ON")
+  country              String            @default("CA")
   addressLine1         String?
   addressLine2         String?
   city                 String?
@@ -135,13 +135,14 @@ model Company {
   phone                String?
   email                String?
   website              String?
-  baseCurrency         String    @default("CAD")
-  fiscalYearStartMonth Int       @default(1)
-  locale               String    @default("en-CA")
+  baseCurrency         String            @default("CAD")
+  fiscalYearStartMonth Int               @default(1)
+  locale               String            @default("en-CA")
   industry             String?
   logoUrl              String?
   firmId               String?
-  isReadOnly           Boolean   @default(false)
+  seatRequests         UserSeatRequest[]
+  isReadOnly           Boolean           @default(false)
   /// Self-service archive (distinct from `isReadOnly`, which the platform
   /// subscription lifecycle owns). Both are checked at the posting chokepoint,
   /// so restoring an archived company can never silently un-suspend one the
@@ -154,9 +155,9 @@ model Company {
   /// of whatever the assigned Plan's own module list says. Empty means "none
   /// configured yet"; requireCompany() treats that as ACCOUNTING-only so a
   /// company can never be locked out of everything by an unset default.
-  enabledModules       String[]  @default([])
-  createdAt            DateTime  @default(now())
-  updatedAt            DateTime  @updatedAt
+  enabledModules       String[]          @default([])
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
 
   // Document numbering (§8)
   invoicePrefix      String @default("INV-")
@@ -307,13 +308,18 @@ model Subscription {
   priceCents             Int?
   monthlyEquivalentCents Int?
 
-  seats              Int       @default(3)
+  seats               Int       @default(3)
+  /// Paid users beyond the seats the plan includes, granted by an approved
+  /// UserSeatRequest. `seats` stays the effective limit (plan seats + these).
+  extraSeats          Int       @default(0)
+  /// What each extra user costs per month, frozen at approval time.
+  extraSeatPriceCents Int       @default(499)
   /// True when the seat allowance was set by a platform administrator rather
   /// than inherited from the plan. Overrides are shown as such in both portals.
-  seatsOverridden    Boolean   @default(false)
-  seatOverrideReason String?
-  seatOverrideAt     DateTime?
-  seatOverrideById   String?
+  seatsOverridden     Boolean   @default(false)
+  seatOverrideReason  String?
+  seatOverrideAt      DateTime?
+  seatOverrideById    String?
 
   trialStartsAt      DateTime?
   trialEndsAt        DateTime?
@@ -2613,4 +2619,32 @@ model DepreciationRun {
   items   FixedAssetDepreciation[]
 
   @@index([companyId, periodEnd])
+}
+
+/// A company asking for more users than its plan includes. The company can never
+/// raise its own limit: a platform administrator approves or rejects, and only
+/// approval touches Subscription.seats / extraSeats.
+model UserSeatRequest {
+  id             String    @id @default(cuid())
+  companyId      String
+  requestedById  String?
+  extraUsers     Int
+  /// Per-user monthly price and the resulting monthly charge, frozen at request time.
+  unitPriceCents Int
+  totalCents     Int
+  /// Snapshot of the company when it asked — what the administrator reviews.
+  usersBefore    Int
+  seatsBefore    Int
+  note           String?
+  status         String    @default("PENDING") // PENDING | APPROVED | REJECTED | CANCELLED
+  decidedById    String?
+  decidedByEmail String?
+  decidedAt      DateTime?
+  decisionNote   String?
+  createdAt      DateTime  @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, status])
+  @@index([status, createdAt])
 }

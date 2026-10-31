@@ -9,7 +9,7 @@
 
 import { db } from "@/lib/db";
 import { SYSTEM_ACCOUNTS } from "@/lib/enums";
-import { daysBetween } from "@/lib/dates";
+import { daysBetween, toUtcDay } from "@/lib/dates";
 
 export const DEFAULT_BUCKETS = [30, 60, 90] as const;
 
@@ -68,7 +68,7 @@ export async function arAging(
     .map((i) => ({
       ...i,
       asOfBalanceCents:
-        i.totalCents - i.allocations.filter((a) => a.date <= asOf).reduce((s, a) => s + a.amountCents, 0),
+        i.totalCents - i.allocations.filter((a) => toUtcDay(a.date) <= asOf).reduce((s, a) => s + a.amountCents, 0),
     }))
     .filter((i) => i.asOfBalanceCents > 0);
 
@@ -176,7 +176,7 @@ export async function apAging(
     .map((b) => ({
       ...b,
       asOfBalanceCents:
-        b.totalCents - b.allocations.filter((a) => a.date <= asOf).reduce((s, a) => s + a.amountCents, 0),
+        b.totalCents - b.allocations.filter((a) => toUtcDay(a.date) <= asOf).reduce((s, a) => s + a.amountCents, 0),
     }))
     .filter((b) => b.asOfBalanceCents > 0);
 

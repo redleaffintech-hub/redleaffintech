@@ -5,6 +5,8 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { ACCOUNT_SUBTYPES, subtypeLabel, type AccountType } from "@/lib/enums";
 import { CAPABILITIES } from "@/lib/permissions";
+import { MAX_ACCOUNTS_PER_COMPANY } from "@/lib/coa-limit";
+import { createAccountWithinLimit } from "@/server/accounting/account-create";
 import { recordAudit, requireCapability } from "@/server/auth/context";
 
 const reclassifySchema = z.object({
@@ -111,17 +113,17 @@ export async function createAccountAction(formData: FormData) {
   const validation = await validateAccountInput(company.id, input);
   if ("error" in validation) return validation;
 
-  const account = await db.account.create({
-    data: {
-      companyId: company.id,
-      code: input.code,
-      name: input.name,
-      type: input.type,
-      subtype: input.subtype,
-      description: input.description || null,
-      isActive: input.isActive === "on",
-    },
+  const account = await createAccountWithinLimit(company.id, {
+    code: input.code,
+    name: input.name,
+    type: input.type,
+    subtype: input.subtype,
+    description: input.description || null,
+    isActive: input.isActive === "on",
   });
+  if (!account) {
+    return { error: `A company can have at most ${MAX_ACCOUNTS_PER_COMPANY} accounts and this chart is full. Delete or merge accounts you no longer use to add new ones.` };
+  }
 
   await recordAudit({
     companyId: company.id,

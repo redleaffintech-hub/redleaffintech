@@ -23,6 +23,7 @@ import { UserAdminError } from "./users";
 import { SubscriptionError } from "./subscriptions";
 import { AdministratorError } from "./administrators";
 import { PlanError } from "@/server/plans/admin";
+import { SeatRequestError } from "@/server/seats/requests";
 
 /**
  * `redirect()` and `notFound()` work by throwing a tagged error. Detected by the
@@ -47,6 +48,7 @@ const SPEAKABLE = [
   SubscriptionError,
   AdministratorError,
   PlanError,
+  SeatRequestError,
   CsrfError,
   AdminAuthError,
 ];

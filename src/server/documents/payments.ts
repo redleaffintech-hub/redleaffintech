@@ -279,7 +279,9 @@ export async function applyPayment(
         billId: a.billId ?? null,
         creditNoteId: a.creditNoteId ?? null,
         amountCents: a.amountCents,
-        date: new Date(),
+        // A day, not a timestamp: the aging reports compare this to a midnight
+        // "as of" date, and a time-of-day would push today's application past it.
+        date: toUtcDay(new Date()),
       })),
     });
 

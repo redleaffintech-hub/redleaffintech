@@ -49,7 +49,7 @@ export const SEED_PLANS: SeedPlan[] = [
     currency: "CAD",
     // Billed $19.99 monthly or $199.99 annually (~$16.67/month).
     monthlyEquivalentCents: { MONTHLY: 1999, ANNUAL: 1667 },
-    seats: 3,
+    seats: 2,
     companies: 1,
     storageGb: 5,
     modules: ["ACCOUNTING"],
