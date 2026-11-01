@@ -98,7 +98,10 @@ export async function generateTaxPeriodsAction(formData: FormData) {
   if (configured) {
     if (!configured.applicable) return { error: `GST/HST is marked Not applicable for ${year}, so there are no filing periods to open.` };
     if (configured.frequency !== frequency) {
-      return { error: `${year} is configured as ${configured.frequency.toLowerCase()} filing. Periods must follow it.` };
+      // No periods exist for the year (checked above), so the frequency can still
+      // change; configureFilingYear re-checks and refuses once any are filed against.
+      const changed = await configureFilingYear({ companyId: company.id, userId: user.id, year, applicable: true, frequency });
+      if ("error" in changed) return { error: changed.error };
     }
   } else {
     const configuredNow = await configureFilingYear({ companyId: company.id, userId: user.id, year, applicable: true, frequency });

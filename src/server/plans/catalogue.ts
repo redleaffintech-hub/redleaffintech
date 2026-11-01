@@ -23,6 +23,7 @@
 import "server-only";
 import { cache } from "react";
 import { db, type Tx } from "@/lib/db";
+import { INCLUDED_USERS } from "@/lib/seats";
 import {
   BILLING_CYCLES,
   DEFAULT_PLAN_CODE,
@@ -114,7 +115,9 @@ export function serializeSnapshot(shape: PublicPlan): string {
 function parseSnapshot(raw: string, versionId: string, version: number): PublicPlan | null {
   try {
     const parsed = JSON.parse(raw) as Omit<PublicPlan, "versionId" | "version">;
-    return { ...parsed, versionId, version };
+    // Every plan includes the same two users; more are bought as approved extras, so a
+    // snapshot published with a larger allowance can never hand out free seats.
+    return { ...parsed, seats: INCLUDED_USERS, versionId, version };
   } catch {
     // A snapshot that will not parse is a corrupt row, not a reason to take the
     // pricing page down: drop the plan and let the rest render.

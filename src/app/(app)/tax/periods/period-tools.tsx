@@ -39,9 +39,8 @@ export function GeneratePeriodsForm({ defaultYear, configs }: { defaultYear: num
           </select>
         </Field>
 
-        <Field label="Filing frequency" required hint={fixed ? `Set for ${year} in the Tax Centre and fixed for the year.` : "Quarterly is the common assignment for small filers. Saved as this year's frequency."}>
-          {fixed && <input type="hidden" name="frequency" value={fixed} />}
-          <select name={fixed ? undefined : "frequency"} disabled={Boolean(fixed)} className={clsx(inputClass, "pr-8")} {...(fixed ? { value: fixed, onChange: () => {} } : { defaultValue: "QUARTERLY" })}>
+        <Field label="Filing frequency" required hint={fixed ? `${year} is currently set to ${fixedLabel[fixed] ?? fixed.toLowerCase()}. You can change it here while ${year} has no filing periods.` : "Quarterly is the common assignment for small filers. Saved as this year's frequency."}>
+          <select key={`${year}-${fixed ?? ""}`} name="frequency" className={clsx(inputClass, "pr-8")} defaultValue={fixed && fixed !== "EXEMPT" ? fixed : "QUARTERLY"}>
             <option value="MONTHLY">Monthly</option>
             <option value="QUARTERLY">Quarterly</option>
             <option value="ANNUAL">Annual</option>
