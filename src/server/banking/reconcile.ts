@@ -1,22 +1,25 @@
 /**
- * Monthly bank reconciliation (spec §11, §12 Bank Reconciliation report).
+ * Bank reconciliation (spec §11, §12 Bank Reconciliation report).
  *
- * One reconciliation per bank account per calendar month. The workspace shows
+ * One reconciliation per bank account per reconciliation date. The workspace shows
  * two independent panels — the imported bank statement and the posted bank
  * ledger — and the reconciler ties them together with matches. A reconciliation
  * completes only when
  *
  *   1. statement opening + statement movement = statement closing, and
- *   2. every statement transaction on or before the period end is matched, and
- *   3. adjusted bank balance − book balance = 0
+ *   2. adjusted bank balance − GL balance on the reconciliation date = 0
  *
- * On completion the month-end report is frozen: later activity that clears an
- * item outstanding this month is matched in a future month and never rewrites
- * the historical report.
+ * Statement lines left unmatched are reported, not hidden; they cannot be closed
+ * over because they leave the difference non-zero until the ledger is adjusted.
+ *
+ * On completion the report is frozen: later activity that clears an item
+ * outstanding now is matched in a future reconciliation and never rewrites the
+ * historical report.
  */
 
 import { db, type Tx } from "@/lib/db";
-import { startOfMonth, endOfMonth, isoDate, formatMonthLong, addMonths } from "@/lib/dates";
+import { startOfMonth, addDays, isoDate, formatDate, toUtcDay } from "@/lib/dates";
+import { reconciliationBridge } from "@/lib/reconcile-summary";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -30,10 +33,16 @@ export interface ReconciliationSummary {
   periodStartIso: string;
   periodEndIso: string;
   monthLabel: string;
+  /** The date the reconciliation is performed as of (GL balance date). */
+  statementDateIso: string;
+  /** The closing date on the bank statement. */
+  statementClosingDateIso: string;
   openingBalanceCents: number;
   closingBalanceCents: number;
   bookBalanceCents: number;
   statementMovementCents: number;
+  statementCreditsCents: number;
+  statementDebitsCents: number;
   outstandingReceiptsCents: number;
   outstandingPaymentsCents: number;
   adjustedBankBalanceCents: number;
@@ -97,70 +106,85 @@ async function loadBankAccount(companyId: string, bankAccountId: string) {
   return bankAccount;
 }
 
-function assertMonth(year: number, month: number) {
-  if (!Number.isInteger(year) || year < 2000 || year > 2100) throw new Error("Invalid statement year.");
-  if (!Number.isInteger(month) || month < 1 || month > 12) throw new Error("Invalid statement month.");
+function assertDate(date: Date) {
+  if (Number.isNaN(date.getTime())) throw new Error("Choose the reconciliation date.");
+  const year = date.getUTCFullYear();
+  if (year < 2000 || year > 2100) throw new Error("Invalid reconciliation date.");
 }
 
 // ── Start / resume ─────────────────────────────────────────────────────────
 
-/** The reconciliation for one account and month, resuming an existing one. */
+/** The most recent completed reconciliation of an account, for carry-forward. */
+export async function lastCompletedReconciliation(companyId: string, bankAccountId: string) {
+  return db.bankReconciliation.findFirst({
+    where: { companyId, bankAccountId, status: "COMPLETED" },
+    orderBy: { statementDate: "desc" },
+  });
+}
+
+/**
+ * The reconciliation for one account and date, resuming an existing one.
+ *
+ * The opening balance is whatever the caller passes; the screen pre-fills it from
+ * the last completed reconciliation's closing balance and asks for it on the
+ * first one. Without one it falls back to the same carry-forward, else zero.
+ */
 export async function getOrStartReconciliation(
   companyId: string,
-  input: { bankAccountId: string; year: number; month: number },
+  input: {
+    bankAccountId: string;
+    date: Date;
+    openingBalanceCents?: number;
+    closingBalanceCents?: number;
+    closingDate?: Date | null;
+  },
   userId?: string | null,
 ) {
-  assertMonth(input.year, input.month);
-  const bankAccount = await loadBankAccount(companyId, input.bankAccountId);
+  const date = toUtcDay(input.date);
+  assertDate(date);
+  await loadBankAccount(companyId, input.bankAccountId);
 
   const existing = await db.bankReconciliation.findFirst({
-    where: {
-      companyId,
-      bankAccountId: input.bankAccountId,
-      statementYear: input.year,
-      statementMonth: input.month,
-    },
+    where: { companyId, bankAccountId: input.bankAccountId, statementDate: date },
   });
   if (existing) return existing;
 
-  const periodStart = startOfMonth(new Date(Date.UTC(input.year, input.month - 1, 1)));
-  const periodEnd = endOfMonth(periodStart);
+  const priorCompleted = await lastCompletedReconciliation(companyId, input.bankAccountId);
+  if (priorCompleted && date <= priorCompleted.statementDate) {
+    throw new Error(
+      `This account was already reconciled up to ${formatDate(priorCompleted.statementDate)}. Choose a later date.`,
+    );
+  }
 
-  // Carry the opening balance forward from the most recent completed
-  // reconciliation of this account, or from the account's own opening figure.
-  const priorCompleted = await db.bankReconciliation.findFirst({
-    where: { companyId, bankAccountId: input.bankAccountId, status: "COMPLETED" },
-    orderBy: { statementEndDate: "desc" },
-  });
-  const openingBalanceCents = priorCompleted
-    ? priorCompleted.closingBalanceCents
-    : bankAccount.openingBalanceCents;
+  // The statement period starts the day after the last completed reconciliation;
+  // for the first one it starts at the beginning of that month.
+  const periodStart = priorCompleted ? addDays(priorCompleted.statementDate, 1) : startOfMonth(date);
 
-  // The unique constraint on (company, account, year, month) is the real guard
-  // against duplicate/overlapping reconciliations; a race just resolves to the
-  // row the loser then reads back.
+  const openingBalanceCents = input.openingBalanceCents ?? priorCompleted?.closingBalanceCents ?? 0;
+  const closingDate = input.closingDate ? toUtcDay(input.closingDate) : null;
+  if (closingDate) assertDate(closingDate);
+
+  // The unique constraint on (company, account, date) is the real guard against
+  // duplicates; a race just resolves to the row the loser then reads back.
   try {
     return await db.bankReconciliation.create({
       data: {
         companyId,
         bankAccountId: input.bankAccountId,
-        statementYear: input.year,
-        statementMonth: input.month,
+        statementYear: date.getUTCFullYear(),
+        statementMonth: date.getUTCMonth() + 1,
         statementStartDate: periodStart,
-        statementEndDate: periodEnd,
+        statementEndDate: date,
+        statementDate: date,
+        statementClosingDate: closingDate,
         openingBalanceCents,
-        closingBalanceCents: openingBalanceCents,
+        closingBalanceCents: input.closingBalanceCents ?? openingBalanceCents,
         startedById: userId ?? null,
       },
     });
   } catch {
     const raced = await db.bankReconciliation.findFirst({
-      where: {
-        companyId,
-        bankAccountId: input.bankAccountId,
-        statementYear: input.year,
-        statementMonth: input.month,
-      },
+      where: { companyId, bankAccountId: input.bankAccountId, statementDate: date },
     });
     if (raced) return raced;
     throw new Error("Could not start the reconciliation.");
@@ -171,7 +195,12 @@ export async function getOrStartReconciliation(
 export async function saveStatementBalances(
   companyId: string,
   reconciliationId: string,
-  input: { openingBalanceCents: number; closingBalanceCents: number; notes?: string | null },
+  input: {
+    openingBalanceCents: number;
+    closingBalanceCents: number;
+    closingDate?: Date | null;
+    notes?: string | null;
+  },
 ) {
   const reconciliation = await db.bankReconciliation.findFirst({
     where: { id: reconciliationId, companyId },
@@ -179,11 +208,15 @@ export async function saveStatementBalances(
   if (!reconciliation) throw new Error("Reconciliation not found in this company.");
   if (reconciliation.status !== "IN_PROGRESS") throw new Error("This reconciliation is completed and locked.");
 
+  const closingDate = input.closingDate ? toUtcDay(input.closingDate) : null;
+  if (closingDate) assertDate(closingDate);
+
   await db.bankReconciliation.update({
     where: { id: reconciliationId },
     data: {
       openingBalanceCents: input.openingBalanceCents,
       closingBalanceCents: input.closingBalanceCents,
+      statementClosingDate: closingDate,
       notes: input.notes ?? null,
     },
   });
@@ -360,7 +393,9 @@ export async function buildWorkspace(
   if (!reconciliation) throw new Error("Reconciliation not found in this company.");
 
   const periodStart = reconciliation.statementStartDate;
-  const periodEnd = reconciliation.statementEndDate;
+  // The GL is read as of the reconciliation date; the statement up to its own closing date.
+  const periodEnd = reconciliation.statementDate;
+  const statementEnd = reconciliation.statementClosingDate ?? periodEnd;
   const glAccountId = reconciliation.bankAccount.accountId;
   const currency = reconciliation.bankAccount.currency;
 
@@ -369,7 +404,7 @@ export async function buildWorkspace(
       where: {
         companyId,
         bankAccountId: reconciliation.bankAccountId,
-        date: { lte: periodEnd },
+        date: { lte: statementEnd },
         status: { notIn: ["EXCLUDED"] },
       },
       orderBy: { date: "asc" },
@@ -424,10 +459,12 @@ export async function buildWorkspace(
       prior: l.date < periodStart,
     }));
 
-  // Statement movement is this period's activity only.
-  const statementMovementCents = statementTxns
-    .filter((t) => t.date >= periodStart && t.date <= periodEnd)
-    .reduce((s, t) => s + t.amountCents, 0);
+  // Statement movement is this period's activity only: credits (deposits) and
+  // debits (withdrawals) from the bank's side.
+  const periodTxns = statementTxns.filter((t) => t.date >= periodStart && t.date <= statementEnd);
+  const statementCreditsCents = periodTxns.filter((t) => t.amountCents > 0).reduce((s, t) => s + t.amountCents, 0);
+  const statementDebitsCents = periodTxns.filter((t) => t.amountCents < 0).reduce((s, t) => s - t.amountCents, 0);
+  const statementMovementCents = statementCreditsCents - statementDebitsCents;
 
   const bookBalanceCents =
     reconciliation.status === "COMPLETED" && reconciliation.bookBalanceCents != null
@@ -459,22 +496,25 @@ export async function buildWorkspace(
   const completed = reconciliation.status === "COMPLETED";
   const outstandingReceiptsFinal = completed ? reconciliation.outstandingReceiptsCents : outstandingReceiptsCents;
   const outstandingPaymentsFinal = completed ? reconciliation.outstandingPaymentsCents : outstandingPaymentsCents;
+  const bridge = reconciliationBridge({
+    statementBalanceCents: reconciliation.closingBalanceCents,
+    outstandingReceiptsCents: outstandingReceiptsFinal,
+    outstandingPaymentsCents: outstandingPaymentsFinal,
+    glBalanceCents: bookBalanceCents,
+  });
   const adjustedBankBalanceCents = completed
-    ? reconciliation.adjustedBankBalanceCents ?? reconciliation.closingBalanceCents + outstandingReceiptsFinal - outstandingPaymentsFinal
-    : reconciliation.closingBalanceCents + outstandingReceiptsCents - outstandingPaymentsCents;
-  const differenceCents = completed ? reconciliation.differenceCents : adjustedBankBalanceCents - bookBalanceCents;
+    ? reconciliation.adjustedBankBalanceCents ?? bridge.adjustedBankBalanceCents
+    : bridge.adjustedBankBalanceCents;
+  const differenceCents = completed ? reconciliation.differenceCents : bridge.differenceCents;
 
   const statementBalanceValid =
     reconciliation.openingBalanceCents + statementMovementCents === reconciliation.closingBalanceCents;
   const allStatementMatched = statementRows.every((r) => r.matchId !== null);
   const canComplete =
-    reconciliation.status === "IN_PROGRESS" &&
-    statementBalanceValid &&
-    allStatementMatched &&
-    differenceCents === 0;
+    reconciliation.status === "IN_PROGRESS" && statementBalanceValid && differenceCents === 0;
 
-  const monthLabel = formatMonthLong(periodStart);
-  const nextMonthLabel = formatMonthLong(addMonths(periodStart, 1));
+  const monthLabel = formatDate(periodEnd);
+  const nextMonthLabel = "the next reconciliation";
 
   const liveReport: MonthEndReport = {
     asOfIso: isoDate(periodEnd),
@@ -510,10 +550,14 @@ export async function buildWorkspace(
     periodStartIso: isoDate(periodStart),
     periodEndIso: isoDate(periodEnd),
     monthLabel,
+    statementDateIso: isoDate(periodEnd),
+    statementClosingDateIso: isoDate(statementEnd),
     openingBalanceCents: reconciliation.openingBalanceCents,
     closingBalanceCents: reconciliation.closingBalanceCents,
     bookBalanceCents,
     statementMovementCents,
+    statementCreditsCents,
+    statementDebitsCents,
     outstandingReceiptsCents: outstandingReceiptsFinal,
     outstandingPaymentsCents: outstandingPaymentsFinal,
     adjustedBankBalanceCents,
@@ -573,11 +617,6 @@ export async function completeReconciliation(
         "Statement opening plus statement movement does not equal the closing balance. Import the full statement or correct the figures.",
       );
     }
-    if (!summary.allStatementMatched) {
-      throw new Error(
-        "Every statement transaction must be matched to a book entry before completing. Match the remaining lines or record an adjustment.",
-      );
-    }
     if (summary.differenceCents !== 0) {
       throw new Error(
         `Adjusted difference is ${(summary.differenceCents / 100).toFixed(2)}, not zero. Unexplained bank-only items must be posted as adjustments through the ledger, never treated as timing differences.`,
@@ -621,7 +660,7 @@ export async function completeReconciliation(
         action: "UPDATE",
         entityType: "BankReconciliation",
         entityId: reconciliationId,
-        summary: `Reconciled ${summary.bankAccountName} for ${report.monthLabel} — difference $0.00`,
+        summary: `Reconciled ${summary.bankAccountName} as of ${report.monthLabel} — difference $0.00`,
       },
     });
 
@@ -635,7 +674,7 @@ export async function reconciliationHistory(companyId: string, bankAccountId?: s
   return db.bankReconciliation.findMany({
     where: { companyId, ...(bankAccountId ? { bankAccountId } : {}) },
     include: { bankAccount: true },
-    orderBy: [{ statementEndDate: "desc" }, { bankAccount: { name: "asc" } }],
+    orderBy: [{ statementDate: "desc" }, { bankAccount: { name: "asc" } }],
     take: 60,
   });
 }

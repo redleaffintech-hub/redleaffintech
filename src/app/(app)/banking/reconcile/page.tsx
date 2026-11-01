@@ -1,17 +1,14 @@
 import { db } from "@/lib/db";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES } from "@/lib/permissions";
-import { buildWorkspace, reconciliationHistory } from "@/server/banking/reconcile";
-import { today, formatMonthLong } from "@/lib/dates";
+import { buildWorkspace, lastCompletedReconciliation, reconciliationHistory } from "@/server/banking/reconcile";
+import { today, isoDate, toUtcDay } from "@/lib/dates";
 import { EmptyState, LinkButton, PageHeader } from "@/components/ui";
 import { ReconcileClient } from "./reconcile-workspace";
 
-export const metadata = { title: "Bank Reconciliation" };
+export const metadata = { title: "Reconcile" };
 
-function toInt(value: unknown, fallback: number) {
-  const n = typeof value === "string" ? Number.parseInt(value, 10) : NaN;
-  return Number.isFinite(n) ? n : fallback;
-}
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 export default async function ReconcilePage({ searchParams }: PageProps<"/banking/reconcile">) {
   const { company } = await requireCapability(CAPABILITIES.BANKING);
@@ -21,92 +18,69 @@ export default async function ReconcilePage({ searchParams }: PageProps<"/bankin
   const bankAccounts = await db.bankAccount.findMany({
     where: { companyId: company.id, isActive: true },
     orderBy: { name: "asc" },
-    select: { id: true, name: true, openingBalanceCents: true },
+    select: { id: true, name: true, type: true, accountNumberMasked: true },
   });
 
   if (bankAccounts.length === 0) {
     return (
       <>
-        <PageHeader
-          title="Bank Reconciliation"
-          breadcrumb={[{ label: "Bank Reconciliation", href: "/banking" }, { label: "Reconcile" }]}
-          description="Match bank statement activity to your bank ledger, one month at a time."
-        />
+        <PageHeader title="Reconcile" breadcrumb={[{ label: "Banking", href: "/banking/accounts" }, { label: "Reconcile" }]} />
         <EmptyState
           title="No bank accounts"
-          description="A Chart of Accounts entry alone isn't reconcilable — link one under Bank Reconciliation → Accounts first."
-          action={<LinkButton href="/banking/accounts" variant="primary">Go to Accounts</LinkButton>}
+          description="A Chart of Accounts entry alone isn't reconcilable — link one under Banking → Bank Accounts first."
+          action={<LinkButton href="/banking/accounts" variant="primary">Go to Bank Accounts</LinkButton>}
         />
       </>
     );
   }
 
+  // The account comes from the URL but is only ever used if it is one of this company's.
   const accountId =
     typeof params.account === "string" && bankAccounts.some((b) => b.id === params.account)
       ? params.account
       : bankAccounts[0].id;
 
-  // Default to the month just gone — the one a bank statement most likely covers.
-  const now = today();
-  const priorMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
-  const year = toInt(params.year, priorMonth.getUTCFullYear());
-  const month = toInt(params.month, priorMonth.getUTCMonth() + 1);
-  const safeMonth = month >= 1 && month <= 12 ? month : priorMonth.getUTCMonth() + 1;
+  const dateIso =
+    typeof params.date === "string" && ISO_DAY.test(params.date) ? isoDate(toUtcDay(params.date)) : isoDate(today());
 
-  const existing = await db.bankReconciliation.findFirst({
-    where: {
-      companyId: company.id,
-      bankAccountId: accountId,
-      statementYear: year,
-      statementMonth: safeMonth,
-    },
-    select: { id: true },
-  });
-
-  let carryOpeningCents = bankAccounts.find((b) => b.id === accountId)?.openingBalanceCents ?? 0;
-  if (!existing) {
-    const prior = await db.bankReconciliation.findFirst({
-      where: { companyId: company.id, bankAccountId: accountId, status: "COMPLETED" },
-      orderBy: { statementEndDate: "desc" },
-      select: { closingBalanceCents: true },
-    });
-    if (prior) carryOpeningCents = prior.closingBalanceCents;
-  }
-
-  const [workspace, history] = await Promise.all([
-    existing ? buildWorkspace(company.id, existing.id) : Promise.resolve(null),
+  const [existing, lastCompleted, queueCount, history] = await Promise.all([
+    db.bankReconciliation.findFirst({
+      where: { companyId: company.id, bankAccountId: accountId, statementDate: toUtcDay(dateIso) },
+      select: { id: true },
+    }),
+    lastCompletedReconciliation(company.id, accountId),
+    db.bankTransaction.count({ where: { companyId: company.id, status: "UNMATCHED", reconciliationId: null } }),
     reconciliationHistory(company.id),
   ]);
+
+  const workspace = existing ? await buildWorkspace(company.id, existing.id) : null;
 
   return (
     <>
       <PageHeader
-        title="Bank Reconciliation"
-        breadcrumb={[{ label: "Bank Reconciliation", href: "/banking" }, { label: "Reconcile" }]}
-        description="Match bank statement activity to your bank ledger, one month at a time."
+        title="Reconcile"
+        breadcrumb={[{ label: "Banking", href: "/banking/accounts" }, { label: "Reconcile" }]}
+        description="Match the bank statement to the general ledger and close the reconciliation when the difference is zero."
       />
 
       <ReconcileClient
         currency={currency}
         canWrite={!company.isReadOnly}
-        bankAccounts={bankAccounts.map((b) => ({ id: b.id, name: b.name }))}
+        bankAccounts={bankAccounts}
         accountId={accountId}
-        year={year}
-        month={safeMonth}
-        monthLabel={formatMonthLong(new Date(Date.UTC(year, safeMonth - 1, 1)))}
-        carryOpeningCents={carryOpeningCents}
+        dateIso={dateIso}
+        carryOpeningCents={lastCompleted ? lastCompleted.closingBalanceCents : null}
+        lastCompletedIso={lastCompleted ? isoDate(lastCompleted.statementDate) : null}
+        queueCount={queueCount}
         workspace={workspace}
         history={history.map((h) => ({
           id: h.id,
           bankAccountId: h.bankAccountId,
           bankAccountName: h.bankAccount.name,
-          year: h.statementYear,
-          month: h.statementMonth,
-          monthLabel: formatMonthLong(h.statementStartDate),
+          dateIso: isoDate(h.statementDate),
           status: h.status,
           closingBalanceCents: h.closingBalanceCents,
           differenceCents: h.differenceCents,
-          completedAtIso: h.completedAt ? h.completedAt.toISOString() : null,
         }))}
       />
     </>

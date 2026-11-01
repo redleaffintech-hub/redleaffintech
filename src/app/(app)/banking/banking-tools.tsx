@@ -29,12 +29,16 @@ export function TransferButton({ count }: { count: number }) {
 /** CSV / OFX import. Parsing happens server-side; this only reads the file. */
 export function ImportPanel({
   bankAccounts,
+  lockedAccountId,
 }: {
   bankAccounts: { id: string; name: string; type: string; accountNumberMasked: string | null }[];
+  /** Import into this account only and hide the account picker (the Reconcile screen has chosen one). */
+  lockedAccountId?: string;
 }) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
-  const [bankAccountId, setBankAccountId] = useState(bankAccounts[0]?.id ?? "");
+  const [pickedAccountId, setBankAccountId] = useState(bankAccounts[0]?.id ?? "");
+  const bankAccountId = lockedAccountId ?? pickedAccountId;
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ imported: number; duplicates: number; warnings?: string[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -58,7 +62,7 @@ export function ImportPanel({
     <Card>
       <CardHeader title="Import statement" subtitle="CSV or OFX/QFX from any Canadian bank" />
 
-      <label className="mt-3 block">
+      {!lockedAccountId && <label className="mt-3 block">
         <span className="mb-1 block text-[0.75rem] font-medium text-ink-700">Account</span>
         <select value={bankAccountId} onChange={(event) => setBankAccountId(event.target.value)} className={clsx(inputClass, "pr-8")}>
           {bankAccounts.map((account) => (
@@ -67,7 +71,7 @@ export function ImportPanel({
             </option>
           ))}
         </select>
-      </label>
+      </label>}
 
       <div
         onDragOver={(event) => event.preventDefault()}

@@ -1551,13 +1551,18 @@ model BankReconciliation {
   id                       String    @id @default(cuid())
   companyId                String
   bankAccountId            String
-  /// The calendar month the statement covers. This is the reconciliation unit:
-  /// one per bank account per month. Period dates are always the first and last
-  /// day of this month. Backfilled from statementEndDate for pre-existing rows.
+  /// The calendar month of the reconciliation date (a label; the unit is now the
+  /// date — see statementDate).
   statementYear            Int
   statementMonth           Int
   statementStartDate       DateTime
   statementEndDate         DateTime
+  /// The date the reconciliation is performed as of: the GL balance is taken on
+  /// this date. Equal to statementEndDate (kept for the reports that read it).
+  statementDate            DateTime
+  /// The closing date printed on the bank statement; statement lines up to it are
+  /// in scope. Null on older rows, where it is the period end.
+  statementClosingDate     DateTime?
   /// Actual statement figures. Opening carries forward from the previous
   /// completed reconciliation's closing balance.
   openingBalanceCents      Int
@@ -1588,7 +1593,7 @@ model BankReconciliation {
   transactions BankTransaction[]
   matches      BankReconciliationMatch[]
 
-  @@unique([companyId, bankAccountId, statementYear, statementMonth], map: "BankReconciliation_account_month_key")
+  @@unique([companyId, bankAccountId, statementDate], map: "BankReconciliation_account_date_key")
   @@index([companyId, bankAccountId])
 }
 

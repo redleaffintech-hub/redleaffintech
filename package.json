@@ -12,6 +12,8 @@
     "plans:seed": "node --conditions=react-server --import tsx scripts/seed-plans.ts",
     "admin:create": "node --conditions=react-server --import tsx scripts/create-platform-admin.ts",
     "verify": "node --conditions=react-server --import tsx scripts/verify.ts",
+    "verify:bank-reconcile": "node --conditions=react-server --import tsx scripts/verify-bank-reconcile.ts",
+    "verify:reconcile-summary": "node --import tsx scripts/verify-reconcile-summary.ts",
     "verify:encryption": "node --conditions=react-server --import tsx scripts/verify-encryption.ts",
     "encrypt:data": "node --conditions=react-server --import tsx scripts/encrypt-data.ts",
     "backfill:pst-recoverable": "node --conditions=react-server --import tsx scripts/backfill-pst-recoverable.ts",

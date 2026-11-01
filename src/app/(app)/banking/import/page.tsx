@@ -14,7 +14,7 @@ export default async function ImportBankStatementPage() {
     <>
       <PageHeader
         title="Import bank statement"
-        breadcrumb={[{ label: "Banking", href: "/banking" }, { label: "Import bank statement" }]}
+        breadcrumb={[{ label: "Banking", href: "/banking/accounts" }, { label: "Import bank statement" }]}
         description="Bring in a CSV or OFX statement first, classify each transaction in the review queue, then reconcile against the statement balance."
         actions={<LinkButton href="/banking">Go to review queue</LinkButton>}
       />

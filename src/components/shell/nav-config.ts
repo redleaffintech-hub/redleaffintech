@@ -53,20 +53,14 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    // Shortened from "Bank Reconciliation" for the top nav trigger only — the
-    // pages underneath it still say "Bank Reconciliation" in full on their own
-    // breadcrumbs and headers. At the full 11-group nav width (every module
-    // enabled), the long label was the single biggest reason the row wrapped
-    // to an orphaned second line instead of fitting on one.
+    // Only two entries: the import, review queue and rules pages are still routed
+    // but are reached from the Reconcile screen, not the menu.
     label: "Banking",
     module: "ACCOUNTING",
     icon: "bank",
     items: [
+      { label: "Bank Accounts", href: "/banking/accounts", capability: CAPABILITIES.BANKING },
       { label: "Reconcile", href: "/banking/reconcile", capability: CAPABILITIES.BANKING },
-      { label: "Import bank statement", href: "/banking/import", capability: CAPABILITIES.BANKING },
-      { label: "Review queue", href: "/banking", capability: CAPABILITIES.BANKING, exact: true, badgeKey: "bankQueue" },
-      { label: "Accounts", href: "/banking/accounts", capability: CAPABILITIES.BANKING },
-      { label: "Rules", href: "/banking/rules", capability: CAPABILITIES.BANKING },
     ],
   },
   {

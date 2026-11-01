@@ -5,9 +5,12 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import clsx from "clsx";
 import { Badge, Button, Card, CardHeader, Field, inputClass } from "@/components/ui";
+import { DateField } from "@/components/date-field";
 import { formatMoney } from "@/lib/money";
-import { formatDate } from "@/lib/dates";
+import { formatDate, addDays, toUtcDay, isoDate } from "@/lib/dates";
+import { reconciliationBridge } from "@/lib/reconcile-summary";
 import type { ReconciliationWorkspace, WorkspaceRow, MonthEndReport } from "@/server/banking/reconcile";
+import { ImportPanel } from "../banking-tools";
 import {
   completeReconciliationAction,
   matchSelectedAction,
@@ -16,22 +19,14 @@ import {
   saveStatementBalancesAction,
 } from "../actions";
 
-const MONTH_NAMES = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
-];
-
 interface HistoryRow {
   id: string;
   bankAccountId: string;
   bankAccountName: string;
-  year: number;
-  month: number;
-  monthLabel: string;
+  dateIso: string;
   status: string;
   closingBalanceCents: number;
   differenceCents: number;
-  completedAtIso: string | null;
 }
 
 export function ReconcileClient({
@@ -39,109 +34,86 @@ export function ReconcileClient({
   canWrite,
   bankAccounts,
   accountId,
-  year,
-  month,
-  monthLabel,
+  dateIso,
   carryOpeningCents,
+  lastCompletedIso,
+  queueCount,
   workspace,
   history,
 }: {
   currency: string;
   canWrite: boolean;
-  bankAccounts: { id: string; name: string }[];
+  bankAccounts: { id: string; name: string; type: string; accountNumberMasked: string | null }[];
   accountId: string;
-  year: number;
-  month: number;
-  monthLabel: string;
-  carryOpeningCents: number;
+  dateIso: string;
+  /** Closing balance of the last completed reconciliation; null for the account's first. */
+  carryOpeningCents: number | null;
+  lastCompletedIso: string | null;
+  queueCount: number;
   workspace: ReconciliationWorkspace | null;
   history: HistoryRow[];
 }) {
   const router = useRouter();
-  const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
   const cardMoney = (cents: number) =>
     `${currency} ${formatMoney(cents, { showCurrency: false, accountingNegative: true })}`;
 
-  function go(nextAccount: string, nextYear: number, nextMonth: number) {
-    router.push(`/banking/reconcile?account=${nextAccount}&year=${nextYear}&month=${nextMonth}`);
+  function go(nextAccount: string, nextDate: string) {
+    router.push(`/banking/reconcile?account=${nextAccount}&date=${nextDate}`);
   }
 
-  const monthOptions = useMemo(() => {
-    const out: { year: number; month: number; label: string }[] = [];
-    // A fixed window around the selected month, so the current choice is always present.
-    for (let offset = 3; offset >= -24; offset--) {
-      const base = new Date(Date.UTC(year, month - 1 + offset, 1));
-      out.push({
-        year: base.getUTCFullYear(),
-        month: base.getUTCMonth() + 1,
-        label: `${MONTH_NAMES[base.getUTCMonth()]} ${base.getUTCFullYear()}`,
-      });
-    }
-    return out;
-  }, [year, month]);
-
   const status = workspace?.summary.status ?? "NOT_STARTED";
+  const minDate = lastCompletedIso ? isoDate(addDays(toUtcDay(lastCompletedIso), 1)) : undefined;
 
   return (
     <div className="recon space-y-4">
-      {/* ── Controls ──────────────────────────────────────────────────────── */}
-      <div className="rc-no-print flex flex-wrap items-end gap-3">
-        <Field label="Bank account" className="w-56">
-          <select
-            value={accountId}
-            onChange={(e) => go(e.target.value, year, month)}
-            className={clsx(inputClass, "pr-8")}
-          >
-            {bankAccounts.map((a) => (
-              <option key={a.id} value={a.id}>{a.name}</option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Month" className="w-52">
-          <select
-            value={`${year}-${month}`}
-            onChange={(e) => {
-              const [y, m] = e.target.value.split("-").map(Number);
-              go(accountId, y, m);
-            }}
-            className={clsx(inputClass, "pr-8")}
-          >
-            {monthOptions.map((o) => (
-              <option key={`${o.year}-${o.month}`} value={`${o.year}-${o.month}`}>{o.label}</option>
-            ))}
-          </select>
-        </Field>
+      {/* ── Steps 1–2: bank and reconciliation date ───────────────────────── */}
+      <Card className="rc-no-print p-5">
+        <div className="flex flex-wrap items-end gap-3">
+          <Field label="1. Bank account" className="w-64">
+            <select
+              value={accountId}
+              onChange={(e) => go(e.target.value, dateIso)}
+              className={clsx(inputClass, "pr-8")}
+            >
+              {bankAccounts.map((a) => (
+                <option key={a.id} value={a.id}>{a.name}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="2. Reconciliation date" className="w-48">
+            <DateField
+              value={dateIso}
+              allowEmpty={false}
+              min={workspace ? undefined : minDate}
+              onCommit={(value) => go(accountId, value)}
+              aria-label="Reconciliation date"
+            />
+          </Field>
 
-        <span className="pb-1.5">
-          {status === "COMPLETED" ? (
-            <Badge tone="positive">Completed</Badge>
-          ) : status === "IN_PROGRESS" ? (
-            <Badge tone="caution">In progress</Badge>
-          ) : (
-            <Badge tone="neutral">Not started</Badge>
-          )}
-        </span>
+          <span className="pb-1.5">
+            {status === "COMPLETED" ? (
+              <Badge tone="positive">Completed</Badge>
+            ) : status === "IN_PROGRESS" ? (
+              <Badge tone="caution">In progress</Badge>
+            ) : (
+              <Badge tone="neutral">Not started</Badge>
+            )}
+          </span>
 
-        <div className="flex-1" />
+          <div className="flex-1" />
 
-        <Link
-          href="/banking"
-          className="inline-flex items-center rounded-md border border-brand-600 px-3 py-1.5 text-[0.8125rem] font-medium text-brand-700 hover:bg-brand-50"
-        >
-          Import statement
-        </Link>
-        {workspace && workspace.summary.status === "IN_PROGRESS" && canWrite && (
-          <SaveProgress
-            currency={currency}
-            reconciliationId={workspace.summary.id}
-            openingBalanceCents={workspace.summary.openingBalanceCents}
-            closingBalanceCents={workspace.summary.closingBalanceCents}
-            notes={workspace.summary.notes ?? ""}
-          />
+          <Link href="/banking" className="pb-1.5 text-[0.8125rem] font-medium text-brand-700 hover:underline">
+            Review queue{queueCount > 0 ? ` (${queueCount})` : ""}
+          </Link>
+        </div>
+        {lastCompletedIso && (
+          <p className="mt-2 text-[0.75rem] text-muted-ink">
+            Last reconciled up to {formatDate(lastCompletedIso)}. A new reconciliation must be dated after that.
+          </p>
         )}
-      </div>
+      </Card>
 
       {error && (
         <p className="rounded-md border border-[color:var(--color-negative)]/25 bg-negative-soft px-3 py-2 text-[0.8125rem] text-negative">
@@ -149,41 +121,49 @@ export function ReconcileClient({
         </p>
       )}
 
-      {!workspace ? (
-        <NotStarted
-          monthLabel={monthLabel}
-          currency={currency}
-          carryOpeningCents={carryOpeningCents}
-          canWrite={canWrite}
-          onBegin={() => {
-            setError(null);
-            startTransition(async () => {
-              const result = await openReconciliationAction(accountId, year, month);
-              if ("error" in result && result.error) setError(result.error);
-              else router.refresh();
-            });
-          }}
-          pending={pending}
-        />
-      ) : (
-        <Workspace
-          workspace={workspace}
-          currency={currency}
-          cardMoney={cardMoney}
-          canWrite={canWrite}
-          onError={setError}
-        />
+      {/* ── Steps 3–4: opening balance, closing balance and date ──────────── */}
+      <StatementFigures
+        key={`${accountId}-${dateIso}-${workspace?.summary.version ?? "new"}-${workspace?.summary.openingBalanceCents ?? ""}-${workspace?.summary.closingBalanceCents ?? ""}`}
+        accountId={accountId}
+        dateIso={dateIso}
+        currency={currency}
+        canWrite={canWrite}
+        carryOpeningCents={carryOpeningCents}
+        lastCompletedIso={lastCompletedIso}
+        workspace={workspace}
+        onError={setError}
+      />
+
+      {workspace && (
+        <>
+          {/* ── Step 5: import ────────────────────────────────────────────── */}
+          {workspace.summary.status === "IN_PROGRESS" && canWrite && (
+            <div className="rc-no-print">
+              <ImportPanel bankAccounts={bankAccounts} lockedAccountId={accountId} />
+            </div>
+          )}
+
+          {/* ── Steps 6–8: tables, matching, summary ──────────────────────── */}
+          <Workspace
+            key={workspace.summary.id}
+            workspace={workspace}
+            currency={currency}
+            cardMoney={cardMoney}
+            canWrite={canWrite}
+            onError={setError}
+          />
+        </>
       )}
 
       {history.length > 0 && (
         <Card className="rc-no-print p-5">
-          <CardHeader title="Reconciliation history" subtitle="Completed months are locked; their reports never change." />
+          <CardHeader title="Reconciliation history" subtitle="Completed reconciliations are locked; their reports never change." />
           <div className="rc-scroll mt-3">
             <table className="rc-table min-w-[36rem]">
               <thead>
                 <tr>
                   <th>Account</th>
-                  <th>Month</th>
+                  <th>Date</th>
                   <th className="rc-num">Closing balance</th>
                   <th className="rc-num">Difference</th>
                   <th>Status</th>
@@ -195,13 +175,13 @@ export function ReconcileClient({
                     <td>
                       <button
                         type="button"
-                        onClick={() => go(h.bankAccountId, h.year, h.month)}
+                        onClick={() => go(h.bankAccountId, h.dateIso)}
                         className="font-medium text-brand-700 hover:underline"
                       >
                         {h.bankAccountName}
                       </button>
                     </td>
-                    <td className="text-[color:var(--color-muted-ink)]">{h.monthLabel}</td>
+                    <td className="text-[color:var(--color-muted-ink)]">{formatDate(h.dateIso)}</td>
                     <td className="rc-num">{cardMoney(h.closingBalanceCents)}</td>
                     <td className="rc-num">{cardMoney(h.differenceCents)}</td>
                     <td>
@@ -222,110 +202,126 @@ export function ReconcileClient({
   );
 }
 
-// ── Not started ─────────────────────────────────────────────────────────────
+// ── Statement figures (steps 3 and 4) ───────────────────────────────────────
 
-function NotStarted({
-  monthLabel,
+const money2 = (cents: number) => (cents / 100).toFixed(2);
+
+function StatementFigures({
+  accountId,
+  dateIso,
   currency,
-  carryOpeningCents,
   canWrite,
-  onBegin,
-  pending,
+  carryOpeningCents,
+  lastCompletedIso,
+  workspace,
+  onError,
 }: {
-  monthLabel: string;
+  accountId: string;
+  dateIso: string;
   currency: string;
-  carryOpeningCents: number;
   canWrite: boolean;
-  onBegin: () => void;
-  pending: boolean;
-}) {
-  return (
-    <Card className="p-6 text-center">
-      <p className="text-[0.9375rem] font-semibold text-ink-900">No reconciliation for {monthLabel} yet</p>
-      <p className="mx-auto mt-1 max-w-md text-[0.8125rem] leading-6 text-muted-ink">
-        The statement period runs the first through the last day of {monthLabel}. The opening balance carries
-        forward from the last completed reconciliation:{" "}
-        <span className="font-medium text-ink-800">
-          {currency} {formatMoney(carryOpeningCents, { showCurrency: false })}
-        </span>
-        .
-      </p>
-      <Button
-        variant="primary"
-        className="mx-auto mt-4"
-        disabled={!canWrite || pending}
-        onClick={onBegin}
-      >
-        {pending ? "Starting…" : `Begin ${monthLabel} reconciliation`}
-      </Button>
-    </Card>
-  );
-}
-
-// ── Save progress (statement figures) ───────────────────────────────────────
-
-function SaveProgress({
-  currency,
-  reconciliationId,
-  openingBalanceCents,
-  closingBalanceCents,
-  notes,
-}: {
-  currency: string;
-  reconciliationId: string;
-  openingBalanceCents: number;
-  closingBalanceCents: number;
-  notes: string;
+  carryOpeningCents: number | null;
+  lastCompletedIso: string | null;
+  workspace: ReconciliationWorkspace | null;
+  onError: (message: string | null) => void;
 }) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
-  const [error, setError] = useState<string | null>(null);
-  const [opening, setOpening] = useState((openingBalanceCents / 100).toFixed(2));
-  const [closing, setClosing] = useState((closingBalanceCents / 100).toFixed(2));
-  const [note, setNote] = useState(notes);
+  const summary = workspace?.summary ?? null;
+  const locked = summary ? summary.status !== "IN_PROGRESS" : false;
+  const editable = canWrite && !locked;
+
+  // First reconciliation: blank, the user types it. Later ones: carried forward, still editable.
+  const initialOpening = summary
+    ? money2(summary.openingBalanceCents)
+    : carryOpeningCents !== null
+      ? money2(carryOpeningCents)
+      : "";
+  const [opening, setOpening] = useState(initialOpening);
+  const [closing, setClosing] = useState(summary ? money2(summary.closingBalanceCents) : "");
+  const [closingDate, setClosingDate] = useState(summary?.statementClosingDateIso ?? dateIso);
+  const [notes, setNotes] = useState(summary?.notes ?? "");
+
+  const changedFromCarry =
+    carryOpeningCents !== null && opening.trim() !== "" && Math.round(Number(opening) * 100) !== carryOpeningCents;
 
   function save() {
-    setError(null);
+    onError(null);
     startTransition(async () => {
-      const result = await saveStatementBalancesAction(reconciliationId, opening, closing, note);
-      if ("error" in result && result.error) setError(result.error);
-      else {
-        setOpen(false);
-        router.refresh();
-      }
+      const result = summary
+        ? await saveStatementBalancesAction(summary.id, opening, closing, closingDate, notes)
+        : await openReconciliationAction(accountId, dateIso, opening, closing, closingDate);
+      if ("error" in result && result.error) onError(result.error);
+      else router.refresh();
     });
   }
 
   return (
-    <>
-      <Button variant="primary" onClick={() => setOpen((v) => !v)}>Save progress</Button>
-      {open && (
-        <div className="w-full rounded-lg border border-paper-300 bg-white p-4">
-          <p className="text-[0.8125rem] font-semibold text-ink-900">Statement figures</p>
-          <p className="mt-0.5 text-[0.75rem] leading-5 text-muted-ink">
-            Take both balances straight from the {currency} bank statement. Opening carries forward from the last
-            completed month.
-          </p>
-          <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            <Field label="Statement opening balance">
-              <input value={opening} onChange={(e) => setOpening(e.target.value)} inputMode="decimal" className={clsx(inputClass, "tnum")} />
-            </Field>
-            <Field label="Statement closing balance">
-              <input value={closing} onChange={(e) => setClosing(e.target.value)} inputMode="decimal" className={clsx(inputClass, "tnum")} />
-            </Field>
-          </div>
-          <Field label="Notes on outstanding items" className="mt-3">
-            <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} className={inputClass} />
-          </Field>
-          {error && <p className="mt-2 text-[0.8125rem] text-negative">{error}</p>}
-          <div className="mt-3 flex gap-2">
-            <Button variant="primary" onClick={save} disabled={pending}>{pending ? "Saving…" : "Save"}</Button>
-            <Button onClick={() => setOpen(false)}>Cancel</Button>
-          </div>
+    <Card className="rc-no-print p-5">
+      <CardHeader
+        title="Statement figures"
+        subtitle={
+          summary
+            ? "Taken from the bank statement. Save after changing a figure."
+            : "Enter the opening balance and the closing balance and date shown on the bank statement."
+        }
+      />
+      <div className="mt-3 grid gap-3 sm:grid-cols-3">
+        <Field
+          label="3. Opening balance"
+          required
+          hint={
+            carryOpeningCents === null
+              ? "First reconciliation for this account — enter the opening balance from the statement."
+              : changedFromCarry
+                ? `Carried forward was ${currency} ${formatMoney(carryOpeningCents, { showCurrency: false })} (${lastCompletedIso ? formatDate(lastCompletedIso) : "last reconciliation"}); you have changed it.`
+                : `Carried forward from the reconciliation on ${lastCompletedIso ? formatDate(lastCompletedIso) : "the last one"}. You can edit it.`
+          }
+        >
+          <input
+            value={opening}
+            onChange={(e) => setOpening(e.target.value)}
+            disabled={!editable}
+            inputMode="decimal"
+            placeholder="0.00"
+            className={clsx(inputClass, "tnum")}
+          />
+        </Field>
+        <Field label="4. Closing balance per statement" required>
+          <input
+            value={closing}
+            onChange={(e) => setClosing(e.target.value)}
+            disabled={!editable}
+            inputMode="decimal"
+            placeholder="0.00"
+            className={clsx(inputClass, "tnum")}
+          />
+        </Field>
+        <Field label="Statement closing date" required>
+          <DateField
+            value={closingDate}
+            allowEmpty={false}
+            onCommit={setClosingDate}
+            aria-label="Statement closing date"
+          />
+        </Field>
+      </div>
+      {summary && (
+        <Field label="Notes on outstanding items" className="mt-3">
+          <textarea value={notes} onChange={(e) => setNotes(e.target.value)} disabled={!editable} rows={2} className={inputClass} />
+        </Field>
+      )}
+      {editable && (
+        <div className="mt-3 flex items-center gap-3">
+          <Button variant="primary" onClick={save} disabled={pending || opening.trim() === ""}>
+            {pending ? "Saving…" : summary ? "Save figures" : "Start reconciliation"}
+          </Button>
+          {!summary && opening.trim() === "" && (
+            <span className="text-[0.75rem] text-muted-ink">Enter the opening balance to continue.</span>
+          )}
         </div>
       )}
-    </>
+    </Card>
   );
 }
 
@@ -361,6 +357,28 @@ function Workspace({
   const selectionValid =
     selStatement.size > 0 && selBook.size > 0 && stmtNet !== 0 && stmtNet === bookNet;
 
+  // The five summary lines are derived from the rows as they stand, so they move
+  // the moment a match is made or removed; a completed one reads its frozen figures.
+  const bridge = useMemo(() => {
+    if (!inProgress) {
+      return reconciliationBridge({
+        statementBalanceCents: report.statementClosingCents,
+        outstandingReceiptsCents: report.outstandingReceiptsCents,
+        outstandingPaymentsCents: report.outstandingPaymentsCents,
+        glBalanceCents: report.bookBalanceCents,
+      });
+    }
+    const open = bookRows.filter((r) => r.matchId === null);
+    return reconciliationBridge({
+      statementBalanceCents: summary.closingBalanceCents,
+      outstandingReceiptsCents: open.reduce((s, r) => s + r.drCents, 0),
+      outstandingPaymentsCents: open.reduce((s, r) => s + r.crCents, 0),
+      glBalanceCents: summary.bookBalanceCents,
+    });
+  }, [inProgress, bookRows, report, summary.closingBalanceCents, summary.bookBalanceCents]);
+
+  const unmatchedStatement = statementRows.filter((r) => r.matchId === null).length;
+
   function toggle(set: Set<string>, key: string, setter: (s: Set<string>) => void) {
     const next = new Set(set);
     if (next.has(key)) next.delete(key);
@@ -383,30 +401,19 @@ function Workspace({
 
   return (
     <>
-      {/* Stat cards */}
-      <div className="grid gap-4 sm:grid-cols-3">
-        <StatCard label="Statement closing balance" value={cardMoney(summary.closingBalanceCents)} />
-        <StatCard label="Book balance" value={cardMoney(summary.bookBalanceCents)} />
-        <StatCard
-          label="Adjusted difference"
-          value={cardMoney(summary.differenceCents)}
-          accent={summary.differenceCents !== 0}
-        />
-      </div>
-
-      {/* Panels */}
-      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+      {/* Step 6: statement left, GL right */}
+      <div className="grid gap-4 lg:grid-cols-2">
         <Panel
-          title="As per Bank Statement"
-          subtitle={`${formatDate(summary.periodStartIso)} – ${formatDate(summary.periodEndIso)} · Bank perspective`}
+          title="Transactions per bank statement"
+          subtitle={`Up to ${formatDate(summary.statementClosingDateIso)} · Bank perspective`}
           rows={statementRows}
           selected={selStatement}
           onToggle={editable ? (key) => toggle(selStatement, key, setSelStatement) : undefined}
           matchBadgeLabel="Matched"
         />
         <Panel
-          title="As per Books"
-          subtitle="Bank account ledger · Company perspective"
+          title="Transactions per GL"
+          subtitle={`Bank account ledger up to ${formatDate(summary.statementDateIso)} · Company perspective`}
           rows={bookRows}
           selected={selBook}
           onToggle={editable ? (key) => toggle(selBook, key, setSelBook) : undefined}
@@ -415,20 +422,20 @@ function Workspace({
         />
       </div>
 
-      <p className="mt-2 flex items-center gap-2 text-[0.75rem] text-muted-ink">
+      <p className="flex items-center gap-2 text-[0.75rem] text-muted-ink">
         <span aria-hidden className="grid h-4 w-4 place-items-center rounded-full bg-paper-400 text-[0.625rem] font-bold text-ink-700">i</span>
         Deposits appear as credits on the bank statement and debits in the bank ledger.
       </p>
 
-      {/* Match bar */}
+      {/* Step 7: match bar */}
       {editable && (
-        <div className="rc-no-print mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-paper-300 bg-white px-4 py-3">
+        <div className="rc-no-print flex flex-wrap items-center gap-3 rounded-lg border border-paper-300 bg-white px-4 py-3">
           <span className="text-[0.8125rem] text-ink-800">
             <span className="font-medium">{selStatement.size}</span> statement ·{" "}
-            <span className="font-medium">{selBook.size}</span> book selected
+            <span className="font-medium">{selBook.size}</span> GL selected
           </span>
           <span className="text-[0.75rem] text-muted-ink">
-            statement net {formatMoney(stmtNet, { showCurrency: false, accountingNegative: true })} · book net{" "}
+            statement net {formatMoney(stmtNet, { showCurrency: false, accountingNegative: true })} · GL net{" "}
             {formatMoney(bookNet, { showCurrency: false, accountingNegative: true })}
           </span>
           <div className="flex-1" />
@@ -436,17 +443,13 @@ function Workspace({
             <span className="text-[0.75rem] text-caution">
               {stmtNet === 0
                 ? "Select entries that net to a non-zero amount."
-                : "Statement and book totals must be equal and the same cash direction."}
+                : "Statement and GL totals must be equal and the same cash direction."}
             </span>
           )}
           <Button
             variant="primary"
             disabled={!selectionValid || pending}
-            onClick={() =>
-              run(() =>
-                matchSelectedAction(summary.id, [...selStatement], [...selBook]),
-              )
-            }
+            onClick={() => run(() => matchSelectedAction(summary.id, [...selStatement], [...selBook]))}
           >
             Match selected
           </Button>
@@ -455,13 +458,13 @@ function Workspace({
 
       {/* Existing matches — removable only while in progress */}
       {workspace.matches.length > 0 && editable && (
-        <div className="rc-no-print mt-3 rounded-lg border border-paper-300 bg-white p-4">
-          <p className="text-[0.8125rem] font-semibold text-ink-900">Matches this month</p>
+        <div className="rc-no-print rounded-lg border border-paper-300 bg-white p-4">
+          <p className="text-[0.8125rem] font-semibold text-ink-900">Matches in this reconciliation</p>
           <ul className="mt-2 divide-y divide-paper-200">
             {workspace.matches.map((m) => (
               <li key={m.id} className="flex items-center gap-3 py-2 text-[0.8125rem]">
                 <span className="flex-1 text-ink-700">
-                  {m.statementTxnIds.length} statement ↔ {m.bookLineIds.length} book ·{" "}
+                  {m.statementTxnIds.length} statement ↔ {m.bookLineIds.length} GL ·{" "}
                   {formatMoney(m.netCents, { showCurrency: false, accountingNegative: true })}
                 </span>
                 <button
@@ -478,30 +481,19 @@ function Workspace({
         </div>
       )}
 
-      {/* Month-end report */}
-      <MonthEndReportCard
+      {/* Step 8: summary */}
+      <SummaryCard
         report={report}
         summary={summary}
+        bridge={bridge}
         currency={currency}
         cardMoney={cardMoney}
-        canComplete={summary.canComplete && canWrite}
+        unmatchedStatement={unmatchedStatement}
+        canComplete={inProgress && canWrite && summary.statementBalanceValid && bridge.differenceCents === 0}
         pending={pending}
-        onComplete={() =>
-          run(() => completeReconciliationAction(summary.id, summary.version))
-        }
+        onComplete={() => run(() => completeReconciliationAction(summary.id, summary.version))}
       />
     </>
-  );
-}
-
-function StatCard({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
-  return (
-    <Card className="p-4">
-      <p className="text-[0.6875rem] font-semibold uppercase tracking-[0.06em] text-muted-ink">{label}</p>
-      <p className={clsx("tnum mt-1 text-[1.375rem] font-semibold tracking-[-0.02em]", accent ? "text-maple-600" : "text-ink-950")}>
-        {value}
-      </p>
-    </Card>
   );
 }
 
@@ -584,30 +576,39 @@ function Panel({
   );
 }
 
-// ── Month-end report ────────────────────────────────────────────────────────
+// ── Reconciliation summary ──────────────────────────────────────────────────
 
-function MonthEndReportCard({
+function SummaryCard({
   report,
   summary,
+  bridge,
   currency,
   cardMoney,
+  unmatchedStatement,
   canComplete,
   pending,
   onComplete,
 }: {
   report: MonthEndReport;
   summary: ReconciliationWorkspace["summary"];
+  bridge: ReturnType<typeof reconciliationBridge>;
   currency: string;
   cardMoney: (cents: number) => string;
+  unmatchedStatement: number;
   canComplete: boolean;
   pending: boolean;
   onComplete: () => void;
 }) {
   const plain = (c: number) => formatMoney(c, { showCurrency: false, accountingNegative: true });
+  const inProgress = summary.status === "IN_PROGRESS";
+  const calculated = summary.openingBalanceCents + summary.statementCreditsCents - summary.statementDebitsCents;
+
+  // While in progress the lists are rebuilt from the current report; frozen ones
+  // come from what was saved at completion.
   return (
-    <Card className="rc-report mt-4 p-6">
+    <Card className="rc-report p-6">
       <h2 className="text-[1.25rem] font-semibold text-ink-900">
-        Bank Reconciliation as of {formatDate(report.asOfIso)}
+        Reconciliation summary as of {formatDate(report.asOfIso)}
       </h2>
       {report.frozen && (
         <p className="mt-1 text-[0.75rem] text-muted-ink">
@@ -617,9 +618,9 @@ function MonthEndReportCard({
 
       <div className="mt-4 grid gap-8 lg:grid-cols-2">
         <div>
-          <ReportTable title="Outstanding receipts / deposits in transit" currency={currency} rows={report.outstandingReceipts} empty="None — every book receipt has cleared." />
+          <ReportTable title="Outstanding receipts / deposits in transit" currency={currency} rows={report.outstandingReceipts} empty="None — every GL receipt is on the statement." />
           <div className="mt-5">
-            <ReportTable title="Outstanding payments" currency={currency} rows={report.outstandingPayments} empty="None — every book payment has cleared." />
+            <ReportTable title="Outstanding payments" currency={currency} rows={report.outstandingPayments} empty="None — every GL payment is on the statement." />
           </div>
 
           {report.unmatchedStatementItems.length > 0 && (
@@ -628,7 +629,7 @@ function MonthEndReportCard({
                 Unmatched statement items — investigate or adjust
               </p>
               <p className="mt-0.5 text-[0.75rem] leading-5 text-ink-700">
-                Bank movements with no entry in the books. These are not timing differences: record a journal
+                Bank movements with no entry in the GL. These are not timing differences: record a journal
                 adjustment through Accounting → Journal entries, then match it here.
               </p>
               <ul className="mt-2 space-y-1 text-[0.75rem] text-ink-800">
@@ -641,51 +642,65 @@ function MonthEndReportCard({
               </ul>
             </div>
           )}
-
-          <p className="mt-4 text-[0.75rem] text-muted-ink">
-            Uncleared items carry forward to {report.nextMonthLabel} and are matched there. This report will not be
-            rewritten when they clear.
-          </p>
         </div>
 
         <div className="text-[0.875rem]">
-          <ReconLine label="Bank statement balance" value={plain(report.statementClosingCents)} />
-          <ReconLine label="Add: outstanding receipts" value={plain(report.outstandingReceiptsCents)} />
-          <ReconLine label="Less: outstanding payments" value={plain(report.outstandingPaymentsCents)} />
+          <ReconLine
+            label="Bank balance as per bank statement"
+            note="opening + credits − debits"
+            value={plain(bridge.statementBalanceCents)}
+          />
+          <ReconLine
+            label="Outstanding bank transactions"
+            note="GL receipts not matched with the statement"
+            value={plain(bridge.outstandingReceiptsCents)}
+          />
+          <ReconLine
+            label="Outstanding payments"
+            note="GL payments not matched with the statement"
+            value={plain(bridge.outstandingPaymentsSignedCents)}
+          />
           <div className="my-2 border-t border-[#a9bdc9]" />
-          <ReconLine label="Adjusted bank balance" value={cardMoney(report.adjustedBankBalanceCents)} bold />
-          <ReconLine label="Book balance" value={cardMoney(report.bookBalanceCents)} />
+          <ReconLine label="Adjusted bank balance" value={cardMoney(bridge.adjustedBankBalanceCents)} bold />
+          <ReconLine label="Bank balance as per GL" note={`GL balance on ${formatDate(report.asOfIso)}`} value={cardMoney(bridge.glBalanceCents)} />
           <div className="my-2 border-t border-[#a9bdc9]" />
           <ReconLine
             label="Difference"
-            value={formatMoney(report.differenceCents, { showCurrency: false, accountingNegative: true })}
+            note="must be zero to close"
+            value={plain(bridge.differenceCents)}
             bold
-            accent={report.differenceCents !== 0}
+            accent={bridge.differenceCents !== 0}
           />
 
           <div className="mt-3">
-            {report.balanced ? (
+            {bridge.differenceCents === 0 ? (
               <Badge tone="positive">Balanced</Badge>
             ) : (
               <Badge tone="caution">Out of balance</Badge>
             )}
           </div>
 
-          {summary.status === "IN_PROGRESS" && (
+          {inProgress && (
             <>
               {!summary.statementBalanceValid && (
                 <p className="mt-3 text-[0.75rem] text-caution">
-                  Statement opening + statement movement ≠ closing balance. Import the whole statement or fix the figures.
+                  Statement opening + credits − debits is {plain(calculated)}, but the closing balance entered is{" "}
+                  {plain(summary.closingBalanceCents)}. Import the whole statement or correct the figures.
                 </p>
               )}
-              {summary.statementBalanceValid && !summary.allStatementMatched && (
+              {unmatchedStatement > 0 && (
+                <p className="mt-3 text-[0.75rem] text-muted-ink">
+                  {unmatchedStatement} statement line{unmatchedStatement === 1 ? " is" : "s are"} not matched to the GL.
+                </p>
+              )}
+              {bridge.differenceCents !== 0 && (
                 <p className="mt-3 text-[0.75rem] text-caution">
-                  Every statement transaction must be matched before completing.
+                  The difference must be zero before this reconciliation can be closed.
                 </p>
               )}
               <div className="rc-no-print mt-4 flex justify-end">
                 <Button variant="primary" disabled={!canComplete || pending} onClick={onComplete}>
-                  {pending ? "Completing…" : `Complete ${summary.monthLabel} reconciliation`}
+                  {pending ? "Closing…" : "Complete reconciliation"}
                 </Button>
               </div>
             </>
@@ -740,18 +755,23 @@ function ReportTable({
 
 function ReconLine({
   label,
+  note,
   value,
   bold,
   accent,
 }: {
   label: string;
+  note?: string;
   value: string;
   bold?: boolean;
   accent?: boolean;
 }) {
   return (
     <div className={clsx("flex items-baseline justify-between gap-6 py-1", bold && "font-semibold")}>
-      <span className={clsx(bold ? "text-ink-900" : "text-muted-ink")}>{label}</span>
+      <span className={clsx(bold ? "text-ink-900" : "text-ink-800")}>
+        {label}
+        {note && <span className="block text-[0.6875rem] font-normal text-muted-ink">{note}</span>}
+      </span>
       <span className={clsx("tnum", accent ? "text-maple-600" : bold ? "text-ink-950" : "text-ink-800")}>{value}</span>
     </div>
   );

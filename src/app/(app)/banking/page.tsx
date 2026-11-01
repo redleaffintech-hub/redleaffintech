@@ -49,7 +49,7 @@ export default async function BankingPage() {
     <>
       <PageHeader
         title="Bank review queue"
-        breadcrumb={[{ label: "Bank Reconciliation" }, { label: "Review queue" }]}
+        breadcrumb={[{ label: "Banking", href: "/banking/accounts" }, { label: "Review queue" }]}
         description={
           queue.length > 0
             ? `${queue.length} transactions waiting — ${formatMoney(inflowCents, { currency })} in, ${formatMoney(Math.abs(outflowCents), { currency })} out. Nothing here has touched the ledger yet.`

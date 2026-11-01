@@ -623,7 +623,7 @@ async function buildBooks(companyId: string, userId: string) {
       data: {
         companyId, bankAccountId: chequing.id,
         statementYear: YEAR, statementMonth: 3,
-        statementStartDate: marStart, statementEndDate: marEnd,
+        statementStartDate: marStart, statementEndDate: marEnd, statementDate: marEnd,
         openingBalanceCents: opening,
         closingBalanceCents: closing,
         clearedBalanceCents: closing,

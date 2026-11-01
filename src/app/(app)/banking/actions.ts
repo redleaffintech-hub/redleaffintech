@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { toCents } from "@/lib/money";
+import { toUtcDay } from "@/lib/dates";
 import { CAPABILITIES } from "@/lib/permissions";
 import { requireCapability, requireCompany } from "@/server/auth/context";
 import {
@@ -172,13 +173,33 @@ function assertWritable(company: { isReadOnly: boolean }) {
   }
 }
 
-export async function openReconciliationAction(bankAccountId: string, year: number, month: number) {
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+function parseDay(value: string, label: string): Date {
+  if (!ISO_DAY.test(value)) throw new Error(`Enter ${label}.`);
+  return toUtcDay(value);
+}
+
+export async function openReconciliationAction(
+  bankAccountId: string,
+  date: string,
+  openingBalance: string,
+  closingBalance: string,
+  closingDate: string,
+) {
   const { company, user } = await requireCapability(CAPABILITIES.BANKING);
   try {
     assertWritable(company);
+    if (!openingBalance.trim()) throw new Error("Enter the opening balance.");
     const reconciliation = await getOrStartReconciliation(
       company.id,
-      { bankAccountId, year, month },
+      {
+        bankAccountId,
+        date: parseDay(date, "the reconciliation date"),
+        openingBalanceCents: toCents(openingBalance),
+        closingBalanceCents: toCents(closingBalance || "0"),
+        closingDate: closingDate ? parseDay(closingDate, "the statement closing date") : null,
+      },
       user.id,
     );
     revalidatePath("/banking/reconcile");
@@ -192,6 +213,7 @@ export async function saveStatementBalancesAction(
   reconciliationId: string,
   openingBalance: string,
   closingBalance: string,
+  closingDate: string,
   notes: string,
 ) {
   const { company } = await requireCapability(CAPABILITIES.BANKING);
@@ -200,6 +222,7 @@ export async function saveStatementBalancesAction(
     await saveStatementBalances(company.id, reconciliationId, {
       openingBalanceCents: toCents(openingBalance || "0"),
       closingBalanceCents: toCents(closingBalance || "0"),
+      closingDate: closingDate ? parseDay(closingDate, "the statement closing date") : null,
       notes: notes.trim() || null,
     });
     revalidatePath("/banking/reconcile");
