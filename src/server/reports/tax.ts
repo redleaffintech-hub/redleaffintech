@@ -81,6 +81,60 @@ export async function taxSummary(companyId: string, range: DateRange) {
   return { range, rows, totals, reconciliation };
 }
 
+export interface ProvinceTaxSummary {
+  /** The tax code's province ("CA" for federal-only codes such as plain GST). */
+  province: string;
+  /** Taxable sales, each invoice line counted once however many components tax it. */
+  salesTaxableCents: number;
+  /** Tax collected on sales, split by tax type (GST, HST, PST, RST, QST). */
+  collectedByKind: Record<string, number>;
+  taxCollectedCents: number;
+  recoverableCents: number;
+  netCents: number;
+}
+
+/**
+ * Sales tax collected and ITCs for a period, by province and tax type. A BC sale
+ * books a GST entry and a PST entry for the same line, so taxable sales are summed
+ * once per line, not once per component; the tax columns are exact per type and add
+ * up to the return's line 105 (collected) and line 108 (ITCs).
+ */
+export async function taxByProvince(companyId: string, range: DateRange): Promise<ProvinceTaxSummary[]> {
+  const entries = await db.taxEntry.findMany({
+    where: { companyId, date: { gte: range.from, lte: range.to } },
+    select: {
+      id: true, direction: true, sourceType: true, sourceId: true, lineId: true, kind: true,
+      taxableCents: true, taxCents: true, recoverableCents: true,
+      taxCode: { select: { jurisdiction: true } },
+    },
+  });
+
+  const byProvince = new Map<string, ProvinceTaxSummary>();
+  const countedLines = new Set<string>();
+  for (const entry of entries) {
+    const province = entry.taxCode.jurisdiction;
+    let row = byProvince.get(province);
+    if (!row) {
+      row = { province, salesTaxableCents: 0, collectedByKind: {}, taxCollectedCents: 0, recoverableCents: 0, netCents: 0 };
+      byProvince.set(province, row);
+    }
+    if (entry.direction === "SALE") {
+      const lineKey = `${province}|${entry.sourceType}|${entry.sourceId}|${entry.lineId ?? entry.id}`;
+      if (!countedLines.has(lineKey)) {
+        countedLines.add(lineKey);
+        row.salesTaxableCents += entry.taxableCents;
+      }
+      row.collectedByKind[entry.kind] = (row.collectedByKind[entry.kind] ?? 0) + entry.taxCents;
+      row.taxCollectedCents += entry.taxCents;
+    } else {
+      row.recoverableCents += entry.recoverableCents;
+    }
+    row.netCents = row.taxCollectedCents - row.recoverableCents;
+  }
+
+  return [...byProvince.values()];
+}
+
 export async function taxDetail(
   companyId: string,
   range: DateRange,

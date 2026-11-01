@@ -124,6 +124,14 @@ export function ImportPanel({
         </p>
       )}
 
+      <p className="mt-3 text-[0.8125rem] text-ink-800">
+        Not sure how to lay the file out?{" "}
+        <a href="/banking/import/template" download className="font-medium text-brand-700 hover:underline">
+          Download the CSV template
+        </a>
+        , fill it in and upload it here. Debit is money out, Credit is money in.
+      </p>
+
       <p className="mt-3 text-[0.75rem] leading-5 text-muted-ink">
         Column headers are matched loosely: a single signed <span className="font-medium">Amount</span> column works, and
         so does a separate <span className="font-medium">Debit</span>/<span className="font-medium">Credit</span> pair.
