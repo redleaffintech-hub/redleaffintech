@@ -35,13 +35,32 @@ export default async function ReconcilePage({ searchParams }: PageProps<"/bankin
   }
 
   // The account comes from the URL but is only ever used if it is one of this company's.
-  const accountId =
-    typeof params.account === "string" && bankAccounts.some((b) => b.id === params.account)
-      ? params.account
-      : bankAccounts[0].id;
+  const accountParam =
+    typeof params.account === "string" && bankAccounts.some((b) => b.id === params.account) ? params.account : null;
+  const dateParam = typeof params.date === "string" && ISO_DAY.test(params.date) ? isoDate(toUtcDay(params.date)) : null;
 
-  const dateIso =
-    typeof params.date === "string" && ISO_DAY.test(params.date) ? isoDate(toUtcDay(params.date)) : isoDate(today());
+  let accountId = accountParam ?? bankAccounts[0].id;
+  let dateIso = dateParam ?? isoDate(today());
+
+  // Nothing chosen yet: pick up the reconciliation that was saved and left in progress,
+  // so coming back the next day lands exactly where the work stopped.
+  let resumed = false;
+  if (!dateParam) {
+    const saved = await db.bankReconciliation.findFirst({
+      where: {
+        companyId: company.id,
+        status: "IN_PROGRESS",
+        bankAccountId: accountParam ?? { in: bankAccounts.map((b) => b.id) },
+      },
+      orderBy: { createdAt: "desc" },
+      select: { bankAccountId: true, statementDate: true },
+    });
+    if (saved) {
+      accountId = saved.bankAccountId;
+      dateIso = isoDate(saved.statementDate);
+      resumed = true;
+    }
+  }
 
   const [existing, lastCompleted, queueCount, history] = await Promise.all([
     db.bankReconciliation.findFirst({
@@ -72,6 +91,7 @@ export default async function ReconcilePage({ searchParams }: PageProps<"/bankin
         carryOpeningCents={lastCompleted ? lastCompleted.closingBalanceCents : null}
         lastCompletedIso={lastCompleted ? isoDate(lastCompleted.statementDate) : null}
         queueCount={queueCount}
+        resumed={resumed}
         workspace={workspace}
         history={history.map((h) => ({
           id: h.id,

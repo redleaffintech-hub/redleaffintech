@@ -3,16 +3,17 @@ import { db } from "@/lib/db";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES, can } from "@/lib/permissions";
 import { accountBalance } from "@/server/reports/financials";
-import { formatDate, formatDateTime, today } from "@/lib/dates";
-import { Badge, Card, EmptyState, LinkButton, Money, PageHeader, Table, Td, Th, Tr } from "@/components/ui";
+import { formatDate, isoDate, today } from "@/lib/dates";
+import { Badge, Callout, Card, EmptyState, LinkButton, Money, PageHeader, Table, Td, Th, Tr } from "@/components/ui";
 
 import { EditBankAccountButton } from "./edit-bank-account";
 import { AddBankAccountButton } from "./add-bank-account";
 
 export const metadata = { title: "Bank accounts" };
 
-export default async function BankAccountsPage() {
+export default async function BankAccountsPage({ searchParams }: PageProps<"/banking/accounts">) {
   const { company, role } = await requireCapability(CAPABILITIES.BANKING);
+  const params = await searchParams;
   const canEdit = can(role, CAPABILITIES.BANKING);
 
   const [bankAccounts, glAccounts] = await Promise.all([
@@ -46,6 +47,12 @@ export default async function BankAccountsPage() {
       // ledger: nothing has posted to the bank account since its date, and nothing
       // was entered afterwards with an earlier date.
       const last = bankAccount.reconciliations[0] ?? null;
+      // A reconciliation started and saved but not completed: the account is picked up from here.
+      const inProgress = await db.bankReconciliation.findFirst({
+        where: { companyId: company.id, bankAccountId: bankAccount.id, status: "IN_PROGRESS" },
+        orderBy: { createdAt: "desc" },
+        select: { statementDate: true },
+      });
       let reconciled = false;
       if (last) {
         const since = await db.journalLine.count({
@@ -64,6 +71,7 @@ export default async function BankAccountsPage() {
       return {
         bankAccount,
         last,
+        inProgressDateIso: inProgress ? isoDate(inProgress.statementDate) : null,
         reconciled,
         // Credit cards are credit-natural: a positive balance means money owed.
         balanceCents: bankAccount.type === "CREDIT_CARD" ? -signed : signed,
@@ -87,6 +95,12 @@ export default async function BankAccountsPage() {
           </div>
         }
       />
+
+      {params.saved === "reconciliation" && (
+        <Callout tone="positive" title="Reconciliation saved">
+          Your matches and statement figures are saved. Open Reconcile, or press Resume on the account, to continue from where you stopped.
+        </Callout>
+      )}
 
       {rows.length === 0 ? (
         <Card className="p-5">
@@ -115,7 +129,7 @@ export default async function BankAccountsPage() {
             </tr>
           </thead>
           <tbody>
-            {rows.map(({ bankAccount, last, reconciled, balanceCents, unreconciled }) => (
+            {rows.map(({ bankAccount, last, inProgressDateIso, reconciled, balanceCents, unreconciled }) => (
               <Tr key={bankAccount.id}>
                 <Td>
                   <span className="font-medium text-ink-900">{bankAccount.name}</span>
@@ -145,22 +159,30 @@ export default async function BankAccountsPage() {
                 </Td>
                 <Td className="text-muted-ink">{last ? formatDate(last.statementDate) : "Never"}</Td>
                 <Td>
-                  {!last ? (
+                  {inProgressDateIso ? (
+                    <Badge tone="caution">In progress</Badge>
+                  ) : !last ? (
                     <Badge tone="neutral">Never reconciled</Badge>
                   ) : reconciled ? (
                     <Badge tone="positive">Reconciled</Badge>
                   ) : (
                     <Badge tone="caution">Not reconciled</Badge>
                   )}
-                  {last && !reconciled && (
+                  {inProgressDateIso && (
+                    <span className="block text-[0.6875rem] text-muted-ink">Saved · as of {formatDate(inProgressDateIso)}</span>
+                  )}
+                  {!inProgressDateIso && last && !reconciled && (
                     <span className="block text-[0.6875rem] text-muted-ink">GL activity since {formatDate(last.statementDate)}</span>
                   )}
                 </Td>
                 <Td align="right"><Money cents={balanceCents} bold /></Td>
                 {canEdit && (
                   <Td align="right">
-                    <Link href={`/banking/reconcile?account=${bankAccount.id}`} className="mr-3 text-[0.8125rem] font-medium text-brand-700 hover:underline">
-                      Reconcile
+                    <Link
+                      href={`/banking/reconcile?account=${bankAccount.id}${inProgressDateIso ? `&date=${inProgressDateIso}` : ""}`}
+                      className="mr-3 text-[0.8125rem] font-medium text-brand-700 hover:underline"
+                    >
+                      {inProgressDateIso ? "Resume" : "Reconcile"}
                     </Link>
                     <EditBankAccountButton
                       account={{

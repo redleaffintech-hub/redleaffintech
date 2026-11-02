@@ -1,15 +1,15 @@
 "use server";
 
 import { z } from "zod";
+import { db } from "@/lib/db";
 
 /**
  * Contact enquiries.
  *
- * There is no mail service or CRM connected yet — the client has not told us
- * where enquiries should land. Rather than pretending a submission was
- * delivered, the action forwards to CONTACT_FORWARD_URL when one is configured
- * (any webhook that accepts JSON: an email relay, Slack, a form service), and
- * otherwise returns an honest fallback pointing at the published address.
+ * Every enquiry is saved to the database and read by Super Admins under
+ * Admin → Enquiries. When CONTACT_FORWARD_URL is configured it is also forwarded
+ * (any webhook that accepts JSON: an email relay, Slack, a form service). The
+ * visitor is only told it failed when it could be neither saved nor forwarded.
  *
  * To go live, set CONTACT_FORWARD_URL and, if you want the address on the page
  * to change, CONTACT_EMAIL.
@@ -43,12 +43,20 @@ export async function submitContactAction(formData: FormData): Promise<ContactRe
   const target = process.env.CONTACT_FORWARD_URL;
   const fallbackEmail = process.env.CONTACT_EMAIL ?? "info@redleaffintech.com";
 
-  if (!target) {
-    return {
-      error: "This form is not connected to a mailbox yet. Please email us directly and we will reply the same day.",
-      fallbackEmail,
-    };
+  // The enquiry is always kept first, so it reaches the team (Admin → Enquiries)
+  // even when no forwarding webhook is configured or the webhook is down.
+  let saved = true;
+  try {
+    await db.contactEnquiry.create({ data: parsed.data });
+  } catch (error) {
+    saved = false;
+    console.error("Could not save contact enquiry", error);
+    if (!target) {
+      return { error: "We could not send that just now. Please email us directly and we will pick it up.", fallbackEmail };
+    }
   }
+
+  if (!target) return { ok: true };
 
   try {
     const response = await fetch(target, {
@@ -59,6 +67,7 @@ export async function submitContactAction(formData: FormData): Promise<ContactRe
     if (!response.ok) throw new Error(`Forwarder returned ${response.status}`);
     return { ok: true };
   } catch {
+    if (saved) return { ok: true };
     return {
       error: "We could not send that just now. Please email us directly and we will pick it up.",
       fallbackEmail,

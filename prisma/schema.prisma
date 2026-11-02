@@ -2653,3 +2653,21 @@ model UserSeatRequest {
   @@index([companyId, status])
   @@index([status, createdAt])
 }
+
+/// A message sent through the public /contact form. Platform-level (no company):
+/// the visitor is not a customer yet. Read by Super Admins under Admin → Enquiries.
+model ContactEnquiry {
+  id        String    @id @default(cuid())
+  name      String
+  email     String
+  company   String?
+  phone     String?
+  topic     String?
+  message   String
+  status    String    @default("NEW") // NEW | HANDLED
+  handledAt DateTime?
+  handledBy String?
+  createdAt DateTime  @default(now())
+
+  @@index([status, createdAt])
+}

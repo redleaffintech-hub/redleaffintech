@@ -38,6 +38,7 @@ export function ReconcileClient({
   carryOpeningCents,
   lastCompletedIso,
   queueCount,
+  resumed,
   workspace,
   history,
 }: {
@@ -50,6 +51,8 @@ export function ReconcileClient({
   carryOpeningCents: number | null;
   lastCompletedIso: string | null;
   queueCount: number;
+  /** Opened on a saved, unfinished reconciliation rather than on a date the user picked. */
+  resumed: boolean;
   workspace: ReconciliationWorkspace | null;
   history: HistoryRow[];
 }) {
@@ -114,6 +117,13 @@ export function ReconcileClient({
           </p>
         )}
       </Card>
+
+      {resumed && workspace && (
+        <p className="rc-no-print rounded-md bg-info-soft px-3 py-2 text-[0.8125rem] text-ink-800">
+          Picked up your saved reconciliation as of {formatDate(workspace.summary.statementDateIso)}. Your statement
+          figures and matches are exactly as you left them.
+        </p>
+      )}
 
       {error && (
         <p className="rounded-md border border-[color:var(--color-negative)]/25 bg-negative-soft px-3 py-2 text-[0.8125rem] text-negative">
@@ -245,13 +255,22 @@ function StatementFigures({
   const changedFromCarry =
     carryOpeningCents !== null && opening.trim() !== "" && Math.round(Number(opening) * 100) !== carryOpeningCents;
 
-  function save() {
+  // Edits to the figures are only stored when saved; matches are stored the moment they are made.
+  const dirty =
+    summary !== null &&
+    (opening !== money2(summary.openingBalanceCents) ||
+      closing !== money2(summary.closingBalanceCents) ||
+      closingDate !== summary.statementClosingDateIso ||
+      notes !== (summary.notes ?? ""));
+
+  function save(thenLeave = false) {
     onError(null);
     startTransition(async () => {
       const result = summary
         ? await saveStatementBalancesAction(summary.id, opening, closing, closingDate, notes)
         : await openReconciliationAction(accountId, dateIso, opening, closing, closingDate);
       if ("error" in result && result.error) onError(result.error);
+      else if (thenLeave) router.push("/banking/accounts?saved=reconciliation");
       else router.refresh();
     });
   }
@@ -312,10 +331,16 @@ function StatementFigures({
         </Field>
       )}
       {editable && (
-        <div className="mt-3 flex items-center gap-3">
-          <Button variant="primary" onClick={save} disabled={pending || opening.trim() === ""}>
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <Button variant="primary" onClick={() => save()} disabled={pending || opening.trim() === ""}>
             {pending ? "Saving…" : summary ? "Save figures" : "Start reconciliation"}
           </Button>
+          {summary && (
+            <Button onClick={() => save(true)} disabled={pending || opening.trim() === ""}>
+              Save &amp; close
+            </Button>
+          )}
+          {dirty && <span className="text-[0.75rem] text-caution">You have unsaved changes to these figures.</span>}
           {!summary && opening.trim() === "" && (
             <span className="text-[0.75rem] text-muted-ink">Enter the opening balance to continue.</span>
           )}
@@ -698,7 +723,16 @@ function SummaryCard({
                   The difference must be zero before this reconciliation can be closed.
                 </p>
               )}
-              <div className="rc-no-print mt-4 flex justify-end">
+              <div className="rc-no-print mt-4 flex flex-wrap items-center justify-end gap-3">
+                <span className="text-[0.75rem] text-muted-ink">
+                  Matches are saved as you make them. Not finished? Leave and resume any time.
+                </span>
+                <Link
+                  href="/banking/accounts?saved=reconciliation"
+                  className="inline-flex items-center rounded-md border border-paper-400 bg-white px-3 py-1.5 text-[0.8125rem] font-medium text-ink-800 hover:bg-paper-100"
+                >
+                  Save for later
+                </Link>
                 <Button variant="primary" disabled={!canComplete || pending} onClick={onComplete}>
                   {pending ? "Closing…" : "Complete reconciliation"}
                 </Button>
