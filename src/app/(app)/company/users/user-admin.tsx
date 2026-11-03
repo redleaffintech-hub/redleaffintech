@@ -49,7 +49,7 @@ export function InviteUserForm({ seatsLeft }: { seatsLeft: number }) {
         <Field
           label="Temporary password"
           required
-          hint="This build sends no email — hand this over directly and have them change it."
+          hint="This build sends no email — hand this over directly. They will be asked to choose their own password at first sign-in."
         >
           <input name="temporaryPassword" type="text" minLength={8} className={inputClass} required />
         </Field>

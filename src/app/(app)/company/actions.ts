@@ -492,7 +492,7 @@ export async function inviteUserAction(formData: FormData) {
       // Limit check and insert share one transaction and the subscription row lock,
       // so two simultaneous invites cannot both take the last seat.
       await assertSeatAvailable(tx, company.id);
-      const person = existingUser ?? (await tx.user.create({ data: { email, name: input.name, passwordHash: passwordHash! } }));
+      const person = existingUser ?? (await tx.user.create({ data: { email, name: input.name, passwordHash: passwordHash!, mustChangePassword: true } }));
       // Granting access IS the company's act of authorisation, and there is no
       // acceptance step in this build — so it is live straight away. (INVITED would
       // hide the company from the person's company switcher until someone pressed
