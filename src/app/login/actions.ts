@@ -41,5 +41,5 @@ export async function loginAction(formData: FormData) {
     },
   });
 
-  redirect("/dashboard");
+  redirect(user.mustChangePassword ? "/account/password" : "/dashboard");
 }

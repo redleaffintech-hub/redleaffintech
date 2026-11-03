@@ -21,6 +21,8 @@ export interface AppUser {
   email: string;
   isPlatformAdmin: boolean;
   activeCompanyId: string | null;
+  /** True while the user is still on a temporary password an administrator issued. */
+  mustChangePassword: boolean;
 }
 
 export const getCurrentUser = cache(async (): Promise<AppUser | null> => {
@@ -28,7 +30,7 @@ export const getCurrentUser = cache(async (): Promise<AppUser | null> => {
   if (!session) return null;
   const user = await db.user.findUnique({
     where: { id: session.userId },
-    select: { id: true, name: true, email: true, isPlatformAdmin: true, activeCompanyId: true },
+    select: { id: true, name: true, email: true, isPlatformAdmin: true, activeCompanyId: true, mustChangePassword: true },
   });
   return user;
 });
@@ -86,6 +88,8 @@ const COMPANY_CONTEXT_SELECT = {
 
 export const requireCompany = cache(async (companyId?: string): Promise<CompanyContext> => {
   const user = await requireUser();
+  // A temporary password must be replaced before any company page opens.
+  if (user.mustChangePassword) redirect("/account/password");
 
   // One query, not two (§ perf review, 16 Sep 2026): the membership row's own
   // join already reaches every company this user belongs to, so selecting

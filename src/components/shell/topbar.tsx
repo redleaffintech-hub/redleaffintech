@@ -301,6 +301,9 @@ function UserMenu({
           <Link href="/company/audit" onClick={() => setOpen(false)} className="block px-3 py-2 text-[0.8125rem] text-ink-800 hover:bg-paper-100">
             Audit log
           </Link>
+          <Link href="/account/password" onClick={() => setOpen(false)} className="block px-3 py-2 text-[0.8125rem] text-ink-800 hover:bg-paper-100">
+            Change password
+          </Link>
           <button
             type="button"
             disabled={pending}
