@@ -23,8 +23,6 @@ import {
   TERMINATION_REASON_LABELS,
 } from "@/lib/hr-enums";
 import {
-  MINIMUM_WAGE_AS_OF,
-  MINIMUM_WAGE_CENTS,
   completedYears,
   maskBankAccountNumber,
   minimumTerminationNoticeWeeks,
@@ -60,7 +58,6 @@ export default async function EmployeeDetailPage({ params }: { params: Promise<{
   const years = completedYears(employee.hireDate, today);
   const vacation = vacationEntitlement(employee.provinceOfEmployment, years);
   const noticeWeeks = minimumTerminationNoticeWeeks(employee.provinceOfEmployment, years);
-  const minWageCents = MINIMUM_WAGE_CENTS[employee.provinceOfEmployment];
   const upcomingHolidays = [
     ...statutoryHolidays(employee.provinceOfEmployment, today.getUTCFullYear()),
     ...statutoryHolidays(employee.provinceOfEmployment, today.getUTCFullYear() + 1),
@@ -85,7 +82,7 @@ export default async function EmployeeDetailPage({ params }: { params: Promise<{
     <>
       <PageHeader
         title={employee.preferredName ? `${employee.preferredName} ${employee.legalLastName}` : fullName}
-        breadcrumb={[{ label: "HR", href: "/hr/employees" }, { label: "Employees", href: "/hr/employees" }, { label: fullName }]}
+        breadcrumb={[{ label: "Payroll", href: "/hr/employees" }, { label: "Employees", href: "/hr/employees" }, { label: fullName }]}
         description={`${employee.jobTitle}${employee.department ? ` · ${employee.department.name}` : ""} · Employee ${employee.employeeNumber}`}
         actions={
           canEdit ? (
@@ -261,10 +258,6 @@ export default async function EmployeeDetailPage({ params }: { params: Promise<{
                     value: vacation ? `${vacation.weeks} weeks (${(vacation.percentMicro / 10_000).toString()}%)` : "Not available",
                   },
                   { label: "Minimum termination notice", value: `${noticeWeeks} week${noticeWeeks === 1 ? "" : "s"}` },
-                  {
-                    label: `Minimum wage (as of ${MINIMUM_WAGE_AS_OF})`,
-                    value: minWageCents ? formatMoney(minWageCents, { currency: "CAD", showCurrency: true }) + "/hr" : "—",
-                  },
                 ]}
               />
             </div>

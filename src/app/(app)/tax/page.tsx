@@ -2,9 +2,8 @@ import Link from "next/link";
 import { db } from "@/lib/db";
 import { requireCapability } from "@/server/auth/context";
 import { CAPABILITIES, can } from "@/lib/permissions";
-import { taxByProvince, taxPeriodReturn, type ProvinceTaxSummary } from "@/server/reports/tax";
+import { taxPeriodReturn } from "@/server/reports/tax";
 import { addDays, addMonths, endOfMonth, formatDate, today } from "@/lib/dates";
-import { PROVINCES } from "@/lib/enums";
 import { formatMoney } from "@/lib/money";
 import { taxRegistrationLines } from "@/lib/tax-registration";
 import { Badge, Callout, Card, CardHeader, LinkButton, Money, PageHeader, StatusBadge, Table, Td, Th, Tr } from "@/components/ui";
@@ -32,18 +31,6 @@ export default async function TaxCentrePage({ searchParams }: PageProps<"/tax">)
 
   const selected = periods.find((p) => p.id === selectedId);
   const result = selected ? await taxPeriodReturn(company.id, selected.id) : null;
-  const provinceRows = selected ? groupByProvince(await taxByProvince(company.id, { from: selected.startDate, to: selected.endDate })) : [];
-  const provinceTotal = provinceRows.reduce(
-    (t, r) => {
-      t.sales += r.salesTaxableCents;
-      for (const kind of PROVINCE_TAX_KINDS) t.byKind[kind] = (t.byKind[kind] ?? 0) + (r.collectedByKind[kind] ?? 0);
-      t.collected += r.taxCollectedCents;
-      t.itc += r.recoverableCents;
-      t.net += r.netCents;
-      return t;
-    },
-    { sales: 0, byKind: {} as Record<string, number>, collected: 0, itc: 0, net: 0 },
-  );
   const dueDate = selected ? endOfMonth(addMonths(selected.endDate, 1)) : null;
 
   const taxCodes = await db.taxCode.findMany({
@@ -186,67 +173,6 @@ export default async function TaxCentrePage({ searchParams }: PageProps<"/tax">)
                 posted by manual journal without a matching tax entry — find it before you file.
               </p>
             </Card>
-
-            <Card className="p-5">
-              <CardHeader
-                title="By province"
-                subtitle="Tax calculated in the period for each province, by tax type — sales tax collected, input tax credits and net"
-              />
-              <div className="thin-scroll mt-3 overflow-x-auto">
-                <Table>
-                  <thead>
-                    <tr>
-                      <Th>Province</Th>
-                      <Th width="8rem" align="right">Taxable sales</Th>
-                      {PROVINCE_TAX_KINDS.map((kind) => (
-                        <Th key={kind} width="6.5rem" align="right">{kind}</Th>
-                      ))}
-                      <Th width="8rem" align="right">Collected</Th>
-                      <Th width="8rem" align="right">ITCs</Th>
-                      <Th width="8rem" align="right">Net</Th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {provinceRows.length === 0 && (
-                      <Tr>
-                        <Td colSpan={PROVINCE_TAX_KINDS.length + 5} className="text-center text-muted-ink">
-                          No taxable activity in this period.
-                        </Td>
-                      </Tr>
-                    )}
-                    {provinceRows.map((row) => (
-                      <Tr key={row.province}>
-                        <Td><span className="font-semibold text-ink-900">{provinceLabel(row.province)}</span></Td>
-                        <Td align="right"><Money cents={row.salesTaxableCents} blankZero /></Td>
-                        {PROVINCE_TAX_KINDS.map((kind) => (
-                          <Td key={kind} align="right"><Money cents={row.collectedByKind[kind] ?? 0} blankZero /></Td>
-                        ))}
-                        <Td align="right"><Money cents={row.taxCollectedCents} blankZero bold /></Td>
-                        <Td align="right"><Money cents={row.recoverableCents} blankZero /></Td>
-                        <Td align="right"><Money cents={row.netCents} bold /></Td>
-                      </Tr>
-                    ))}
-                    {provinceRows.length > 0 && (
-                      <Tr>
-                        <Td><span className="font-semibold text-ink-950">Total</span></Td>
-                        <Td align="right"><Money cents={provinceTotal.sales} blankZero bold /></Td>
-                        {PROVINCE_TAX_KINDS.map((kind) => (
-                          <Td key={kind} align="right"><Money cents={provinceTotal.byKind[kind] ?? 0} blankZero bold /></Td>
-                        ))}
-                        <Td align="right"><Money cents={provinceTotal.collected} blankZero bold /></Td>
-                        <Td align="right"><Money cents={provinceTotal.itc} blankZero bold /></Td>
-                        <Td align="right"><Money cents={provinceTotal.net} bold /></Td>
-                      </Tr>
-                    )}
-                  </tbody>
-                </Table>
-              </div>
-              <p className="mt-3 text-[0.75rem] leading-5 text-muted-ink">
-                Taxable sales count each invoice line once, so a sale taxed with both GST and PST appears once. The Collected
-                and ITC totals agree with lines 105 and 108 above. Provinces are those of the tax code used, which follows the
-                customer&apos;s or vendor&apos;s place of supply; plain GST codes appear under Federal.
-              </p>
-            </Card>
           </div>
 
           <div className="space-y-4">
@@ -334,17 +260,5 @@ function ReturnLine({
         {formatMoney(value, { currency })}
       </span>
     </div>
-  );
-}
-
-const PROVINCE_TAX_KINDS = ["GST", "HST", "PST", "RST", "QST"] as const;
-
-function provinceLabel(code: string) {
-  return PROVINCES.find((p) => p.code === code)?.name ?? (code === "CA" ? "Federal (GST only)" : code);
-}
-
-function groupByProvince(rows: ProvinceTaxSummary[]) {
-  return [...rows].sort((a, b) =>
-    a.province === "CA" ? -1 : b.province === "CA" ? 1 : provinceLabel(a.province).localeCompare(provinceLabel(b.province)),
   );
 }

@@ -511,7 +511,7 @@ export async function buildWorkspace(
     reconciliation.openingBalanceCents + statementMovementCents === reconciliation.closingBalanceCents;
   const allStatementMatched = statementRows.every((r) => r.matchId !== null);
   const canComplete =
-    reconciliation.status === "IN_PROGRESS" && statementBalanceValid && differenceCents === 0;
+    reconciliation.status === "IN_PROGRESS" && differenceCents === 0;
 
   const monthLabel = formatDate(periodEnd);
   const nextMonthLabel = "the next reconciliation";
@@ -612,11 +612,9 @@ export async function completeReconciliation(
     const { summary, report } = workspace;
 
     if (summary.status !== "IN_PROGRESS") throw new Error("This reconciliation is already completed.");
-    if (!summary.statementBalanceValid) {
-      throw new Error(
-        "Statement opening plus statement movement does not equal the closing balance. Import the full statement or correct the figures.",
-      );
-    }
+    // The closing balance entered is the statement figure the bridge starts from. Whether the
+    // imported lines add up to it is advisory only: a partly imported statement must not stop a
+    // reconciliation whose difference is zero.
     if (summary.differenceCents !== 0) {
       throw new Error(
         `Adjusted difference is ${(summary.differenceCents / 100).toFixed(2)}, not zero. Unexplained bank-only items must be posted as adjustments through the ledger, never treated as timing differences.`,

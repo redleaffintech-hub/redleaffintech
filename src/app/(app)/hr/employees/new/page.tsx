@@ -23,7 +23,7 @@ export default async function NewEmployeePage() {
     <>
       <PageHeader
         title="New employee"
-        breadcrumb={[{ label: "HR", href: "/hr/employees" }, { label: "Employees", href: "/hr/employees" }, { label: "New" }]}
+        breadcrumb={[{ label: "Payroll", href: "/hr/employees" }, { label: "Employees", href: "/hr/employees" }, { label: "New" }]}
         description="The province of employment drives the compliance reference shown on the employee's profile — minimum vacation entitlement, statutory holidays and minimum termination notice."
       />
       <Card className="max-w-5xl p-5">

@@ -1,10 +1,10 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import clsx from "clsx";
 import { Button, Field, Select, inputClass } from "@/components/ui";
-import { createPayRunAction, previewLineAction, pullApprovedLeaveAction, updatePayRunAction } from "./actions";
+import { createPayRunAction, previewLineAction, pullApprovedLeaveAction, statHolidaysInPeriodAction, updatePayRunAction } from "./actions";
 import type { PayRunFormValues, PayRunLineFormValue } from "./pay-run-values";
 
 interface BankAccountOption {
@@ -126,6 +126,7 @@ export function PayRunForm({
       regularHours: line.regularHours || (result.regularHours ? String(result.regularHours) : ""),
       vacationHours: line.vacationHours || (result.vacationHours ? String(result.vacationHours) : ""),
       sickHours: line.sickHours || (result.sickHours ? String(result.sickHours) : ""),
+      statutoryHolidayPay: line.statutoryHolidayPay || (result.statutoryHolidayPayCents ? fromCents(result.statutoryHolidayPayCents) : line.statutoryHolidayPay),
       statutoryHolidayHours: line.statutoryHolidayHours || (result.statutoryHolidayHours ? String(result.statutoryHolidayHours) : ""),
     });
   }
@@ -136,6 +137,17 @@ export function PayRunForm({
   const pension = hasQuebec ? (hasOther ? "CPP/QPP" : "QPP") : "CPP";
 
   const [leaveNote, setLeaveNote] = useState<string | null>(null);
+
+  // Statutory holidays falling in the pay period, for the provinces on this run.
+  const [periodHolidays, setPeriodHolidays] = useState<{ province: string; name: string; dateIso: string }[]>([]);
+  useEffect(() => {
+    if (!form.payPeriodStart || !form.payPeriodEnd) return;
+    let live = true;
+    void statHolidaysInPeriodAction(form.payPeriodStart, form.payPeriodEnd).then((rows) => { if (live) setPeriodHolidays(rows); });
+    return () => { live = false; };
+  }, [form.payPeriodStart, form.payPeriodEnd]);
+  const runProvinces = new Set(form.lines.map((l) => l.province));
+  const holidaysOnRun = periodHolidays.filter((h) => runProvinces.has(h.province));
 
   /** Fill vacation/sick hours and pay from approved leave in the period; salaried regular hours/pay shrink to match. */
   async function pullLeave(start: string, end: string) {
@@ -254,6 +266,17 @@ export function PayRunForm({
         <span className="text-[0.75rem] text-muted-ink">{leaveNote ?? "Approved paid vacation and sick leave in the pay period is added automatically; click to refresh it (this re-sets leave and salaried regular pay)."}</span>
       </div>
 
+      {holidaysOnRun.length > 0 && (
+        <div className="rounded-md border border-paper-300 bg-paper-100 px-3.5 py-2.5 text-[0.8125rem] leading-6 text-ink-800">
+          <span className="font-medium">Statutory holidays in this pay period:</span>{" "}
+          {holidaysOnRun.map((h) => `${h.name} (${h.province}, ${h.dateIso})`).join(" · ")}.
+          <div className="text-[0.75rem] text-muted-ink">
+            For anyone who worked one, enter the hours in “Stat hrs worked” (open the line’s extra fields) and press Calculate:
+            hourly staff are paid double for those hours (take them out of regular hours); salaried staff get the extra day’s pay on top of salary.
+          </div>
+        </div>
+      )}
+
       <Field label="Memo" hint="Appears on the journal entry.">
         <input value={form.memo} onChange={(e) => setField("memo", e.target.value)} className={inputClass} placeholder="Bi-weekly payroll" />
       </Field>
@@ -339,8 +362,8 @@ export function PayRunForm({
                             <LabeledCell label="Sick hrs" value={line.sickHours} onChange={(v) => setLine(index, { sickHours: v })} disabled={!line.include} />
                             <LabeledCell label="Bonus" value={line.bonus} onChange={(v) => setLine(index, { bonus: v })} disabled={!line.include} />
                             <LabeledCell label="Retroactive pay" value={line.retroactivePay} onChange={(v) => setLine(index, { retroactivePay: v })} disabled={!line.include} />
-                            <LabeledCell label="Stat holiday pay" value={line.statutoryHolidayPay} onChange={(v) => setLine(index, { statutoryHolidayPay: v })} disabled={!line.include} />
-                            <LabeledCell label="Stat hrs" value={line.statutoryHolidayHours} onChange={(v) => setLine(index, { statutoryHolidayHours: v })} disabled={!line.include} />
+                            <LabeledCell label="Stat holiday pay (worked = 2×)" value={line.statutoryHolidayPay} onChange={(v) => setLine(index, { statutoryHolidayPay: v })} disabled={!line.include} />
+                            <LabeledCell label="Stat hrs worked" value={line.statutoryHolidayHours} onChange={(v) => setLine(index, { statutoryHolidayHours: v })} disabled={!line.include} />
                             <LabeledCell label={`Empr ${pension}`} value={line.employerCpp} onChange={(v) => setLine(index, { employerCpp: v })} disabled={!line.include} />
                             <LabeledCell label={`Empr ${pension}2`} value={line.employerCpp2} onChange={(v) => setLine(index, { employerCpp2: v })} disabled={!line.include} />
                             <LabeledCell label="Empr EI" value={line.employerEi} onChange={(v) => setLine(index, { employerEi: v })} disabled={!line.include} />

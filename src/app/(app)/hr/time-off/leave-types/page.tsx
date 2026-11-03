@@ -16,7 +16,7 @@ export default async function LeaveTypesPage() {
     <>
       <PageHeader
         title="Leave types"
-        breadcrumb={[{ label: "HR", href: "/hr/employees" }, { label: "Time off", href: "/hr/time-off" }, { label: "Leave types" }]}
+        breadcrumb={[{ label: "Payroll", href: "/hr/employees" }, { label: "Time off", href: "/hr/time-off" }, { label: "Leave types" }]}
         description="The leave policies employees can request against. Every new company starts with a common Canadian set — vacation, sick, and the job-protected statutory leaves — which are all editable here."
         actions={canEdit ? <AddLeaveTypeButton /> : undefined}
       />

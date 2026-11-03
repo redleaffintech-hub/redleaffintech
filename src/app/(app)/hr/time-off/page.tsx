@@ -47,7 +47,7 @@ export default async function TimeOffPage({ searchParams }: { searchParams: Prom
     <>
       <PageHeader
         title="Time off"
-        breadcrumb={[{ label: "HR", href: "/hr/employees" }, { label: "Time off" }]}
+        breadcrumb={[{ label: "Payroll", href: "/hr/employees" }, { label: "Time off" }]}
         description="Leave requests, balances and policies. Approving a request deducts its hours from the employee's leave balance; it does not change any pay run."
         actions={
           canEdit ? (

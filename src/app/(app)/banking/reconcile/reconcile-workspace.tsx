@@ -514,7 +514,7 @@ function Workspace({
         currency={currency}
         cardMoney={cardMoney}
         unmatchedStatement={unmatchedStatement}
-        canComplete={inProgress && canWrite && summary.statementBalanceValid && bridge.differenceCents === 0}
+        canComplete={inProgress && canWrite && bridge.differenceCents === 0}
         pending={pending}
         onComplete={() => run(() => completeReconciliationAction(summary.id, summary.version))}
       />
@@ -707,10 +707,11 @@ function SummaryCard({
 
           {inProgress && (
             <>
-              {!summary.statementBalanceValid && (
-                <p className="mt-3 text-[0.75rem] text-caution">
-                  Statement opening + credits − debits is {plain(calculated)}, but the closing balance entered is{" "}
-                  {plain(summary.closingBalanceCents)}. Import the whole statement or correct the figures.
+              {!summary.statementBalanceValid && summary.statementCreditsCents + summary.statementDebitsCents > 0 && (
+                <p className="mt-3 text-[0.75rem] text-muted-ink">
+                  Note: the imported statement lines come to {plain(calculated)}, while the closing balance entered is{" "}
+                  {plain(summary.closingBalanceCents)}. This does not stop you closing; import the rest of the
+                  statement if lines are missing.
                 </p>
               )}
               {unmatchedStatement > 0 && (

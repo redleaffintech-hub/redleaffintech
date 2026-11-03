@@ -18,7 +18,7 @@
 
 import type { Tx } from "@/lib/db";
 import { SYSTEM_ACCOUNTS } from "@/lib/enums";
-import { getSystemAccount, postJournal } from "@/server/accounting/ledger";
+import { getSystemAccount, postJournal, reverseJournal } from "@/server/accounting/ledger";
 import { toUtcDay } from "@/lib/dates";
 
 export interface StockMovementInput {
@@ -243,9 +243,12 @@ export async function adjustStock(
     offsetAccountId: string;
     reason: string;
     userId?: string | null;
+    /** Journal and movement source; "OPENING" marks an opening-stock entry that can later be edited. */
+    sourceType?: "ADJUSTMENT" | "OPENING";
   },
 ) {
   if (input.quantityMilli === 0) throw new Error("Enter a non-zero quantity to adjust.");
+  const sourceType = input.sourceType ?? "ADJUSTMENT";
 
   const date = toUtcDay(input.date);
   const item = await loadItem(tx, input.companyId, input.itemId);
@@ -260,8 +263,8 @@ export async function adjustStock(
   const entry = await postJournal(tx, {
     companyId: input.companyId,
     date,
-    memo: `Inventory adjustment — ${input.reason}`,
-    sourceType: "ADJUSTMENT",
+    memo: `${sourceType === "OPENING" ? "Opening stock" : "Inventory adjustment"} — ${input.reason}`,
+    sourceType,
     createdById: input.userId,
     lines: increasing
       ? [
@@ -278,7 +281,7 @@ export async function adjustStock(
     companyId: input.companyId,
     itemId: input.itemId,
     date,
-    sourceType: "ADJUSTMENT",
+    sourceType,
     sourceId: entry.id,
     sourceNumber: entry.entryNo,
     journalEntryId: entry.id,
@@ -290,6 +293,56 @@ export async function adjustStock(
     : await recordAdjustmentOut(tx, { ...movementInput, quantityMilli: -input.quantityMilli, totalCostCents });
 
   return { entry, movement };
+}
+
+/** The live opening-stock entry for an item: an OPENING movement that has not been reversed. */
+export async function currentOpeningStock(tx: Tx, companyId: string, itemId: string) {
+  const openings = await tx.inventoryMovement.findMany({
+    where: { companyId, itemId, sourceType: "OPENING" },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+  });
+  const reversed = new Set(openings.filter((m) => m.type === "REVERSAL").map((m) => m.sourceId));
+  return openings.find((m) => m.type !== "REVERSAL" && !reversed.has(m.sourceId)) ?? null;
+}
+
+/**
+ * Set (or edit) an item's opening stock. The first call posts Dr Inventory Asset / Cr Opening
+ * Balance Equity. Editing reverses the earlier opening entry and its stock movement, then posts
+ * the new figures, so history is kept and the average cost is re-derived. A quantity of 0 just
+ * removes the opening stock.
+ */
+export async function setOpeningStock(
+  tx: Tx,
+  input: { companyId: string; itemId: string; date: Date | string; quantityMilli: number; unitCostCents: number; userId?: string | null },
+) {
+  if (input.quantityMilli < 0) throw new Error("Opening quantity cannot be negative.");
+  if (input.quantityMilli > 0 && input.unitCostCents <= 0) throw new Error("Enter the unit cost of the opening stock.");
+
+  const existing = await currentOpeningStock(tx, input.companyId, input.itemId);
+  if (existing) {
+    if (existing.journalEntryId) {
+      await reverseJournal(tx, existing.journalEntryId, {
+        companyId: input.companyId,
+        memo: "Reversal of opening stock being edited",
+        userId: input.userId,
+      });
+    }
+    await reverseStockMovement(tx, existing.id, input.userId);
+  }
+  if (input.quantityMilli === 0) return null;
+
+  const obe = await getSystemAccount(tx, input.companyId, SYSTEM_ACCOUNTS.OPENING_BALANCE_EQUITY);
+  return adjustStock(tx, {
+    companyId: input.companyId,
+    itemId: input.itemId,
+    date: input.date,
+    quantityMilli: input.quantityMilli,
+    unitCostCents: input.unitCostCents,
+    offsetAccountId: obe.id,
+    reason: "Opening stock",
+    userId: input.userId,
+    sourceType: "OPENING",
+  });
 }
 
 /** The running average cost in effect at the end of `date` (posting order within the day). */

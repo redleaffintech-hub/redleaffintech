@@ -3,10 +3,12 @@ import { db } from "@/lib/db";
 import { requireVisible } from "@/server/auth/context";
 import { CAPABILITIES, can } from "@/lib/permissions";
 import { SYSTEM_ACCOUNTS, ITEM_UNITS } from "@/lib/enums";
-import { today } from "@/lib/dates";
+import { isoDate, today } from "@/lib/dates";
 import { Card, EmptyState, Money, PageHeader, Table, Td, Th, Tr } from "@/components/ui";
 import { ReconciliationBanner } from "@/components/report-shell";
 import { AdjustStockButton } from "./adjust-stock-dialog";
+import { OpeningStockButton } from "./opening-stock-dialog";
+import { currentOpeningStock } from "@/server/inventory/costing";
 import { inventoryAdjustmentFormOptions } from "./actions";
 import { itemUsageCounts } from "@/server/documents/item-usage";
 import { CatalogueRowActions, NewItemButton, type CatalogueOptions } from "../company/products-services/catalogue-client";
@@ -43,6 +45,18 @@ export default async function InventoryPage() {
         })
       : Promise.resolve([]),
   ]);
+
+  const openingByItem = new Map<string, { dateIso: string; quantity: string; unitCost: string }>();
+  for (const item of items) {
+    const opening = await db.$transaction((tx) => currentOpeningStock(tx, company.id, item.id));
+    if (opening) {
+      openingByItem.set(item.id, {
+        dateIso: isoDate(opening.date),
+        quantity: String(opening.quantityMilli / 1000),
+        unitCost: (opening.unitCostCents / 100).toFixed(2),
+      });
+    }
+  }
 
   const rows = items.map((item) => ({
     ...item,
@@ -158,6 +172,7 @@ export default async function InventoryPage() {
                   <Td align="right"><Money cents={item.valueCents} currency={company.baseCurrency} bold /></Td>
                   <Td align="right">
                     <span className="inline-flex items-center gap-1">
+                      {manage && <OpeningStockButton itemId={item.id} itemName={`${item.code} — ${item.name}`} current={openingByItem.get(item.id) ?? null} />}
                       <AdjustStockButton itemId={item.id} itemName={`${item.code} — ${item.name}`} averageCostCents={item.averageCostCents} accounts={accounts} />
                       {manage && (
                         <CatalogueRowActions

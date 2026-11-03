@@ -40,7 +40,12 @@ export function MainNav({
   const allGroups: NavGroup[] = isAccountant
     ? [NAV_GROUPS[0], ACCOUNTANT_GROUP, ...NAV_GROUPS.slice(1)]
     : NAV_GROUPS;
-  const groups = allGroups.filter((group) => !group.module || enabledModules.includes(group.module));
+  const groups = allGroups
+    .filter((group) => !group.module || enabledModules.includes(group.module))
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) => !item.module || enabledModules.includes(item.module)),
+    }));
 
   return (
     <nav aria-label="Modules" className="border-t border-paper-200">

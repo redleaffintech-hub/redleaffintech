@@ -21,7 +21,7 @@ export default async function DepartmentsPage() {
     <>
       <PageHeader
         title="Departments"
-        breadcrumb={[{ label: "HR", href: "/hr/employees" }, { label: "Departments" }]}
+        breadcrumb={[{ label: "Payroll", href: "/hr/employees" }, { label: "Departments" }]}
         description="Group employees for reporting. A department cannot be deleted while employees are assigned to it."
         actions={canEdit ? <AddDepartmentButton /> : undefined}
       />

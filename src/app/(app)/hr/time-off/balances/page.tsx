@@ -41,7 +41,7 @@ export default async function LeaveBalancesPage() {
     <>
       <PageHeader
         title="Leave balances"
-        breadcrumb={[{ label: "HR", href: "/hr/employees" }, { label: "Time off", href: "/hr/time-off" }, { label: "Balances" }]}
+        breadcrumb={[{ label: "Payroll", href: "/hr/employees" }, { label: "Time off", href: "/hr/time-off" }, { label: "Balances" }]}
         description="Every employee's entitlement, accrual, carry-forward, usage and remaining balance — vacation and sick leave tracked separately, recalculated automatically from the leave policy and approved requests."
         actions={
           canEdit ? (

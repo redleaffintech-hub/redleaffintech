@@ -6,7 +6,7 @@ import { db } from "@/lib/db";
 import { toCents } from "@/lib/money";
 import { CAPABILITIES } from "@/lib/permissions";
 import { recordAudit, requireCapability } from "@/server/auth/context";
-import { adjustStock } from "@/server/inventory/costing";
+import { adjustStock, setOpeningStock } from "@/server/inventory/costing";
 
 export async function inventoryAdjustmentFormOptions() {
   const { company } = await requireCapability(CAPABILITIES.COMPANY_SETTINGS);
@@ -65,6 +65,60 @@ export async function adjustStockAction(payload: string) {
       entityType: "ServiceItem",
       entityId: input.itemId,
       summary: `Stock adjusted ${quantityMilli > 0 ? "+" : ""}${quantity} — ${input.reason}`,
+    });
+
+    revalidatePath("/inventory");
+    revalidatePath("/company/products-services");
+    revalidatePath("/");
+    return { ok: true as const };
+  } catch (error) {
+    return { error: (error as Error).message };
+  }
+}
+
+const openingSchema = z.object({
+  itemId: z.string().min(1),
+  date: z.string().min(1, "Choose the opening date."),
+  quantity: z.string().trim().min(1, "Enter the opening quantity (0 to remove it)."),
+  unitCost: z.string().trim().optional(),
+});
+
+/** Create or edit an item's opening stock (quantity and unit cost on an opening date). */
+export async function setOpeningStockAction(payload: string) {
+  const { company, user } = await requireCapability(CAPABILITIES.COMPANY_SETTINGS);
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(payload);
+  } catch {
+    return { error: "Could not read the opening stock details." };
+  }
+  const parsed = openingSchema.safeParse(raw);
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Check the opening stock details." };
+  const input = parsed.data;
+
+  const quantity = Number(input.quantity);
+  if (!Number.isFinite(quantity) || quantity < 0) return { error: "Enter a quantity of 0 or more." };
+
+  try {
+    await db.$transaction((tx) =>
+      setOpeningStock(tx, {
+        companyId: company.id,
+        itemId: input.itemId,
+        date: input.date,
+        quantityMilli: Math.round(quantity * 1000),
+        unitCostCents: input.unitCost ? toCents(input.unitCost) : 0,
+        userId: user.id,
+      }),
+    );
+
+    await recordAudit({
+      companyId: company.id,
+      userId: user.id,
+      action: "UPDATE",
+      entityType: "ServiceItem",
+      entityId: input.itemId,
+      summary: `Opening stock set to ${quantity}${input.unitCost ? ` at ${input.unitCost}` : ""}`,
     });
 
     revalidatePath("/inventory");

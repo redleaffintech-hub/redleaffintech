@@ -31,7 +31,7 @@ export default async function LeavePoliciesPage() {
     <>
       <PageHeader
         title="Leave policies"
-        breadcrumb={[{ label: "HR", href: "/hr/employees" }, { label: "Time off", href: "/hr/time-off" }, { label: "Policies" }]}
+        breadcrumb={[{ label: "Payroll", href: "/hr/employees" }, { label: "Time off", href: "/hr/time-off" }, { label: "Policies" }]}
         description="How much leave each employee earns, who is eligible, how a mid-year joiner is pro-rated and what carries forward. Vacation and sick leave have separate policies and separate balances."
       />
 

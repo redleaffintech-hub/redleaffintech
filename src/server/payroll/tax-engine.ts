@@ -319,3 +319,25 @@ export function suggestOvertimePayCents(
 
   return Math.round(hourlyRateCents * overtimeHours * (multiplierMicro / 1_000_000));
 }
+
+/** Pay for hours worked on a statutory holiday is double the normal rate. */
+export const STAT_HOLIDAY_WORKED_MULTIPLIER_MICRO = 2_000_000;
+
+/**
+ * Suggested pay for hours worked on a statutory holiday ("double pay for that day").
+ * Hourly employees: those hours are paid at 2x their rate, in place of regular pay for the
+ * same hours. Salaried employees already receive the day within their salary, so only the
+ * extra 1x premium is added. Same hourly-equivalent approximation as overtime for salaries.
+ */
+export function suggestStatHolidayWorkedPayCents(employee: EmployeeForOvertime, statHours: number): number {
+  if (statHours <= 0) return 0;
+  const hourlyRateCents =
+    employee.compensationType === "HOURLY"
+      ? employee.payRateCents
+      : employee.payRateCents / ((employee.standardHoursPerWeek || 40) * 52);
+  const multiplier =
+    employee.compensationType === "HOURLY"
+      ? STAT_HOLIDAY_WORKED_MULTIPLIER_MICRO
+      : STAT_HOLIDAY_WORKED_MULTIPLIER_MICRO - 1_000_000;
+  return Math.round(hourlyRateCents * statHours * (multiplier / 1_000_000));
+}

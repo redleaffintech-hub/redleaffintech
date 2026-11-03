@@ -54,7 +54,7 @@ export default async function EmployeesPage({ searchParams }: { searchParams: Pr
     <>
       <PageHeader
         title="Employees"
-        breadcrumb={[{ label: "HR" }, { label: "Employees" }]}
+        breadcrumb={[{ label: "Payroll" }, { label: "Employees" }]}
         description="Employee records for this company — personal and employment details, org chart and time off. There is no payroll engine yet: nothing here calculates deductions or posts to the ledger."
         actions={
           can(role, CAPABILITIES.HR) ? (

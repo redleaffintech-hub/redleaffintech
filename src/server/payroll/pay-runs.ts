@@ -31,7 +31,7 @@ import { toUtcDay } from "@/lib/dates";
 import { postJournal, reverseJournal } from "@/server/accounting/ledger";
 import { nextNumber } from "@/server/documents/numbering";
 import type { PayFrequency } from "@/lib/hr-enums";
-import { computeCppAndEi, currentPayrollStatutoryRate, currentTaxBrackets, periodIncomeTaxCents, suggestOvertimePayCents } from "@/server/payroll/tax-engine";
+import { computeCppAndEi, currentPayrollStatutoryRate, currentTaxBrackets, periodIncomeTaxCents, suggestOvertimePayCents, suggestStatHolidayWorkedPayCents } from "@/server/payroll/tax-engine";
 import { payrollYtd } from "@/server/payroll/ytd";
 import { defaultPeriodHours, hourlyRegularPayCents, impliedHours, medicalInsuranceCents } from "@/lib/payroll-hours";
 
@@ -54,6 +54,7 @@ export interface PayRunLineInput {
   sickPayCents?: number;
   bonusCents?: number;
   retroactivePayCents?: number;
+  /** Omit (or 0) with statutoryHolidayHours set to have this suggested at double pay for the hours worked. */
   statutoryHolidayPayCents?: number;
   /** Overrides the employee's defaultOvertimeRateMultiplierMicro for this line's overtime suggestion. */
   otRateMultiplierMicro?: number | null;
@@ -234,7 +235,9 @@ async function resolveLines(tx: Tx, companyId: string, payDate: Date, lines: Pay
       sickPayCents: line.sickPayCents ?? 0,
       bonusCents: line.bonusCents ?? 0,
       retroactivePayCents: line.retroactivePayCents ?? 0,
-      statutoryHolidayPayCents: line.statutoryHolidayPayCents ?? 0,
+      statutoryHolidayPayCents:
+        line.statutoryHolidayPayCents ||
+        (line.statutoryHolidayHours ? suggestStatHolidayWorkedPayCents(employee, line.statutoryHolidayHours) : 0),
     };
     const grossPayCents = sumEarnings(earnings);
 

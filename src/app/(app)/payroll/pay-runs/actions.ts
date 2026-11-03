@@ -190,6 +190,7 @@ interface PreviewLineResult {
   vacationHours?: number | null;
   sickHours?: number | null;
   statutoryHolidayHours?: number | null;
+  statutoryHolidayPayCents?: number;
   netPayCents?: number;
 }
 
@@ -240,12 +241,31 @@ export async function previewLineAction(payload: string): Promise<PreviewLineRes
       vacationHours: resolved.vacationHours,
       sickHours: resolved.sickHours,
       statutoryHolidayHours: resolved.statutoryHolidayHours,
+      statutoryHolidayPayCents: resolved.statutoryHolidayPayCents,
       netPayCents: resolved.netPayCents,
     };
   } catch (caught) {
     if (caught instanceof PayRunError) return { error: caught.message };
     throw caught;
   }
+}
+
+/** Statutory holidays inside a pay period, per province, so stat hours can be marked against real dates. */
+export async function statHolidaysInPeriodAction(start: string, end: string) {
+  await requireCapability(CAPABILITIES.PAYROLL);
+  const from = new Date(`${start}T00:00:00.000Z`);
+  const to = new Date(`${end}T00:00:00.000Z`);
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || to < from) return [];
+  const { statutoryHolidays } = await import("@/server/hr/employment-standards");
+  const rows: { province: string; name: string; dateIso: string }[] = [];
+  for (const province of ["ON", "BC", "AB", "SK", "MB", "QC", "NB", "NS", "PE", "NL", "YT", "NT", "NU"]) {
+    for (const year of new Set([from.getUTCFullYear(), to.getUTCFullYear()])) {
+      for (const h of statutoryHolidays(province, year)) {
+        if (h.date >= from && h.date <= to) rows.push({ province, name: h.name, dateIso: h.date.toISOString().slice(0, 10) });
+      }
+    }
+  }
+  return rows;
 }
 
 /** Approved paid vacation/sick leave inside the pay period, as pay-line figures. */

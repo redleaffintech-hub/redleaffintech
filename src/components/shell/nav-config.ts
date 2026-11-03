@@ -8,6 +8,8 @@ export interface NavItem {
   capability?: Capability;
   badgeKey?: "bankQueue" | "overdue" | "approvals";
   exact?: boolean;
+  /** For a group that mixes products (Payroll): the item is hidden when this module is not enabled. */
+  module?: ModuleId;
 }
 
 export interface NavGroup {
@@ -94,23 +96,17 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [{ label: "All reports", href: "/reports", capability: CAPABILITIES.REPORTS, exact: true }],
   },
   {
-    label: "HR",
-    module: "HR",
-    icon: "users",
-    items: [
-      { label: "Employees", href: "/hr/employees", capability: CAPABILITIES.HR, exact: true },
-      { label: "Departments", href: "/hr/departments", capability: CAPABILITIES.HR },
-      { label: "Time off", href: "/hr/time-off", capability: CAPABILITIES.HR },
-      { label: "Leave types", href: "/hr/time-off/leave-types", capability: CAPABILITIES.HR },
-    ],
-  },
-  {
+    // HR and payroll are one tab. The group has no module of its own: each item is gated by
+    // its module and by the capability the user holds, so a Secondary user (HR but no payroll)
+    // sees only the people pages.
     label: "Payroll",
-    module: "PAYROLL",
     icon: "wallet",
     items: [
-      { label: "Pay runs", href: "/payroll/pay-runs", capability: CAPABILITIES.PAYROLL, exact: true },
-      { label: "Tax brackets", href: "/payroll/tax-brackets", capability: CAPABILITIES.PAYROLL, exact: true },
+      { label: "Pay runs", href: "/payroll/pay-runs", capability: CAPABILITIES.PAYROLL, module: "PAYROLL" },
+      { label: "Employees", href: "/hr/employees", capability: CAPABILITIES.HR, module: "HR", exact: true },
+      { label: "Departments", href: "/hr/departments", capability: CAPABILITIES.HR, module: "HR" },
+      { label: "Time off", href: "/hr/time-off", capability: CAPABILITIES.HR, module: "HR", exact: true },
+      { label: "Leave types", href: "/hr/time-off/leave-types", capability: CAPABILITIES.HR, module: "HR" },
     ],
   },
   {
