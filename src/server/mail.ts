@@ -1,10 +1,10 @@
 import "server-only";
 
+import nodemailer from "nodemailer";
+
 /**
- * Outbound mail through Resend's HTTP API (no SDK, no extra dependency).
- *
- * Inert until RESEND_API_KEY is set, and the sending domain (redleaffintech.com) must be
- * verified in Resend for MAIL_FROM to be accepted. A mail failure never throws: callers
+ * Outbound mail. SMTP (Zoho Mail) is used when SMTP_HOST is set; otherwise Resend's HTTP API
+ * when RESEND_API_KEY is set; otherwise nothing is sent. A mail failure never throws: callers
  * carry on and show the person whether it went out.
  */
 export type MailInput = {
@@ -18,10 +18,38 @@ export type MailInput = {
 export const MAIL_FROM = process.env.MAIL_FROM || "Red Leaf Fintech <info@redleaffintech.com>";
 
 export function mailConfigured() {
-  return Boolean(process.env.RESEND_API_KEY);
+  return Boolean(process.env.SMTP_HOST || process.env.RESEND_API_KEY);
+}
+
+async function sendSmtp(input: MailInput): Promise<{ sent: boolean; reason?: string }> {
+  const port = Number(process.env.SMTP_PORT || 465);
+  try {
+    const transport = nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port,
+      secure: port === 465,
+      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+      connectionTimeout: 10_000,
+      socketTimeout: 15_000,
+    });
+    await transport.sendMail({
+      from: MAIL_FROM,
+      to: input.to,
+      cc: input.cc?.length ? input.cc : undefined,
+      replyTo: "info@redleaffintech.com",
+      subject: input.subject,
+      html: input.html,
+      text: input.text,
+    });
+    return { sent: true };
+  } catch (error) {
+    console.error("[mail] SMTP send failed", error);
+    return { sent: false, reason: "The mail server refused or could not be reached." };
+  }
 }
 
 export async function sendMail(input: MailInput): Promise<{ sent: boolean; reason?: string }> {
+  if (process.env.SMTP_HOST) return sendSmtp(input);
   const key = process.env.RESEND_API_KEY;
   if (!key) return { sent: false, reason: "Email is not configured on this server." };
   try {
