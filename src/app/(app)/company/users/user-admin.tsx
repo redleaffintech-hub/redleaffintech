@@ -15,7 +15,7 @@ import {
 export function InviteUserForm({ seatsLeft }: { seatsLeft: number }) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
-  const [invited, setInvited] = useState<string | null>(null);
+  const [invited, setInvited] = useState<{ email: string; emailed: boolean; note?: string } | null>(null);
 
   return (
     <Card>
@@ -27,7 +27,7 @@ export function InviteUserForm({ seatsLeft }: { seatsLeft: number }) {
           const result = await inviteUserAction(formData);
           if (result?.error) setError(result.error);
           else {
-            setInvited(email);
+            setInvited({ email, emailed: Boolean(result?.emailed), note: result?.emailNote });
             router.refresh();
           }
         }}
@@ -49,7 +49,7 @@ export function InviteUserForm({ seatsLeft }: { seatsLeft: number }) {
         <Field
           label="Temporary password"
           required
-          hint="This build sends no email — hand this over directly. They will be asked to choose their own password at first sign-in."
+          hint="Emailed to them, with you copied. They will be asked to choose their own password at first sign-in. Ignored if they already have an account."
         >
           <input name="temporaryPassword" type="text" minLength={8} className={inputClass} required />
         </Field>
@@ -61,7 +61,8 @@ export function InviteUserForm({ seatsLeft }: { seatsLeft: number }) {
         )}
         {invited && (
           <p className="rounded-md bg-positive-soft px-3 py-2 text-[0.8125rem] text-positive">
-            {invited} can now sign in. Their membership stays &ldquo;invited&rdquo; until you activate it.
+            {invited.email} can now sign in.{" "}
+            {invited.emailed ? "A notification email was sent to them, with you copied." : `No email was sent${invited.note ? ` (${invited.note})` : ""}. Pass the temporary password on directly.`}
           </p>
         )}
 

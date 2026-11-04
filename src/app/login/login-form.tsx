@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useFormStatus } from "react-dom";
 import { loginAction } from "./actions";
 import { Button, Field, inputClass } from "@/components/ui";
+import { PasswordInput } from "@/components/password-input";
 
 export function LoginForm() {
   const [email, setEmail] = useState("");
@@ -41,9 +42,8 @@ export function LoginForm() {
             </Link>
           }
         >
-          <input
+          <PasswordInput
             name="password"
-            type="password"
             autoComplete="current-password"
             required
             value={password}

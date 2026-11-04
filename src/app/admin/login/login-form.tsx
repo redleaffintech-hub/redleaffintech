@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useFormStatus } from "react-dom";
 import { adminLoginAction } from "./actions";
 import { AdminField, adminInputClass, FormError } from "@/components/admin/forms";
+import { PasswordInput } from "@/components/password-input";
 
 /**
  * Sign-in is a two-step form that looks like one.
@@ -43,10 +44,9 @@ export function AdminLoginForm() {
       </AdminField>
 
       <AdminField label="Password" required htmlFor="admin-password">
-        <input
+        <PasswordInput
           id="admin-password"
           name="password"
-          type="password"
           autoComplete="current-password"
           required
           readOnly={mfaRequired}

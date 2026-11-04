@@ -6,10 +6,11 @@ import { db } from "@/lib/db";
 import { addDays, isoDate } from "@/lib/dates";
 import { applyFiscalYearChange, planFiscalYearChange } from "@/server/accounting/fiscal-calendar";
 import { normalizeCurrency } from "@/lib/currency";
-import { COMPANY_ROLES, PROVINCES } from "@/lib/enums";
+import { COMPANY_ROLES, PROVINCES, ROLE_LABELS } from "@/lib/enums";
 import { CAPABILITIES } from "@/lib/permissions";
 import { assignmentFromPlan, sellablePlanByCode } from "@/server/plans/catalogue";
 import { hashPassword } from "@/server/auth/password";
+import { escapeHtml, sendMail } from "@/server/mail";
 import { assertSeatAvailable, SeatLimitError } from "@/server/seats/limits";
 import { recordAudit, requireCapability } from "@/server/auth/context";
 import { configureFilingYear, currentFilingYear } from "@/server/tax/filing-years";
@@ -463,8 +464,8 @@ const inviteSchema = z.object({
 });
 
 /**
- * There is no outbound mail in this build, so access is granted directly with a
- * temporary password the admin passes on. The membership row is the
+ * Access is granted directly with a temporary password, and the person is emailed (when mail
+ * is configured) with the granting user copied in. The membership row is the
  * authorisation — creating the user alone grants nothing.
  */
 export async function inviteUserAction(formData: FormData) {
@@ -516,8 +517,64 @@ export async function inviteUserAction(formData: FormData) {
     summary: `${email} granted ${input.role.toLowerCase()} access`,
   });
 
+  // Tell the person by email, copying whoever granted the access. A failed send never undoes
+  // the grant; the form shows whether the mail went out.
+  const mail = await sendMail(
+    inviteMail({
+      to: email,
+      cc: user.email && user.email.toLowerCase() !== email ? [user.email] : [],
+      name: input.name,
+      companyName: company.name,
+      grantedBy: user.name || user.email,
+      roleLabel: ROLE_LABELS[input.role],
+      temporaryPassword: existingUser ? null : input.temporaryPassword,
+    }),
+  );
+
   revalidatePath("/company/users");
-  return { ok: true };
+  return { ok: true, emailed: mail.sent, emailNote: mail.sent ? undefined : mail.reason };
+}
+
+function inviteMail(args: {
+  to: string;
+  cc: string[];
+  name: string;
+  companyName: string;
+  grantedBy: string;
+  roleLabel: string;
+  temporaryPassword: string | null;
+}) {
+  const site = process.env.NEXT_PUBLIC_SITE_URL ?? "https://redleaffintech.com";
+  const loginUrl = `${site}/login`;
+  const e = escapeHtml;
+  const passwordLine = args.temporaryPassword
+    ? `Temporary password: ${args.temporaryPassword} (you will be asked to choose your own when you first sign in).`
+    : "You already have a Red Leaf Fintech account, so sign in with your existing password.";
+  return {
+    to: args.to,
+    cc: args.cc,
+    subject: `${args.grantedBy} gave you access to ${args.companyName} on Red Leaf Fintech`,
+    text: [
+      `Hello ${args.name},`,
+      "",
+      `${args.grantedBy} has given you ${args.roleLabel} access to ${args.companyName} on Red Leaf Fintech.`,
+      "",
+      `Sign in: ${loginUrl}`,
+      `Email: ${args.to}`,
+      passwordLine,
+      "",
+      "If you were not expecting this, reply to this email.",
+      "",
+      "Red Leaf Fintech",
+    ].join("\n"),
+    html: `<div style="font-family:Arial,sans-serif;font-size:14px;color:#1f2933;line-height:1.5">
+<p>Hello ${e(args.name)},</p>
+<p><strong>${e(args.grantedBy)}</strong> has given you <strong>${e(args.roleLabel)}</strong> access to <strong>${e(args.companyName)}</strong> on Red Leaf Fintech.</p>
+<p><a href="${e(loginUrl)}">Sign in to Red Leaf Fintech</a></p>
+<p>Email: ${e(args.to)}<br>${e(passwordLine)}</p>
+<p style="color:#667">If you were not expecting this, reply to this email.</p>
+<p>Red Leaf Fintech</p></div>`,
+  };
 }
 
 export async function setMembershipRoleAction(membershipId: string, role: string) {
