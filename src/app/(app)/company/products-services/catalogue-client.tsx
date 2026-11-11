@@ -6,7 +6,7 @@ import clsx from "clsx";
 import { Button, Field, inputClass } from "@/components/ui";
 import { Modal } from "@/components/modal";
 import { Icon } from "@/components/shell/icons";
-import { ITEM_TYPES, ITEM_TYPE_LABELS, itemUnitLabel, type ItemType } from "@/lib/enums";
+import { itemUnitLabel } from "@/lib/enums";
 import { currencySymbol } from "@/lib/money";
 import { useMoney } from "@/components/currency-context";
 import { createItemAction, deleteItemAction, setItemActiveAction, updateItemAction } from "./actions";
@@ -52,7 +52,15 @@ export interface CatalogueItem {
   trackInventory: boolean;
   quantityOnHandMilli: number;
   averageCostCents: number;
+  vin?: string;
 }
+
+/** The three product kinds the form offers; they map onto the stored type + trackInventory pair. */
+const PRODUCT_KINDS = [
+  { value: "INVENTORY", label: "Inventory product", help: "Quantity is tracked. A purchase adds stock, a sale reduces it and posts cost of goods sold." },
+  { value: "NON_INVENTORY", label: "Non-inventory product", help: "No quantity tracking. Can be chosen on bills and invoices (e.g. a warranty or a fee) without touching stock." },
+  { value: "SERVICE", label: "Service", help: "No quantity tracking. Labour, repairs, inspection and other work you charge for." },
+] as const;
 
 const BLANK: CatalogueItem = {
   id: "",
@@ -181,8 +189,11 @@ export function ItemDialog({
   const money = useMoney();
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [type, setType] = useState<string>(item.type);
-  const [track, setTrack] = useState(item.trackInventory);
+  const [kind, setKind] = useState<string>(
+    item.type === "SERVICE" ? "SERVICE" : item.trackInventory ? "INVENTORY" : "NON_INVENTORY",
+  );
+  const type = kind === "SERVICE" ? "SERVICE" : "PRODUCT";
+  const track = kind === "INVENTORY";
   const [openQty, setOpenQty] = useState("");
   const [openCost, setOpenCost] = useState("");
   const isNew = item.id === "";
@@ -212,18 +223,19 @@ export function ItemDialog({
         className="space-y-4"
       >
         <div className="grid gap-3 sm:grid-cols-3">
-          <Field label="Type" required>
+          <Field label="Product type" required hint={PRODUCT_KINDS.find((k) => k.value === kind)?.help}>
             <select
-              name="type"
-              value={type}
-              onChange={(e) => setType(e.target.value)}
+              value={kind}
+              onChange={(e) => setKind(e.target.value)}
               className={clsx(inputClass, "pr-8")}
               required
             >
-              {ITEM_TYPES.map((value) => (
-                <option key={value} value={value}>{ITEM_TYPE_LABELS[value as ItemType]}</option>
+              {PRODUCT_KINDS.map((k) => (
+                <option key={k.value} value={k.value}>{k.label}</option>
               ))}
             </select>
+            <input type="hidden" name="type" value={type} />
+            {track && <input type="hidden" name="trackInventory" value="on" />}
           </Field>
           <Field label="Code / SKU" required hint="Unique within this company.">
             <input name="code" defaultValue={item.code} maxLength={40} required className={clsx(inputClass, "uppercase tnum")} placeholder="CONSULT-01" />
@@ -307,29 +319,23 @@ export function ItemDialog({
           </Field>
         </div>
 
-        {type === "PRODUCT" && (
-          <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-paper-300 p-3">
-            <input
-              type="checkbox"
-              name="trackInventory"
-              checked={track}
-              onChange={(e) => setTrack(e.target.checked)}
-              className="mt-0.5 h-3.5 w-3.5 accent-[color:var(--color-brand-600)]"
-            />
-            <span className="text-[0.8125rem] leading-5 text-ink-800">
-              Track inventory
-              <span className="mt-0.5 block text-[0.75rem] text-muted-ink">
-                A bill for this item adds stock at weighted-average cost instead of expensing it; an invoice posts
-                cost of goods sold and reduces stock automatically. Credit notes do not yet adjust stock.
-                {item.trackInventory && (
-                  <span className="mt-1 block font-medium text-ink-700">
-                    On hand: {(item.quantityOnHandMilli / 1000).toLocaleString("en-CA")} {itemUnitLabel(item.unit)}
-                    {" · "}Avg cost: {money.format(item.averageCostCents)}
-                  </span>
-                )}
-              </span>
-            </span>
-          </label>
+        {track && (
+          <div className="space-y-3 rounded-lg border border-paper-300 p-3">
+            <p className="text-[0.75rem] text-muted-ink">
+              A bill for this item adds stock at weighted-average cost instead of expensing it; an invoice posts
+              cost of goods sold and reduces stock automatically. Repairs and similar costs on a unit already in stock
+              can be added from the Inventory page with “+ Add cost”.
+              {item.trackInventory && (
+                <span className="mt-1 block font-medium text-ink-700">
+                  On hand: {(item.quantityOnHandMilli / 1000).toLocaleString("en-CA")} {itemUnitLabel(item.unit)}
+                  {" · "}Avg cost: {money.format(item.averageCostCents)}
+                </span>
+              )}
+            </p>
+            <Field label="VIN / serial number" hint="Optional. Identifies a one-off unit such as a vehicle or machine.">
+              <input name="vin" defaultValue={item.vin ?? ""} maxLength={40} className={clsx(inputClass, "uppercase tnum")} placeholder="1HGCV1F30MA000000" />
+            </Field>
+          </div>
         )}
 
         {canOpenStock && (

@@ -834,6 +834,9 @@ model ServiceItem {
   quantityOnHandMilli  Int      @default(0)
   /// System-maintained weighted-average cost per whole unit, integer cents. Never hand-edited.
   averageCostCents     Int      @default(0)
+  /// Optional VIN / serial number — identifies a one-off unit (a used vehicle,
+  /// a machine) whose cost history is tracked on its own.
+  vin                  String?
   createdAt            DateTime @default(now())
   updatedAt            DateTime @default(now()) @updatedAt
 
@@ -860,7 +863,9 @@ model InventoryMovement {
   companyId                String
   itemId                   String
   date                     DateTime
-  /// PURCHASE | SALE | SALE_RETURN | PURCHASE_RETURN | ADJUSTMENT | REVERSAL
+  /// PURCHASE | SALE | SALE_RETURN | PURCHASE_RETURN | ADJUSTMENT | REVERSAL | COST_ADDITION
+  /// COST_ADDITION raises an item's carrying value with zero quantity change
+  /// (repairs, detailing, inspection on a unit already in stock).
   /// (SALE_RETURN/PURCHASE_RETURN/REVERSAL added 15 Sep 2026 review, issues
   /// 3/4/10 — previously returns had no inventory effect at all and a void
   /// was indistinguishable from a manual ADJUSTMENT in the history view.)
@@ -882,6 +887,9 @@ model InventoryMovement {
   sourceNumber             String?
   journalEntryId           String?
   memo                     String?
+  /// COST_ADDITION only: what the cost was for (e.g. "Mechanical repairs") and who was paid.
+  costCategory             String?
+  supplierName             String?
   createdById              String?
   createdAt                DateTime @default(now())
 

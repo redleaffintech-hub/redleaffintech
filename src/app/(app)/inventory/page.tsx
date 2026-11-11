@@ -8,6 +8,7 @@ import { Card, EmptyState, Money, PageHeader, Table, Td, Th, Tr } from "@/compon
 import { ReconciliationBanner } from "@/components/report-shell";
 import { AdjustStockButton } from "./adjust-stock-dialog";
 import { OpeningStockButton } from "./opening-stock-dialog";
+import { AddCostButton } from "./add-cost-dialog";
 import { currentOpeningStock } from "@/server/inventory/costing";
 import { inventoryAdjustmentFormOptions } from "./actions";
 import { itemUsageCounts } from "@/server/documents/item-usage";
@@ -21,7 +22,6 @@ export default async function InventoryPage() {
   // change (it's the same action products-services uses) — a role that can
   // only view reports still gets the read + adjust-stock view underneath.
   const manage = can(role, CAPABILITIES.COMPANY_SETTINGS);
-
   const [items, inventoryAsset, { accounts }, usage, glAccounts, taxCodes] = await Promise.all([
     db.serviceItem.findMany({
       where: { companyId: company.id, trackInventory: true },
@@ -164,6 +164,7 @@ export default async function InventoryPage() {
                     <Link href={`/inventory/${item.id}`} className="hover:text-brand-700 hover:underline">
                       {item.name}
                     </Link>
+                    {item.vin && <span className="ml-2 text-[0.75rem] text-muted-ink">VIN {item.vin}</span>}
                   </Td>
                   <Td align="right" className="tnum">
                     {(item.quantityOnHandMilli / 1000).toLocaleString("en-CA")} {item.unit}
@@ -173,6 +174,7 @@ export default async function InventoryPage() {
                   <Td align="right">
                     <span className="inline-flex items-center gap-1">
                       {manage && <OpeningStockButton itemId={item.id} itemName={`${item.code} — ${item.name}`} current={openingByItem.get(item.id) ?? null} />}
+                      {manage && <AddCostButton itemId={item.id} itemName={`${item.code} — ${item.name}`} accounts={accounts} />}
                       <AdjustStockButton itemId={item.id} itemName={`${item.code} — ${item.name}`} averageCostCents={item.averageCostCents} accounts={accounts} />
                       {manage && (
                         <CatalogueRowActions
@@ -193,6 +195,7 @@ export default async function InventoryPage() {
                             trackInventory: item.trackInventory,
                             quantityOnHandMilli: item.quantityOnHandMilli,
                             averageCostCents: item.averageCostCents,
+                            vin: item.vin ?? "",
                           }}
                           options={catalogueOptions}
                           usedOnDocuments={usage.get(item.id) ?? 0}

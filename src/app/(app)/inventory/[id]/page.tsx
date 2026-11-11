@@ -2,7 +2,9 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
 import { requireVisible } from "@/server/auth/context";
-import { CAPABILITIES } from "@/lib/permissions";
+import { CAPABILITIES, can } from "@/lib/permissions";
+import { inventoryAdjustmentFormOptions } from "../actions";
+import { AddCostButton, ReverseCostButton } from "../add-cost-dialog";
 import { formatDate, dateRangeWhere } from "@/lib/dates";
 import { formatMoney, formatQty } from "@/lib/money";
 import { Card, LinkButton, PageHeader, Table, Td, Th, Tr } from "@/components/ui";
@@ -19,6 +21,7 @@ const TYPE_LABELS: Record<string, string> = {
   PURCHASE_RETURN: "Purchase return",
   ADJUSTMENT: "Adjustment",
   REVERSAL: "Reversal",
+  COST_ADDITION: "Additional cost",
 };
 
 const SOURCE_HREF: Record<string, (id: string) => string> = {
@@ -34,7 +37,8 @@ export default async function InventoryItemDetailPage({
   params: Promise<{ id: string }>;
   searchParams: Promise<{ from?: string; to?: string; page?: string }>;
 }) {
-  const { company } = await requireVisible(CAPABILITIES.REPORTS);
+  const { company, role } = await requireVisible(CAPABILITIES.REPORTS);
+  const manage = can(role, CAPABILITIES.COMPANY_SETTINGS);
   const currency = company.baseCurrency;
   const { id } = await params;
   const search = await searchParams;
@@ -44,6 +48,23 @@ export default async function InventoryItemDetailPage({
 
   const dateFilter = dateRangeWhere(search.from, search.to);
   const page = Math.max(1, Number(search.page) || 1);
+
+  // Additional costs capitalised onto this item, net of any that were reversed —
+  // across all dates, independent of the date filter on the table below.
+  const [costAdditions, costReversals, formOptions] = await Promise.all([
+    db.inventoryMovement.findMany({
+      where: { companyId: company.id, itemId: item.id, type: "COST_ADDITION" },
+      select: { id: true, sourceId: true, totalCostCents: true },
+    }),
+    db.inventoryMovement.findMany({
+      where: { companyId: company.id, itemId: item.id, type: "REVERSAL", sourceType: "COST_ADDITION" },
+      select: { sourceId: true, totalCostCents: true },
+    }),
+    manage ? inventoryAdjustmentFormOptions() : Promise.resolve({ accounts: [] }),
+  ]);
+  const reversedSourceIds = new Set(costReversals.map((r) => r.sourceId));
+  const additionalCostCents =
+    costAdditions.reduce((s, c) => s + c.totalCostCents, 0) + costReversals.reduce((s, r) => s + r.totalCostCents, 0);
 
   const [movements, total] = await Promise.all([
     db.inventoryMovement.findMany({
@@ -116,13 +137,24 @@ export default async function InventoryItemDetailPage({
       <PageHeader
         title={`${item.code} — ${item.name}`}
         breadcrumb={[{ label: "Inventory", href: "/inventory" }, { label: item.code }]}
-        description="Every purchase, sale, return, adjustment and reversal that built this item's quantity and average cost — the same figures the Inventory page and the general ledger show."
+        description={`${item.vin ? `VIN ${item.vin}. ` : ""}Every purchase, additional cost, sale, return, adjustment and reversal that built this item's quantity and average cost — the same figures the Inventory page and the general ledger show.`}
+        actions={
+          manage ? (
+            <AddCostButton
+              itemId={item.id}
+              itemName={`${item.code} — ${item.name}`}
+              accounts={formOptions.accounts}
+              className="rounded-md border border-paper-300 px-3 py-1.5 text-[0.8125rem] font-medium text-ink-800 transition-colors hover:bg-paper-200"
+            />
+          ) : undefined
+        }
       />
 
-      <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
         <Stat label="On hand" value={`${formatQty(item.quantityOnHandMilli)} ${item.unit}`} />
         <Stat label="Average cost" value={fmt(item.averageCostCents)} />
         <Stat label="Value" value={fmt(Math.round((item.quantityOnHandMilli * item.averageCostCents) / 1000))} />
+        <Stat label="Additional costs" value={fmt(additionalCostCents)} />
         <Stat label="Selling price" value={fmt(item.unitPriceCents)} />
       </div>
 
@@ -149,6 +181,7 @@ export default async function InventoryItemDetailPage({
                   <Th width="8rem" align="right">Movement cost</Th>
                   <Th width="8rem" align="right">Running value</Th>
                   <Th width="7rem" align="right">Avg cost</Th>
+                  {manage && <Th width="5rem" align="right">{""}</Th>}
                 </tr>
               </thead>
               <tbody>
@@ -170,7 +203,11 @@ export default async function InventoryItemDetailPage({
                           m.sourceNumber ?? "—"
                         )}
                       </Td>
-                      <Td className="text-muted-ink">{partyName(m) ?? "—"}</Td>
+                      <Td className="text-muted-ink">
+                        {m.type === "COST_ADDITION"
+                          ? [m.costCategory, m.supplierName].filter(Boolean).join(" · ") || "—"
+                          : (partyName(m) ?? "—")}
+                      </Td>
                       <Td align="right" className={`tnum ${m.quantityMilli >= 0 ? "text-positive" : "text-negative"}`}>
                         {m.quantityMilli >= 0 ? "+" : ""}
                         {formatQty(m.quantityMilli)}
@@ -181,6 +218,13 @@ export default async function InventoryItemDetailPage({
                       <Td align="right" className="tnum">{fmt(m.totalCostCents)}</Td>
                       <Td align="right" className="tnum">{fmt(runningValueCents)}</Td>
                       <Td align="right" className="tnum">{fmt(m.averageCostAfterCents)}</Td>
+                      {manage && (
+                        <Td align="right">
+                          {m.type === "COST_ADDITION" && !reversedSourceIds.has(m.sourceId) && (
+                            <ReverseCostButton itemId={item.id} movementId={m.id} />
+                          )}
+                        </Td>
+                      )}
                     </Tr>
                   );
                 })}

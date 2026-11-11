@@ -149,7 +149,7 @@ export async function consumeStock(tx: Tx, input: StockMovementInput) {
  * reversing entry on the same effective date; the replay then re-derives the
  * running figures around it.
  */
-export async function reverseStockMovement(tx: Tx, movementId: string, userId?: string | null) {
+export async function reverseStockMovement(tx: Tx, movementId: string, userId?: string | null, memo?: string) {
   const movement = await tx.inventoryMovement.findUniqueOrThrow({ where: { id: movementId } });
   await loadItem(tx, movement.companyId, movement.itemId);
 
@@ -168,7 +168,7 @@ export async function reverseStockMovement(tx: Tx, movementId: string, userId?: 
       sourceId: movement.sourceId,
       sourceLineId: movement.sourceLineId,
       sourceNumber: movement.sourceNumber,
-      memo: `Reversal of voided ${movement.sourceType.toLowerCase()}${movement.sourceNumber ? ` ${movement.sourceNumber}` : ""}`,
+      memo: memo ?? `Reversal of voided ${movement.sourceType.toLowerCase()}${movement.sourceNumber ? ` ${movement.sourceNumber}` : ""}`,
       createdById: userId,
     },
   });
@@ -293,6 +293,129 @@ export async function adjustStock(
     : await recordAdjustmentOut(tx, { ...movementInput, quantityMilli: -input.quantityMilli, totalCostCents });
 
   return { entry, movement };
+}
+
+/**
+ * Capitalise an extra cost onto an item already in stock (repairs, detailing,
+ * inspection on a used vehicle). Quantity does not change and the original
+ * purchase is untouched: a zero-quantity COST_ADDITION movement raises the
+ * item's carrying value, so the replay spreads it over the units on hand and a
+ * later sale relieves it through COGS. Posts Dr Inventory / Cr the account the
+ * cost was paid from (bank or accounts payable).
+ */
+export async function addInventoryCost(
+  tx: Tx,
+  input: {
+    companyId: string;
+    itemId: string;
+    date: Date | string;
+    amountCents: number;
+    category: string;
+    supplierName?: string | null;
+    reference?: string | null;
+    offsetAccountId: string;
+    userId?: string | null;
+  },
+) {
+  if (!Number.isInteger(input.amountCents) || input.amountCents <= 0) throw new Error("Enter a cost greater than zero.");
+  const date = toUtcDay(input.date);
+
+  const item = await tx.serviceItem.findFirst({
+    where: { id: input.itemId, companyId: input.companyId },
+    select: { id: true, trackInventory: true },
+  });
+  if (!item) throw new Error("Item not found in this company.");
+  if (!item.trackInventory) throw new Error("Only an inventory product can carry additional costs.");
+
+  const offset = await tx.account.findFirst({
+    where: { id: input.offsetAccountId, companyId: input.companyId, isActive: true },
+    select: { id: true, type: true },
+  });
+  if (!offset) throw new Error("Choose the account the cost was paid from.");
+  if (offset.type === "REVENUE") throw new Error("The cost cannot be paid from a revenue account.");
+
+  // There must be a unit in stock on that date for the cost to attach to.
+  // Capitalising onto nothing would leave value with no quantity behind it.
+  // Summed rather than read off the latest movement, so it does not depend on
+  // how same-day movements happen to be ordered.
+  const onHand = await tx.inventoryMovement.aggregate({
+    where: { companyId: input.companyId, itemId: input.itemId, date: { lte: date } },
+    _sum: { quantityMilli: true },
+  });
+  const qtyMilli = onHand._sum.quantityMilli ?? 0;
+  if (qtyMilli <= 0) {
+    throw new Error("There is no stock on hand on that date to add the cost to. Pick a date while the item is in stock.");
+  }
+
+  const inventoryAsset = { id: (await inventoryAccountsForItems(tx, input.companyId, [input.itemId])).accountOf(input.itemId) };
+  const memo = `Additional inventory cost — ${input.category}${input.supplierName ? ` (${input.supplierName})` : ""}`;
+  const entry = await postJournal(tx, {
+    companyId: input.companyId,
+    date,
+    memo,
+    sourceType: "ADJUSTMENT",
+    sourceNumber: input.reference ?? undefined,
+    createdById: input.userId,
+    lines: [
+      { accountId: inventoryAsset.id, debitCents: input.amountCents, description: input.category },
+      { accountId: input.offsetAccountId, creditCents: input.amountCents, description: input.category },
+    ],
+  });
+
+  const created = await tx.inventoryMovement.create({
+    data: {
+      companyId: input.companyId,
+      itemId: input.itemId,
+      date,
+      type: "COST_ADDITION",
+      quantityMilli: 0,
+      unitCostCents: Math.round((input.amountCents * 1000) / qtyMilli),
+      totalCostCents: input.amountCents,
+      quantityOnHandAfterMilli: 0,
+      averageCostAfterCents: 0,
+      sourceType: "COST_ADDITION",
+      sourceId: entry.id,
+      sourceNumber: input.reference ?? entry.entryNo,
+      journalEntryId: entry.id,
+      memo,
+      costCategory: input.category,
+      supplierName: input.supplierName || null,
+      createdById: input.userId,
+    },
+  });
+  await replayItem(tx, input.companyId, input.itemId, { userId: input.userId });
+  return { entry, movement: await tx.inventoryMovement.findUniqueOrThrow({ where: { id: created.id } }) };
+}
+
+/**
+ * Undo an additional cost entered by mistake. History is kept: the journal is
+ * reversed and an offsetting REVERSAL movement is added, so the cost still shows
+ * in the ledger alongside its reversal.
+ */
+export async function reverseInventoryCost(tx: Tx, input: { companyId: string; movementId: string; userId?: string | null }) {
+  const movement = await tx.inventoryMovement.findFirst({
+    where: { id: input.movementId, companyId: input.companyId, type: "COST_ADDITION" },
+  });
+  if (!movement) throw new Error("That cost entry was not found.");
+  const alreadyReversed = await tx.inventoryMovement.findFirst({
+    where: { companyId: input.companyId, itemId: movement.itemId, type: "REVERSAL", sourceType: "COST_ADDITION", sourceId: movement.sourceId },
+    select: { id: true },
+  });
+  if (alreadyReversed) throw new Error("That cost has already been reversed.");
+
+  if (movement.journalEntryId) {
+    await reverseJournal(tx, movement.journalEntryId, {
+      companyId: input.companyId,
+      memo: `Reversal of additional inventory cost${movement.costCategory ? ` — ${movement.costCategory}` : ""}`,
+      userId: input.userId,
+    });
+  }
+  return reverseStockMovement(
+    tx,
+    movement.id,
+    input.userId,
+    `Reversal of additional cost${movement.costCategory ? ` — ${movement.costCategory}` : ""}`,
+  );
 }
 
 /** The live opening-stock entry for an item: an OPENING movement that has not been reversed. */

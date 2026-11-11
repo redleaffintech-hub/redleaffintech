@@ -207,6 +207,7 @@ export default async function ProductsServicesPage({
                           trackInventory: item.trackInventory,
                           quantityOnHandMilli: item.quantityOnHandMilli,
                           averageCostCents: item.averageCostCents,
+                          vin: item.vin ?? "",
                         }}
                         options={options}
                         usedOnDocuments={usedCount.get(item.id) ?? 0}
