@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { requireCapability } from "@/server/auth/context";
+import { hrSectionLabel } from "@/lib/hr-label";
 import { CAPABILITIES, can } from "@/lib/permissions";
 import { LEAVE_CATEGORY_LABELS } from "@/lib/hr-enums";
 import { Badge, Card, PageHeader, Table, Td, Th, Tr } from "@/components/ui";
@@ -9,6 +10,7 @@ export const metadata = { title: "Leave types" };
 
 export default async function LeaveTypesPage() {
   const { company, role } = await requireCapability(CAPABILITIES.HR);
+  const hrLabel = hrSectionLabel(company.enabledModules);
   const leaveTypes = await db.leaveType.findMany({ where: { companyId: company.id }, orderBy: { name: "asc" } });
   const canEdit = can(role, CAPABILITIES.HR);
 
@@ -16,7 +18,7 @@ export default async function LeaveTypesPage() {
     <>
       <PageHeader
         title="Leave types"
-        breadcrumb={[{ label: "Payroll", href: "/hr/employees" }, { label: "Time off", href: "/hr/time-off" }, { label: "Leave types" }]}
+        breadcrumb={[{ label: hrLabel, href: "/hr/employees" }, { label: "Time off", href: "/hr/time-off" }, { label: "Leave types" }]}
         description="The leave policies employees can request against. Every new company starts with a common Canadian set — vacation, sick, and the job-protected statutory leaves — which are all editable here."
         actions={canEdit ? <AddLeaveTypeButton /> : undefined}
       />

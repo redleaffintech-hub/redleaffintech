@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { requireCapability } from "@/server/auth/context";
+import { hrSectionLabel } from "@/lib/hr-label";
 import { CAPABILITIES } from "@/lib/permissions";
 import { Card, PageHeader } from "@/components/ui";
 import { EmployeeForm } from "../employee-form";
@@ -9,6 +10,7 @@ export const metadata = { title: "New employee" };
 
 export default async function NewEmployeePage() {
   const { company } = await requireCapability(CAPABILITIES.HR);
+  const hrLabel = hrSectionLabel(company.enabledModules);
 
   const [departments, managers] = await Promise.all([
     db.department.findMany({ where: { companyId: company.id }, orderBy: { name: "asc" }, select: { id: true, name: true } }),
@@ -23,7 +25,7 @@ export default async function NewEmployeePage() {
     <>
       <PageHeader
         title="New employee"
-        breadcrumb={[{ label: "Payroll", href: "/hr/employees" }, { label: "Employees", href: "/hr/employees" }, { label: "New" }]}
+        breadcrumb={[{ label: hrLabel, href: "/hr/employees" }, { label: "Employees", href: "/hr/employees" }, { label: "New" }]}
         description="The province of employment drives the compliance reference shown on the employee's profile — minimum vacation entitlement, statutory holidays and minimum termination notice."
       />
       <Card className="max-w-5xl p-5">

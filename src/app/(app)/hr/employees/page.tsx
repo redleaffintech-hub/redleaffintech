@@ -2,6 +2,7 @@ import Link from "next/link";
 import { db } from "@/lib/db";
 import { contains } from "@/lib/search";
 import { requireCapability } from "@/server/auth/context";
+import { hrSectionLabel } from "@/lib/hr-label";
 import { CAPABILITIES, can } from "@/lib/permissions";
 import { formatDate } from "@/lib/dates";
 import { EMPLOYEE_TYPE_LABELS, EMPLOYMENT_STATUS_LABELS } from "@/lib/hr-enums";
@@ -19,6 +20,7 @@ const STATUS_TONE: Record<string, "positive" | "caution" | "neutral"> = {
 
 export default async function EmployeesPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const { company, role } = await requireCapability(CAPABILITIES.HR);
+  const hrLabel = hrSectionLabel(company.enabledModules);
   const params = await searchParams;
   const query = typeof params.q === "string" ? params.q : "";
   const status = typeof params.status === "string" ? params.status : "";
@@ -54,7 +56,7 @@ export default async function EmployeesPage({ searchParams }: { searchParams: Pr
     <>
       <PageHeader
         title="Employees"
-        breadcrumb={[{ label: "Payroll" }, { label: "Employees" }]}
+        breadcrumb={[{ label: hrLabel }, { label: "Employees" }]}
         description="Employee records for this company — personal and employment details, org chart and time off. There is no payroll engine yet: nothing here calculates deductions or posts to the ledger."
         actions={
           can(role, CAPABILITIES.HR) ? (

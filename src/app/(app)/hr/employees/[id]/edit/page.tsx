@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
 import { requireCapability } from "@/server/auth/context";
+import { hrSectionLabel } from "@/lib/hr-label";
 import { CAPABILITIES } from "@/lib/permissions";
 import { isoDate } from "@/lib/dates";
 import { Card, PageHeader } from "@/components/ui";
@@ -12,6 +13,7 @@ export const metadata = { title: "Edit employee" };
 
 export default async function EditEmployeePage({ params }: { params: Promise<{ id: string }> }) {
   const { company } = await requireCapability(CAPABILITIES.HR);
+  const hrLabel = hrSectionLabel(company.enabledModules);
   const { id } = await params;
 
   const [employee, departments, managers] = await Promise.all([
@@ -74,7 +76,7 @@ export default async function EditEmployeePage({ params }: { params: Promise<{ i
       <PageHeader
         title={`Edit ${employee.legalFirstName} ${employee.legalLastName}`}
         breadcrumb={[
-          { label: "Payroll", href: "/hr/employees" },
+          { label: hrLabel, href: "/hr/employees" },
           { label: "Employees", href: "/hr/employees" },
           { label: `${employee.legalFirstName} ${employee.legalLastName}`, href: `/hr/employees/${employee.id}` },
           { label: "Edit" },

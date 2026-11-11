@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { requireCapability } from "@/server/auth/context";
+import { hrSectionLabel } from "@/lib/hr-label";
 import { CAPABILITIES, can } from "@/lib/permissions";
 import { formatDate } from "@/lib/dates";
 import { hoursLabel } from "@/lib/leave-format";
@@ -13,6 +14,7 @@ export const metadata = { title: "Leave balances" };
 
 export default async function LeaveBalancesPage() {
   const { company, role, user } = await requireCapability(CAPABILITIES.HR);
+  const hrLabel = hrSectionLabel(company.enabledModules);
   const canEdit = can(role, CAPABILITIES.HR);
 
   // Idempotent: writes any carry-forward / expiry record now due, otherwise a no-op.
@@ -41,7 +43,7 @@ export default async function LeaveBalancesPage() {
     <>
       <PageHeader
         title="Leave balances"
-        breadcrumb={[{ label: "Payroll", href: "/hr/employees" }, { label: "Time off", href: "/hr/time-off" }, { label: "Balances" }]}
+        breadcrumb={[{ label: hrLabel, href: "/hr/employees" }, { label: "Time off", href: "/hr/time-off" }, { label: "Balances" }]}
         description="Every employee's entitlement, accrual, carry-forward, usage and remaining balance — vacation and sick leave tracked separately, recalculated automatically from the leave policy and approved requests."
         actions={
           canEdit ? (

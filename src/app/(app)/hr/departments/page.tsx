@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { requireCapability } from "@/server/auth/context";
+import { hrSectionLabel } from "@/lib/hr-label";
 import { CAPABILITIES, can } from "@/lib/permissions";
 import { Card, PageHeader, Table, Td, Th, Tr } from "@/components/ui";
 import { AddDepartmentButton, DepartmentRowActions } from "./departments-client";
@@ -8,6 +9,7 @@ export const metadata = { title: "Departments" };
 
 export default async function DepartmentsPage() {
   const { company, role } = await requireCapability(CAPABILITIES.HR);
+  const hrLabel = hrSectionLabel(company.enabledModules);
 
   const departments = await db.department.findMany({
     where: { companyId: company.id },
@@ -21,7 +23,7 @@ export default async function DepartmentsPage() {
     <>
       <PageHeader
         title="Departments"
-        breadcrumb={[{ label: "Payroll", href: "/hr/employees" }, { label: "Departments" }]}
+        breadcrumb={[{ label: hrLabel, href: "/hr/employees" }, { label: "Departments" }]}
         description="Group employees for reporting. A department cannot be deleted while employees are assigned to it."
         actions={canEdit ? <AddDepartmentButton /> : undefined}
       />

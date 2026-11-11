@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { requireCapability } from "@/server/auth/context";
+import { hrSectionLabel } from "@/lib/hr-label";
 import { CAPABILITIES, can } from "@/lib/permissions";
 import { formatDate } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
@@ -42,6 +43,7 @@ const STATUS_TONE: Record<string, "positive" | "caution" | "neutral"> = {
 
 export default async function EmployeeDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { company, role } = await requireCapability(CAPABILITIES.HR);
+  const hrLabel = hrSectionLabel(company.enabledModules);
   const { id } = await params;
 
   const employee = await db.employee.findFirst({
@@ -82,7 +84,7 @@ export default async function EmployeeDetailPage({ params }: { params: Promise<{
     <>
       <PageHeader
         title={employee.preferredName ? `${employee.preferredName} ${employee.legalLastName}` : fullName}
-        breadcrumb={[{ label: "Payroll", href: "/hr/employees" }, { label: "Employees", href: "/hr/employees" }, { label: fullName }]}
+        breadcrumb={[{ label: hrLabel, href: "/hr/employees" }, { label: "Employees", href: "/hr/employees" }, { label: fullName }]}
         description={`${employee.jobTitle}${employee.department ? ` · ${employee.department.name}` : ""} · Employee ${employee.employeeNumber}`}
         actions={
           canEdit ? (

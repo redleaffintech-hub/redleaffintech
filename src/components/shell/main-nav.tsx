@@ -8,6 +8,7 @@ import { Icon } from "./icons";
 import { useOutsideClick } from "./use-outside-click";
 import { ACCOUNTANT_GROUP, NAV_GROUPS, type NavGroup, type NavItem } from "./nav-config";
 import type { AccessLevel } from "@/lib/permissions";
+import { hrSectionLabel } from "@/lib/hr-label";
 
 export interface NavCounts {
   bankQueue: number;
@@ -44,6 +45,8 @@ export function MainNav({
     .filter((group) => !group.module || enabledModules.includes(group.module))
     .map((group) => ({
       ...group,
+      // The HR/payroll tab reads "HR" when the company has no Payroll module.
+      label: group.label === "Payroll" ? hrSectionLabel(enabledModules) : group.label,
       items: group.items.filter((item) => !item.module || enabledModules.includes(item.module)),
     }));
 

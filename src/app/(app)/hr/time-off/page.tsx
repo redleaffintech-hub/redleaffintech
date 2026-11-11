@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { requireCapability } from "@/server/auth/context";
+import { hrSectionLabel } from "@/lib/hr-label";
 import { CAPABILITIES, can } from "@/lib/permissions";
 import { formatDate } from "@/lib/dates";
 import { LEAVE_REQUEST_STATUS_LABELS } from "@/lib/hr-enums";
@@ -19,6 +20,7 @@ const STATUS_TONE: Record<string, "caution" | "positive" | "negative" | "neutral
 
 export default async function TimeOffPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const { company, role } = await requireCapability(CAPABILITIES.HR);
+  const hrLabel = hrSectionLabel(company.enabledModules);
   const params = await searchParams;
   const status = typeof params.status === "string" ? params.status : "PENDING";
 
@@ -47,7 +49,7 @@ export default async function TimeOffPage({ searchParams }: { searchParams: Prom
     <>
       <PageHeader
         title="Time off"
-        breadcrumb={[{ label: "Payroll", href: "/hr/employees" }, { label: "Time off" }]}
+        breadcrumb={[{ label: hrLabel, href: "/hr/employees" }, { label: "Time off" }]}
         description="Leave requests, balances and policies. Approving a request deducts its hours from the employee's leave balance; it does not change any pay run."
         actions={
           canEdit ? (
