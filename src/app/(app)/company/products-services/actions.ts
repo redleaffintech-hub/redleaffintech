@@ -42,7 +42,6 @@ const itemSchema = z.object({
   purchaseTaxCodeId: z.string().trim().optional(),
   isActive: z.string().optional(),
   trackInventory: z.string().optional(),
-  vin: z.string().trim().max(40).optional(),
   /** Opening stock for a tracked product: quantity and weighted-average cost per unit, as of a date. */
   openingQuantity: z.string().trim().max(20).optional(),
   openingUnitCost: z.string().trim().max(20).optional(),
@@ -144,7 +143,6 @@ async function validate(
       isActive: input.isActive === "on",
       // Only a PRODUCT can carry stock — a SERVICE has nothing to count.
       trackInventory: input.type === "PRODUCT" && input.trackInventory === "on",
-      vin: input.type === "PRODUCT" && input.trackInventory === "on" && input.vin ? input.vin.toUpperCase() : null,
     },
   };
 }

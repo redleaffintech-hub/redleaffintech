@@ -319,25 +319,6 @@ export function ItemDialog({
           </Field>
         </div>
 
-        {track && (
-          <div className="space-y-3 rounded-lg border border-paper-300 p-3">
-            <p className="text-[0.75rem] text-muted-ink">
-              A bill for this item adds stock at weighted-average cost instead of expensing it; an invoice posts
-              cost of goods sold and reduces stock automatically. Repairs and similar costs on a unit already in stock
-              can be added from the Inventory page with “+ Add cost”.
-              {item.trackInventory && (
-                <span className="mt-1 block font-medium text-ink-700">
-                  On hand: {(item.quantityOnHandMilli / 1000).toLocaleString("en-CA")} {itemUnitLabel(item.unit)}
-                  {" · "}Avg cost: {money.format(item.averageCostCents)}
-                </span>
-              )}
-            </p>
-            <Field label="VIN / serial number" hint="Optional. Identifies a one-off unit such as a vehicle or machine.">
-              <input name="vin" defaultValue={item.vin ?? ""} maxLength={40} className={clsx(inputClass, "uppercase tnum")} placeholder="1HGCV1F30MA000000" />
-            </Field>
-          </div>
-        )}
-
         {canOpenStock && (
           <div className="rounded-lg border border-paper-300 p-3">
             <p className="text-[0.8125rem] font-medium text-ink-800">Opening stock</p>
