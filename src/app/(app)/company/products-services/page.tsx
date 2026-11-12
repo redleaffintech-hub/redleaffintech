@@ -100,7 +100,7 @@ export default async function ProductsServicesPage({
         actions={
           <>
             <ExportCsvButton report="products-services" />
-            {manage && <NewItemButton options={options} />}
+            {manage && <NewItemButton options={options} initial={{ type: "PRODUCT", trackInventory: true, unit: "each" }} />}
           </>
         }
       />
@@ -126,7 +126,7 @@ export default async function ProductsServicesPage({
                 ? "Nothing matches that search. Clear the filters to see the whole catalogue."
                 : "Add the work you sell and the things you buy regularly, and every invoice, quote and bill can pull them in with one click."
             }
-            action={manage && !query && !filter ? <NewItemButton options={options} /> : undefined}
+            action={manage && !query && !filter ? <NewItemButton options={options} initial={{ type: "PRODUCT", trackInventory: true, unit: "each" }} /> : undefined}
           />
         ) : (
           <Table>
