@@ -12,7 +12,7 @@ import { SYSTEM_ACCOUNTS } from "@/lib/enums";
 import { addDays, toUtcDay } from "@/lib/dates";
 import { getSystemAccount, postJournal, reverseJournal } from "@/server/accounting/ledger";
 import { loadTaxCodes, recordTaxEntries } from "@/server/tax/engine";
-import { receiveStock, reverseStockMovement, inventoryAccountsForItems } from "@/server/inventory/costing";
+import { receiveCostOnly, receiveStock, reverseStockMovement, inventoryAccountsForItems } from "@/server/inventory/costing";
 import { computeDocument, splitPurchaseDebits, type RawLine } from "./lines";
 import { nextNumber } from "./numbering";
 
@@ -30,6 +30,11 @@ export interface BillInput {
   lines: RawLine[];
   userId?: string | null;
   post?: boolean;
+  /**
+   * Makes this a cost-only bill: every line is capitalised onto this inventory item
+   * (repairs, detailing, inspection...) and adds no stock.
+   */
+  inventoryCostItemId?: string | null;
 }
 
 export async function createBill(input: BillInput) {
@@ -65,8 +70,10 @@ export async function createBillInTx(tx: Tx, input: BillInput) {
   }
 
   const dueDate = input.dueDate ? toUtcDay(input.dueDate) : addDays(issueDate, vendor.paymentTermsDays);
-  const taxCodes = await loadTaxCodes(tx, input.companyId, input.lines.map((l) => l.taxCodeId));
-  const doc = computeDocument(input.lines, taxCodes, input.taxInclusive ?? false, issueDate);
+  const costItemId = await validateCostItem(tx, input.companyId, input.inventoryCostItemId);
+  const lines = costItemId ? input.lines.map((l) => ({ ...l, itemId: costItemId })) : input.lines;
+  const taxCodes = await loadTaxCodes(tx, input.companyId, lines.map((l) => l.taxCodeId));
+  const doc = computeDocument(lines, taxCodes, input.taxInclusive ?? false, issueDate);
   const number = input.number ?? (await nextNumber(tx, input.companyId, "bill"));
 
   return tx.bill.create({
@@ -107,6 +114,7 @@ export async function createBillInTx(tx: Tx, input: BillInput) {
           isBillable: l.isBillable ?? false,
           customerId: l.customerId ?? null,
           projectId: l.projectId ?? null,
+          isInventoryCost: Boolean(costItemId),
         })),
       },
     },
@@ -114,8 +122,23 @@ export async function createBillInTx(tx: Tx, input: BillInput) {
   });
 }
 
+/**
+ * A cost-only bill must point at a real inventory product of this company.
+ * Returns the item id to force onto every line, or null for an ordinary bill.
+ */
+async function validateCostItem(tx: Tx, companyId: string, itemId?: string | null) {
+  if (!itemId) return null;
+  const item = await tx.serviceItem.findFirst({
+    where: { id: itemId, companyId },
+    select: { id: true, code: true, trackInventory: true },
+  });
+  if (!item) throw new Error("The inventory item for this cost was not found.");
+  if (!item.trackInventory) throw new Error(`${item.code} is not an inventory product, so it cannot carry an additional cost.`);
+  return item.id;
+}
+
 /** The `BillLine` rows for a computed document, in create order. */
-function billLineCreateData(doc: ReturnType<typeof computeDocument>) {
+function billLineCreateData(doc: ReturnType<typeof computeDocument>, isInventoryCost = false) {
   return doc.lines.map((l) => ({
     lineNo: l.lineNo,
     itemId: l.itemId ?? null,
@@ -131,6 +154,7 @@ function billLineCreateData(doc: ReturnType<typeof computeDocument>) {
     isBillable: l.isBillable ?? false,
     customerId: l.customerId ?? null,
     projectId: l.projectId ?? null,
+    isInventoryCost,
   }));
 }
 
@@ -223,15 +247,22 @@ export async function updateBill(input: BillUpdateInput) {
         });
       }
       const stockMovements = await tx.inventoryMovement.findMany({
-        where: { companyId: input.companyId, sourceType: "BILL", sourceId: existing.id, type: "PURCHASE" },
+        where: { companyId: input.companyId, sourceType: "BILL", sourceId: existing.id, type: { in: ["PURCHASE", "COST_ADDITION"] } },
       });
       for (const movement of stockMovements) await reverseStockMovement(tx, movement.id, input.userId);
     }
 
     const issueDate = toUtcDay(input.issueDate);
     const dueDate = input.dueDate ? toUtcDay(input.dueDate) : addDays(issueDate, vendor.paymentTermsDays);
-    const taxCodes = await loadTaxCodes(tx, input.companyId, input.lines.map((l) => l.taxCodeId));
-    const doc = computeDocument(input.lines, taxCodes, input.taxInclusive ?? false, issueDate);
+    // A cost-only bill stays cost-only when edited: the lines keep pointing at the same item.
+    const existingCostLine = await tx.billLine.findFirst({
+      where: { billId: existing.id, isInventoryCost: true },
+      select: { itemId: true },
+    });
+    const costItemId = existingCostLine?.itemId ?? null;
+    const lines = costItemId ? input.lines.map((l) => ({ ...l, itemId: costItemId })) : input.lines;
+    const taxCodes = await loadTaxCodes(tx, input.companyId, lines.map((l) => l.taxCodeId));
+    const doc = computeDocument(lines, taxCodes, input.taxInclusive ?? false, issueDate);
 
     await tx.billLine.deleteMany({ where: { billId: existing.id } });
 
@@ -253,7 +284,7 @@ export async function updateBill(input: BillUpdateInput) {
         status: existing.approvalStatus === "PENDING" ? "AWAITING_APPROVAL" : "DRAFT",
         journalEntryId: null,
         postedAt: null,
-        lines: { create: billLineCreateData(doc) },
+        lines: { create: billLineCreateData(doc, Boolean(costItemId)) },
       },
     });
 
@@ -352,6 +383,7 @@ export async function postBillInTx(tx: Tx, billId: string, companyId: string, us
   const trackedLineIds = linesWithBillLineId
     .filter((l) => l.line.itemId && trackedItemIds.has(l.line.itemId))
     .map((l) => l.billLineId);
+  const costOnlyLineIds = new Set(bill.lines.filter((l) => l.isInventoryCost).map((l) => l.id));
   const regularLines = doc.lines.filter((l) => !(l.itemId && trackedItemIds.has(l.itemId)));
 
   const ap = await getSystemAccount(tx, companyId, SYSTEM_ACCOUNTS.ACCOUNTS_PAYABLE);
@@ -417,7 +449,9 @@ export async function postBillInTx(tx: Tx, billId: string, companyId: string, us
     for (const c of line.taxComponents) {
       if (c.taxCents !== 0 && !c.isRecoverable) lineCost += c.taxCents;
     }
-    await receiveStock(tx, {
+    // A cost-only line raises the item's carrying value but adds no quantity.
+    const receive = costOnlyLineIds.has(trackedLineIds[i]) ? receiveCostOnly : receiveStock;
+    await receive(tx, {
       companyId,
       itemId: line.itemId!,
       date: bill.issueDate,
@@ -495,7 +529,7 @@ export async function voidBill(billId: string, companyId: string, userId?: strin
         });
       }
       const stockMovements = await tx.inventoryMovement.findMany({
-        where: { companyId, sourceType: "BILL", sourceId: bill.id, type: "PURCHASE" },
+        where: { companyId, sourceType: "BILL", sourceId: bill.id, type: { in: ["PURCHASE", "COST_ADDITION"] } },
       });
       for (const movement of stockMovements) await reverseStockMovement(tx, movement.id, userId);
     }

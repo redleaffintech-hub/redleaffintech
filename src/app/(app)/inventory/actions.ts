@@ -6,7 +6,7 @@ import { db } from "@/lib/db";
 import { toCents } from "@/lib/money";
 import { CAPABILITIES } from "@/lib/permissions";
 import { recordAudit, requireCapability } from "@/server/auth/context";
-import { addInventoryCost, adjustStock, reverseInventoryCost, setOpeningStock } from "@/server/inventory/costing";
+import { adjustStock, reverseInventoryCost, setOpeningStock } from "@/server/inventory/costing";
 
 export async function inventoryAdjustmentFormOptions() {
   const { company } = await requireCapability(CAPABILITIES.COMPANY_SETTINGS);
@@ -69,66 +69,6 @@ export async function adjustStockAction(payload: string) {
 
     revalidatePath("/inventory");
     revalidatePath("/company/products-services");
-    revalidatePath("/");
-    return { ok: true as const };
-  } catch (error) {
-    return { error: (error as Error).message };
-  }
-}
-
-const costSchema = z.object({
-  itemId: z.string().min(1),
-  date: z.string().min(1, "Choose the date of the cost."),
-  category: z.string().trim().min(1, "Say what the cost was for.").max(80),
-  supplier: z.string().trim().max(120).optional(),
-  reference: z.string().trim().max(60).optional(),
-  amount: z.string().trim().min(1, "Enter the amount."),
-  offsetAccountId: z.string().min(1, "Choose the account the cost was paid from."),
-});
-
-/** Capitalise an extra cost (repair, detailing, inspection…) onto an item already in stock. */
-export async function addInventoryCostAction(payload: string) {
-  const { company, user } = await requireCapability(CAPABILITIES.COMPANY_SETTINGS);
-
-  let raw: unknown;
-  try {
-    raw = JSON.parse(payload);
-  } catch {
-    return { error: "Could not read the cost details." };
-  }
-  const parsed = costSchema.safeParse(raw);
-  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Check the cost details." };
-  const input = parsed.data;
-
-  const amountCents = toCents(input.amount);
-  if (!Number.isFinite(amountCents) || amountCents <= 0) return { error: "Enter an amount greater than zero." };
-
-  try {
-    await db.$transaction((tx) =>
-      addInventoryCost(tx, {
-        companyId: company.id,
-        itemId: input.itemId,
-        date: input.date,
-        amountCents,
-        category: input.category,
-        supplierName: input.supplier || null,
-        reference: input.reference || null,
-        offsetAccountId: input.offsetAccountId,
-        userId: user.id,
-      }),
-    );
-
-    await recordAudit({
-      companyId: company.id,
-      userId: user.id,
-      action: "UPDATE",
-      entityType: "ServiceItem",
-      entityId: input.itemId,
-      summary: `Additional cost ${input.amount} added — ${input.category}${input.supplier ? ` (${input.supplier})` : ""}`,
-    });
-
-    revalidatePath("/inventory");
-    revalidatePath(`/inventory/${input.itemId}`);
     revalidatePath("/");
     return { ok: true as const };
   } catch (error) {

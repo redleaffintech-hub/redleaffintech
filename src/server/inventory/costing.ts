@@ -296,6 +296,67 @@ export async function adjustStock(
 }
 
 /**
+ * Units in stock on a date, for attaching a cost to. Summed rather than read off
+ * the latest movement, so it does not depend on how same-day movements happen
+ * to be ordered. Throws when nothing is in stock: capitalising onto nothing
+ * would leave value with no quantity behind it.
+ */
+async function stockOnHandOn(tx: Tx, companyId: string, itemId: string, date: Date) {
+  const onHand = await tx.inventoryMovement.aggregate({
+    where: { companyId, itemId, date: { lte: date } },
+    _sum: { quantityMilli: true },
+  });
+  const qtyMilli = onHand._sum.quantityMilli ?? 0;
+  if (qtyMilli <= 0) {
+    throw new Error("There is no stock on hand on that date to add the cost to. Pick a date while the item is in stock.");
+  }
+  return qtyMilli;
+}
+
+/**
+ * A cost-only line on a bill: the bill's own journal already debits Inventory,
+ * so this records the zero-quantity COST_ADDITION movement that raises the
+ * item's carrying value. Quantity does not change.
+ */
+export async function receiveCostOnly(
+  tx: Tx,
+  input: StockMovementInput & { totalCostCents: number },
+) {
+  if (input.totalCostCents <= 0) throw new Error("A cost line needs an amount greater than zero.");
+  const item = await tx.serviceItem.findFirst({
+    where: { id: input.itemId, companyId: input.companyId },
+    select: { trackInventory: true, code: true },
+  });
+  if (!item) throw new Error("Item not found in this company.");
+  if (!item.trackInventory) throw new Error(`${item.code} is not an inventory product, so it cannot carry an additional cost.`);
+  const qtyMilli = await stockOnHandOn(tx, input.companyId, input.itemId, input.date);
+
+  const created = await tx.inventoryMovement.create({
+    data: {
+      companyId: input.companyId,
+      itemId: input.itemId,
+      date: input.date,
+      type: "COST_ADDITION",
+      quantityMilli: 0,
+      unitCostCents: Math.round((input.totalCostCents * 1000) / qtyMilli),
+      totalCostCents: input.totalCostCents,
+      quantityOnHandAfterMilli: 0,
+      averageCostAfterCents: 0,
+      sourceType: input.sourceType,
+      sourceId: input.sourceId,
+      sourceLineId: input.sourceLineId,
+      sourceNumber: input.sourceNumber,
+      journalEntryId: input.journalEntryId,
+      memo: input.memo,
+      costCategory: "Additional cost",
+      createdById: input.userId,
+    },
+  });
+  await replayItem(tx, input.companyId, input.itemId, { userId: input.userId });
+  return tx.inventoryMovement.findUniqueOrThrow({ where: { id: created.id } });
+}
+
+/**
  * Capitalise an extra cost onto an item already in stock (repairs, detailing,
  * inspection on a used vehicle). Quantity does not change and the original
  * purchase is untouched: a zero-quantity COST_ADDITION movement raises the
@@ -334,18 +395,7 @@ export async function addInventoryCost(
   if (!offset) throw new Error("Choose the account the cost was paid from.");
   if (offset.type === "REVENUE") throw new Error("The cost cannot be paid from a revenue account.");
 
-  // There must be a unit in stock on that date for the cost to attach to.
-  // Capitalising onto nothing would leave value with no quantity behind it.
-  // Summed rather than read off the latest movement, so it does not depend on
-  // how same-day movements happen to be ordered.
-  const onHand = await tx.inventoryMovement.aggregate({
-    where: { companyId: input.companyId, itemId: input.itemId, date: { lte: date } },
-    _sum: { quantityMilli: true },
-  });
-  const qtyMilli = onHand._sum.quantityMilli ?? 0;
-  if (qtyMilli <= 0) {
-    throw new Error("There is no stock on hand on that date to add the cost to. Pick a date while the item is in stock.");
-  }
+  const qtyMilli = await stockOnHandOn(tx, input.companyId, input.itemId, date);
 
   const inventoryAsset = { id: (await inventoryAccountsForItems(tx, input.companyId, [input.itemId])).accountOf(input.itemId) };
   const memo = `Additional inventory cost — ${input.category}${input.supplierName ? ` (${input.supplierName})` : ""}`;

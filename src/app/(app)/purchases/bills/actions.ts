@@ -18,6 +18,8 @@ const schema = z.object({
   memo: z.string().optional(),
   reference: z.string().optional(),
   post: z.boolean(),
+  /** Set when the bill is an additional cost for one inventory item (no stock is added). */
+  inventoryCostItemId: z.string().nullable().optional(),
   lines: z
     .array(
       z.object({
@@ -49,6 +51,7 @@ export async function createBillAction(payload: string) {
       taxInclusive: parsed.data.taxInclusive,
       userId: user.id,
       post: parsed.data.post,
+      inventoryCostItemId: parsed.data.inventoryCostItemId ?? null,
       lines: parsed.data.lines.map((line) => ({
         accountId: line.accountId,
         description: line.description,
@@ -61,6 +64,7 @@ export async function createBillAction(payload: string) {
       })),
     });
     revalidatePath("/purchases/bills");
+    revalidatePath("/inventory");
     revalidatePath("/");
     return { redirectTo: `/purchases/bills/${bill.id}` };
   } catch (error) {

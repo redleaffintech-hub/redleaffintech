@@ -1,7 +1,8 @@
 /**
  * Used-vehicle costing example: buy a car for $15,000, add repair/detailing/fuel/
  * inspection/other costs, sell it, and check quantity, carrying value and COGS.
- * Everything runs inside one transaction that is rolled back, so it leaves no data:
+ * The main run is one transaction that is rolled back; only the final void check commits a small
+ * fixture, so run it against a scratch database:
  *   node --conditions=react-server --import tsx scripts/verify-inventory-cost.ts
  */
 
@@ -11,6 +12,7 @@ import { toUtcDay } from "../src/lib/dates";
 import { SYSTEM_ACCOUNTS } from "../src/lib/enums";
 import { getSystemAccount } from "../src/server/accounting/ledger";
 import { addInventoryCost, adjustStock, consumeStock, reverseInventoryCost } from "../src/server/inventory/costing";
+import { createBill, createBillInTx, postBillInTx, voidBill } from "../src/server/documents/bills";
 
 const results: { name: string; pass: boolean; detail: string }[] = [];
 const check = (name: string, pass: boolean, detail = "") => results.push({ name, pass, detail });
@@ -82,6 +84,46 @@ async function main() {
       i = await reload();
       check("re-added repair: back to $16,000", i.averageCostCents === 1_600_000, money(i.averageCostCents));
 
+      // A cost entered as a BILL (the "+ Add cost" form): supplier invoice, tax, AP. Own item so the
+      // numbers above stay untouched.
+      const car2 = await tx.serviceItem.create({
+        data: { companyId, type: "PRODUCT", code: `CAR2-${Date.now()}`, name: "Toyota Corolla 2021", unit: "each", trackInventory: true },
+      });
+      await adjustStock(tx, { companyId, itemId: car2.id, date, quantityMilli: 1000, unitCostCents: 1_000_000, offsetAccountId: bank.id, reason: "Vehicle purchase" });
+      const vendor = await tx.vendor.findFirstOrThrow({ where: { companyId } });
+      const expense = await tx.account.findFirstOrThrow({ where: { companyId, type: "EXPENSE", isActive: true } });
+      const ap = await getSystemAccount(tx, companyId, SYSTEM_ACCOUNTS.ACCOUNTS_PAYABLE);
+      const apNet = async () => {
+        const a = await tx.journalLine.aggregate({ where: { companyId, accountId: ap.id }, _sum: { creditCents: true, debitCents: true } });
+        return (a._sum.creditCents ?? 0) - (a._sum.debitCents ?? 0);
+      };
+      const apBefore = await apNet();
+      const glBeforeBill = await inventoryBalance();
+      const costBill = await createBillInTx(tx, {
+        companyId, vendorId: vendor.id, issueDate: date, inventoryCostItemId: car2.id,
+        lines: [{ accountId: expense.id, description: "Paint touch-up", quantityMilli: 1000, unitPriceCents: 20_000, taxCodeId: null, itemId: null }],
+      });
+      check("cost bill lines are forced onto the item and flagged cost-only",
+        costBill.lines.every((l) => l.itemId === car2.id && l.isInventoryCost), JSON.stringify(costBill.lines.map((l) => [l.itemId, l.isInventoryCost])));
+      await postBillInTx(tx, costBill.id, companyId);
+      const c2 = await tx.serviceItem.findUniqueOrThrow({ where: { id: car2.id } });
+      check("cost bill: quantity still 1", c2.quantityOnHandMilli === 1000, String(c2.quantityOnHandMilli));
+      check("cost bill: carrying cost $10,200", c2.averageCostCents === 1_020_000, money(c2.averageCostCents));
+      check("cost bill: Accounts Payable up $200", (await apNet()) - apBefore === 20_000, money((await apNet()) - apBefore));
+      check("cost bill: GL inventory up $200", (await inventoryBalance()) - glBeforeBill === 20_000, money((await inventoryBalance()) - glBeforeBill));
+
+      // A cost-only bill is refused for an item that is not an inventory product.
+      const gap = await tx.serviceItem.create({ data: { companyId, type: "PRODUCT", code: `GAP2-${Date.now()}`, name: "Warranty", unit: "each", trackInventory: false } });
+      let billRefused = false;
+      try {
+        await tx.$executeRaw`SAVEPOINT billnoninv`;
+        await createBillInTx(tx, { companyId, vendorId: vendor.id, issueDate: date, inventoryCostItemId: gap.id, lines: [{ accountId: expense.id, description: "x", quantityMilli: 1000, unitPriceCents: 100, taxCodeId: null, itemId: null }] });
+      } catch {
+        billRefused = true;
+        await tx.$executeRaw`ROLLBACK TO SAVEPOINT billnoninv`;
+      }
+      check("cost bill refused on a non-inventory product", billRefused);
+
       // Sale relieves the whole $16,000 through COGS.
       const sale = await consumeStock(tx, { companyId, itemId: item.id, date, quantityMilli: 1000, sourceType: "INVOICE" });
       i = await reload();
@@ -117,12 +159,32 @@ async function main() {
     if (!(error instanceof Rollback)) throw error;
   }
 
+  // Voiding a cost bill takes its cost back out (own committed run: voidBill opens its own transaction;
+  // use a scratch database).
+  {
+    const bank = await db.account.findFirstOrThrow({ where: { companyId, type: "ASSET", subtype: "BANK" } });
+    const vendor = await db.vendor.findFirstOrThrow({ where: { companyId } });
+    const expense = await db.account.findFirstOrThrow({ where: { companyId, type: "EXPENSE", isActive: true } });
+    const car = await db.serviceItem.create({ data: { companyId, type: "PRODUCT", code: `VOIDT-${Date.now()}`, name: "Void test car", unit: "each", trackInventory: true } });
+    await db.$transaction((tx) => adjustStock(tx, { companyId, itemId: car.id, date, quantityMilli: 1000, unitCostCents: 500_000, offsetAccountId: bank.id, reason: "Vehicle purchase" }));
+    const bill = await createBill({
+      companyId, vendorId: vendor.id, issueDate: date, post: true, inventoryCostItemId: car.id,
+      lines: [{ accountId: expense.id, description: "Detailing", quantityMilli: 1000, unitPriceCents: 10_000, taxCodeId: null, itemId: null }],
+    });
+    let v = await db.serviceItem.findUniqueOrThrow({ where: { id: car.id } });
+    check("void test: cost raised the carrying cost to $5,100", v.averageCostCents === 510_000, money(v.averageCostCents));
+    await voidBill(bill.id, companyId);
+    v = await db.serviceItem.findUniqueOrThrow({ where: { id: car.id } });
+    check("void test: voiding the cost bill restores $5,000", v.averageCostCents === 500_000, money(v.averageCostCents));
+    check("void test: quantity still 1", v.quantityOnHandMilli === 1000, String(v.quantityOnHandMilli));
+  }
+
   let failed = 0;
   for (const r of results) {
     console.log(`${r.pass ? "PASS" : "FAIL"}  ${r.name}${r.pass || !r.detail ? "" : `  (${r.detail})`}`);
     if (!r.pass) failed++;
   }
-  console.log(failed ? `\n${failed} check(s) failed` : "\nAll inventory cost checks passed (rolled back, no data left).");
+  console.log(failed ? `\n${failed} check(s) failed` : "\nAll inventory cost checks passed (one small void-test fixture is left behind: use a scratch database).");
   process.exit(failed ? 1 : 0);
 }
 

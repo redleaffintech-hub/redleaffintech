@@ -276,6 +276,7 @@ export function DocumentForm({
   preselectPartyId,
   companyTaxPolicy,
   footerText,
+  inventoryCost,
 }: {
   kind: DocumentKind;
   parties: PartyOption[];
@@ -308,6 +309,11 @@ export function DocumentForm({
    * for this would change numbering and posting behavior.
    */
   preselectPartyId?: string;
+  /**
+   * Turns a BILL into a cost-only bill for one inventory item (repairs, detailing,
+   * inspection...): every line is capitalised onto that item's cost and adds no stock.
+   */
+  inventoryCost?: { itemId: string; itemName: string };
   /** The active company's sales-tax collection status (issues 1/5) — needed
    * so the preview suppresses exactly the components posting will. Omitted
    * for a BILL, which is unaffected by this policy. */
@@ -490,13 +496,14 @@ export function DocumentForm({
       : [
           {
             key: crypto.randomUUID(),
-            description: "",
+            description: inventoryCost ? `Additional cost — ${inventoryCost.itemName}` : "",
             quantity: "1",
             unitPrice: "",
             discountMode: "PERCENT" as const,
             discount: "",
             discountAmount: "",
-            accountId: defaultAccount,
+            accountId: (inventoryCost && itemsProp.find((i) => i.id === inventoryCost.itemId)?.expenseAccountId) || defaultAccount,
+            itemId: inventoryCost?.itemId,
             // A bill starts on the vendor's own default code if it has one,
             // otherwise (like every sales document) on the province default.
             taxCodeId:
@@ -727,6 +734,7 @@ export function DocumentForm({
         post: config.allowDraft ? postNow : true,
         billTo: config.showAddresses ? billTo : undefined,
         shipTo: config.showAddresses && !shipSameAsBill && !isAddressEmpty(shipTo) ? shipTo : null,
+        inventoryCostItemId: inventoryCost?.itemId ?? null,
         lines: usable.map((line) => ({
           description: line.description,
           quantity: Number(line.quantity) || 1,
@@ -762,6 +770,12 @@ export function DocumentForm({
   return (
     <div className="grid gap-4 lg:grid-cols-[1fr_20rem] lg:items-start">
       <div className="space-y-4">
+        {inventoryCost && (
+          <section className="rounded-[--radius-card] border border-brand-200 bg-brand-50 px-5 py-3 text-[0.8125rem] text-ink-800">
+            <span className="font-semibold">Additional cost for {inventoryCost.itemName}.</span> The amount is added to this
+            item&apos;s cost with the tax handled as on any bill. It does not change the quantity on hand.
+          </section>
+        )}
         {/* Header fields */}
         <section className="rounded-[--radius-card] border border-paper-300 bg-white p-5">
           <div className={clsx("grid gap-4 sm:grid-cols-2", HEADER_GRID[kind])}>
@@ -986,7 +1000,13 @@ export function DocumentForm({
                   const computed = computedIndex === -1 ? undefined : preview.lines[computedIndex];
                   return (
                     <tr key={line.key} className="border-b border-paper-100 last:border-0">
-                      {(
+                      {inventoryCost ? (
+                        <Cell>
+                          <span className="block truncate px-1 text-[0.75rem] font-medium text-ink-800" title={inventoryCost.itemName}>
+                            {inventoryCost.itemName}
+                          </span>
+                        </Cell>
+                      ) : (
                         <Cell>
                           <select
                             value={line.itemId ?? ""}
@@ -1013,10 +1033,12 @@ export function DocumentForm({
                       </Cell>
                       <Cell>
                         <input
-                          value={line.quantity}
+                          value={inventoryCost ? "—" : line.quantity}
                           onChange={(event) => updateLine(line.key, { quantity: event.target.value })}
                           inputMode="decimal"
-                          className={clsx(inputClass, "tnum text-right")}
+                          readOnly={Boolean(inventoryCost)}
+                          title={inventoryCost ? "A cost adds to the item's value; it never changes the quantity." : undefined}
+                          className={clsx(inputClass, "tnum text-right", inventoryCost && "cursor-not-allowed opacity-60")}
                         />
                       </Cell>
                       <Cell>
@@ -1144,6 +1166,7 @@ export function DocumentForm({
                     discountAmount: "",
                     accountId: current[current.length - 1]?.accountId ?? defaultAccount,
                     taxCodeId: current[current.length - 1]?.taxCodeId ?? defaultTax,
+                    itemId: inventoryCost?.itemId,
                   },
                 ])
               }

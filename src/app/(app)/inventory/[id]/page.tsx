@@ -3,7 +3,6 @@ import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
 import { requireVisible } from "@/server/auth/context";
 import { CAPABILITIES, can } from "@/lib/permissions";
-import { inventoryAdjustmentFormOptions } from "../actions";
 import { AddCostButton, ReverseCostButton } from "../add-cost-dialog";
 import { formatDate, dateRangeWhere } from "@/lib/dates";
 import { formatMoney, formatQty } from "@/lib/money";
@@ -51,18 +50,18 @@ export default async function InventoryItemDetailPage({
 
   // Additional costs capitalised onto this item, net of any that were reversed —
   // across all dates, independent of the date filter on the table below.
-  const [costAdditions, costReversals, formOptions] = await Promise.all([
+  const [costAdditions, costReversals] = await Promise.all([
     db.inventoryMovement.findMany({
       where: { companyId: company.id, itemId: item.id, type: "COST_ADDITION" },
       select: { id: true, sourceId: true, totalCostCents: true },
     }),
     db.inventoryMovement.findMany({
-      where: { companyId: company.id, itemId: item.id, type: "REVERSAL", sourceType: "COST_ADDITION" },
-      select: { sourceId: true, totalCostCents: true },
+      // A reversed cost is a REVERSAL with no quantity (a reversed purchase always has some).
+      where: { companyId: company.id, itemId: item.id, type: "REVERSAL", quantityMilli: 0 },
+      select: { sourceType: true, sourceId: true, totalCostCents: true },
     }),
-    manage ? inventoryAdjustmentFormOptions() : Promise.resolve({ accounts: [] }),
   ]);
-  const reversedSourceIds = new Set(costReversals.map((r) => r.sourceId));
+  const reversedSourceIds = new Set(costReversals.filter((r) => r.sourceType === "COST_ADDITION").map((r) => r.sourceId));
   const additionalCostCents =
     costAdditions.reduce((s, c) => s + c.totalCostCents, 0) + costReversals.reduce((s, r) => s + r.totalCostCents, 0);
 
@@ -142,8 +141,6 @@ export default async function InventoryItemDetailPage({
           manage ? (
             <AddCostButton
               itemId={item.id}
-              itemName={`${item.code} — ${item.name}`}
-              accounts={formOptions.accounts}
               className="rounded-md border border-paper-300 px-3 py-1.5 text-[0.8125rem] font-medium text-ink-800 transition-colors hover:bg-paper-200"
             />
           ) : undefined
@@ -204,7 +201,7 @@ export default async function InventoryItemDetailPage({
                         )}
                       </Td>
                       <Td className="text-muted-ink">
-                        {m.type === "COST_ADDITION"
+                        {m.type === "COST_ADDITION" && m.sourceType === "COST_ADDITION"
                           ? [m.costCategory, m.supplierName].filter(Boolean).join(" · ") || "—"
                           : (partyName(m) ?? "—")}
                       </Td>
@@ -220,7 +217,7 @@ export default async function InventoryItemDetailPage({
                       <Td align="right" className="tnum">{fmt(m.averageCostAfterCents)}</Td>
                       {manage && (
                         <Td align="right">
-                          {m.type === "COST_ADDITION" && !reversedSourceIds.has(m.sourceId) && (
+                          {m.type === "COST_ADDITION" && m.sourceType === "COST_ADDITION" && !reversedSourceIds.has(m.sourceId) && (
                             <ReverseCostButton itemId={item.id} movementId={m.id} />
                           )}
                         </Td>

@@ -174,7 +174,7 @@ export default async function InventoryPage() {
                   <Td align="right">
                     <span className="inline-flex items-center gap-1">
                       {manage && <OpeningStockButton itemId={item.id} itemName={`${item.code} — ${item.name}`} current={openingByItem.get(item.id) ?? null} />}
-                      {manage && <AddCostButton itemId={item.id} itemName={`${item.code} — ${item.name}`} accounts={accounts} />}
+                      {manage && <AddCostButton itemId={item.id} />}
                       <AdjustStockButton itemId={item.id} itemName={`${item.code} — ${item.name}`} averageCostCents={item.averageCostCents} accounts={accounts} />
                       {manage && (
                         <CatalogueRowActions

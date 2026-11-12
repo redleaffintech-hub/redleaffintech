@@ -1250,6 +1250,8 @@ model BillLine {
   isBillable           Boolean @default(false)
   customerId           String?
   projectId            String?
+  /// Cost-only line: its amount is capitalised onto `itemId` (repairs, detailing...) without adding quantity.
+  isInventoryCost      Boolean @default(false)
 
   bill    Bill         @relation(fields: [billId], references: [id], onDelete: Cascade)
   account Account      @relation(fields: [accountId], references: [id])
